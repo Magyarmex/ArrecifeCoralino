@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Free-Fly Camera Demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        overflow: hidden;
+      }
+
+      #overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(10, 12, 20, 0.85);
+        color: #f0f6ff;
+        text-align: center;
+        flex-direction: column;
+        gap: 1.5rem;
+        padding: 2rem;
+        transition: opacity 0.3s ease;
+        z-index: 10;
+      }
+
+      #overlay.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #overlay button {
+        padding: 0.8rem 1.6rem;
+        font-size: 1.1rem;
+        background: linear-gradient(135deg, #4f9dff, #4377ff);
+        border: none;
+        border-radius: 999px;
+        color: white;
+        cursor: pointer;
+        box-shadow: 0 10px 20px rgba(67, 119, 255, 0.3);
+      }
+
+      #overlay button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 24px rgba(67, 119, 255, 0.4);
+      }
+
+      #overlay button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+        transform: none;
+        box-shadow: none;
+      }
+
+      #overlay p {
+        max-width: 32rem;
+        line-height: 1.6;
+        margin: 0;
+      }
+
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="overlay">
+      <h1>Free-Flying Camera</h1>
+      <p id="statusMessage">
+        Click the button to capture the pointer and explore the scene. Use the mouse to
+        look around, the <strong>WASD</strong> keys to move horizontally, and
+        <strong>Q/E</strong> to descend or ascend. Hold <strong>Shift</strong> to accelerate.
+      </p>
+      <button type="button" id="startButton">Enter Simulation</button>
+    </div>
+
+    <script type="module">
+      import * as THREE from "https://unpkg.com/three@0.160.1/build/three.module.js";
+      import { PointerLockControls } from "https://unpkg.com/three@0.160.1/examples/jsm/controls/PointerLockControls.js";
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb);
+
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        2000
+      );
+      camera.position.set(0, 5, 15);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.domElement.style.outline = "none";
+      renderer.domElement.tabIndex = -1;
+      document.body.appendChild(renderer.domElement);
+
+      const hemisphereLight = new THREE.HemisphereLight(0xd8eaff, 0x1f2a33, 0.6);
+      scene.add(hemisphereLight);
+
+      const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      sunLight.position.set(50, 100, 0);
+      sunLight.castShadow = true;
+      scene.add(sunLight);
+
+      const groundGeometry = new THREE.PlaneGeometry(400, 400);
+      const groundMaterial = new THREE.MeshStandardMaterial({
+        color: 0x1b2835,
+        roughness: 0.9,
+        metalness: 0.1,
+      });
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const baseplateMaterial = new THREE.MeshStandardMaterial({
+        color: 0x262f3c,
+        roughness: 0.6,
+        metalness: 0.25,
+      });
+      const baseplate = new THREE.Mesh(
+        new THREE.BoxGeometry(120, 2, 120),
+        baseplateMaterial
+      );
+      baseplate.position.y = -0.99;
+      baseplate.receiveShadow = true;
+      baseplate.castShadow = true;
+      scene.add(baseplate);
+
+      const controls = new PointerLockControls(camera, renderer.domElement);
+      scene.add(controls.getObject());
+
+      const overlay = document.getElementById("overlay");
+      const startButton = document.getElementById("startButton");
+      const statusMessage = document.getElementById("statusMessage");
+      let lockTimeoutId = null;
+
+      startButton.addEventListener("click", () => {
+        startButton.disabled = true;
+        statusMessage.textContent = "Requesting pointer lock…";
+        renderer.domElement.focus();
+        controls.lock();
+
+        if (lockTimeoutId !== null) {
+          clearTimeout(lockTimeoutId);
+        }
+
+        lockTimeoutId = window.setTimeout(() => {
+          if (!controls.isLocked) {
+            startButton.disabled = false;
+            statusMessage.textContent =
+              "Pointer lock was not granted. Make sure the page is focused and try again.";
+          }
+        }, 1000);
+      });
+
+      controls.addEventListener("lock", () => {
+        if (lockTimeoutId !== null) {
+          clearTimeout(lockTimeoutId);
+          lockTimeoutId = null;
+        }
+        startButton.disabled = false;
+        overlay.classList.add("hidden");
+        statusMessage.textContent =
+          "Press Esc to release the pointer. Use WASD/QE + mouse to fly around.";
+      });
+
+      controls.addEventListener("unlock", () => {
+        if (lockTimeoutId !== null) {
+          clearTimeout(lockTimeoutId);
+          lockTimeoutId = null;
+        }
+        overlay.classList.remove("hidden");
+        startButton.disabled = false;
+        statusMessage.textContent =
+          "Pointer lock released. Click Enter Simulation to continue exploring.";
+        startButton.focus();
+      });
+
+      document.addEventListener("pointerlockerror", () => {
+        if (lockTimeoutId !== null) {
+          clearTimeout(lockTimeoutId);
+          lockTimeoutId = null;
+        }
+        overlay.classList.remove("hidden");
+        startButton.disabled = false;
+        statusMessage.textContent =
+          "Pointer lock was blocked by the browser. Click Enter Simulation again to retry.";
+        startButton.focus();
+      });
+
+      const keyState = {
+        forward: false,
+        backward: false,
+        left: false,
+        right: false,
+        up: false,
+        down: false,
+        boost: false,
+      };
+
+      const onKeyDown = (event) => {
+        switch (event.code) {
+          case "KeyW":
+            keyState.forward = true;
+            break;
+          case "KeyS":
+            keyState.backward = true;
+            break;
+          case "KeyA":
+            keyState.left = true;
+            break;
+          case "KeyD":
+            keyState.right = true;
+            break;
+          case "KeyQ":
+            keyState.down = true;
+            break;
+          case "KeyE":
+            keyState.up = true;
+            break;
+          case "ShiftLeft":
+          case "ShiftRight":
+            keyState.boost = true;
+            break;
+          default:
+            break;
+        }
+      };
+
+      const onKeyUp = (event) => {
+        switch (event.code) {
+          case "KeyW":
+            keyState.forward = false;
+            break;
+          case "KeyS":
+            keyState.backward = false;
+            break;
+          case "KeyA":
+            keyState.left = false;
+            break;
+          case "KeyD":
+            keyState.right = false;
+            break;
+          case "KeyQ":
+            keyState.down = false;
+            break;
+          case "KeyE":
+            keyState.up = false;
+            break;
+          case "ShiftLeft":
+          case "ShiftRight":
+            keyState.boost = false;
+            break;
+          default:
+            break;
+        }
+      };
+
+      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keyup", onKeyUp);
+
+      const velocity = new THREE.Vector3();
+      const direction = new THREE.Vector3();
+      const vertical = new THREE.Vector3();
+      const clock = new THREE.Clock();
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        const delta = clock.getDelta();
+
+        velocity.x -= velocity.x * 10.0 * delta;
+        velocity.y -= velocity.y * 10.0 * delta;
+        velocity.z -= velocity.z * 10.0 * delta;
+
+        direction.z = Number(keyState.forward) - Number(keyState.backward);
+        direction.x = Number(keyState.right) - Number(keyState.left);
+        direction.normalize();
+
+        vertical.y = Number(keyState.up) - Number(keyState.down);
+
+        const baseSpeed = keyState.boost ? 90 : 30;
+        if (keyState.forward || keyState.backward) velocity.z -= direction.z * baseSpeed * delta;
+        if (keyState.left || keyState.right) velocity.x -= direction.x * baseSpeed * delta;
+        if (keyState.up || keyState.down) velocity.y += vertical.y * baseSpeed * delta;
+
+        controls.moveRight(-velocity.x * delta);
+        controls.moveForward(-velocity.z * delta);
+        controls.getObject().position.y += velocity.y * delta;
+
+        renderer.render(scene, camera);
+      }
+
+      animate();
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>
