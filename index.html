@@ -74,6 +74,7 @@
     <div id="overlay">
       <h1>Free-Flying Camera</h1>
       <p id="statusMessage">
+      <p>
         Click the button to capture the pointer and explore the scene. Use the mouse to
         look around, the <strong>WASD</strong> keys to move horizontally, and
         <strong>Q/E</strong> to descend or ascend. Hold <strong>Shift</strong> to accelerate.
@@ -335,6 +336,11 @@
         } while (Math.abs(x) < 25 && Math.abs(z) < 25);
 
         rock.position.set(x, radius / 2, z);
+        rock.position.set(
+          (Math.random() - 0.5) * 200,
+          radius / 2,
+          (Math.random() - 0.5) * 200
+        );
         rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
         rock.castShadow = true;
         rock.receiveShadow = true;
@@ -351,6 +357,8 @@
       startButton.addEventListener("click", () => {
         startButton.disabled = true;
         statusMessage.textContent = "Requesting pointer lock… if it stalls, click the page once.";
+
+      startButton.addEventListener("click", () => {
         controls.lock();
       });
 
@@ -359,6 +367,7 @@
         overlay.classList.add("hidden");
         statusMessage.textContent =
           "Press Esc to release the pointer. Use WASD/QE + mouse to fly around.";
+        overlay.classList.add("hidden");
       });
 
       controls.addEventListener("unlock", () => {
