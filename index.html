@@ -52,6 +52,13 @@
         box-shadow: 0 12px 24px rgba(67, 119, 255, 0.4);
       }
 
+      #overlay button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+        transform: none;
+        box-shadow: none;
+      }
+
       #overlay p {
         max-width: 32rem;
         line-height: 1.6;
@@ -66,6 +73,7 @@
   <body>
     <div id="overlay">
       <h1>Free-Flying Camera</h1>
+      <p id="statusMessage">
       <p>
         Click the button to capture the pointer and explore the scene. Use the mouse to
         look around, the <strong>WASD</strong> keys to move horizontally, and
@@ -117,6 +125,174 @@
       ground.receiveShadow = true;
       scene.add(ground);
 
+      const baseplateMaterial = new THREE.MeshStandardMaterial({
+        color: 0x262f3c,
+        roughness: 0.6,
+        metalness: 0.25,
+      });
+      const baseplate = new THREE.Mesh(
+        new THREE.BoxGeometry(120, 2, 120),
+        baseplateMaterial
+      );
+      baseplate.position.y = -0.99;
+      baseplate.receiveShadow = true;
+      baseplate.castShadow = true;
+      scene.add(baseplate);
+
+      const walkwayMaterial = new THREE.MeshStandardMaterial({
+        color: 0x3a4a5f,
+        roughness: 0.4,
+        metalness: 0.2,
+      });
+      const trimMaterial = new THREE.MeshStandardMaterial({
+        color: 0xd9e6ff,
+        emissive: 0x1c7fff,
+        emissiveIntensity: 0.3,
+        roughness: 0.2,
+        metalness: 0.5,
+      });
+
+      const walkwaySegments = [
+        { size: [6, 0.3, 90], position: [0, 0.2, 0] },
+        { size: [50, 0.3, 6], position: [0, 0.2, -30] },
+        { size: [50, 0.3, 6], position: [0, 0.2, 30] },
+        { size: [6, 0.3, 40], position: [30, 0.2, 15] },
+        { size: [6, 0.3, 40], position: [-30, 0.2, 15] },
+      ];
+
+      walkwaySegments.forEach(({ size, position }) => {
+        const segment = new THREE.Mesh(
+          new THREE.BoxGeometry(...size),
+          walkwayMaterial
+        );
+        segment.castShadow = true;
+        segment.receiveShadow = true;
+        segment.position.set(...position);
+        scene.add(segment);
+      });
+
+      const hangarMaterial = new THREE.MeshStandardMaterial({
+        color: 0x36465b,
+        metalness: 0.45,
+        roughness: 0.35,
+      });
+      const hangarRoofMaterial = new THREE.MeshStandardMaterial({
+        color: 0x3f5169,
+        metalness: 0.55,
+        roughness: 0.25,
+      });
+
+      const hangarBase = new THREE.Mesh(
+        new THREE.BoxGeometry(20, 6, 16),
+        hangarMaterial
+      );
+      hangarBase.position.set(0, 3, -30);
+      hangarBase.castShadow = true;
+      hangarBase.receiveShadow = true;
+      scene.add(hangarBase);
+
+      const hangarRoof = new THREE.Mesh(
+        new THREE.BoxGeometry(20.5, 2.4, 16.5),
+        hangarRoofMaterial
+      );
+      hangarRoof.position.set(0, 8.4, -30);
+      hangarRoof.castShadow = true;
+      hangarRoof.receiveShadow = true;
+      scene.add(hangarRoof);
+
+      const hangarDoor = new THREE.Mesh(
+        new THREE.BoxGeometry(10, 4.5, 0.5),
+        trimMaterial
+      );
+      hangarDoor.position.set(0, 2.5, -21.8);
+      hangarDoor.castShadow = true;
+      scene.add(hangarDoor);
+
+      const beaconMaterial = new THREE.MeshStandardMaterial({
+        color: 0x1e2733,
+        metalness: 0.6,
+        roughness: 0.35,
+      });
+      const beaconGeometry = new THREE.CylinderGeometry(0.6, 0.6, 2.4, 12);
+
+      const beaconPositions = [
+        [-6, 1.2, -30],
+        [6, 1.2, -30],
+        [-6, 1.2, 30],
+        [6, 1.2, 30],
+        [0, 1.2, 10],
+        [0, 1.2, -10],
+        [30, 1.2, 5],
+        [30, 1.2, 25],
+        [-30, 1.2, 5],
+        [-30, 1.2, 25],
+      ];
+
+      beaconPositions.forEach(([x, y, z]) => {
+        const beacon = new THREE.Mesh(beaconGeometry, beaconMaterial);
+        beacon.position.set(x, y, z);
+        beacon.castShadow = true;
+        beacon.receiveShadow = true;
+        scene.add(beacon);
+
+        const light = new THREE.PointLight(0x6fb9ff, 1.6, 25, 2.4);
+        light.position.set(x, y + 1.2, z);
+        scene.add(light);
+
+        const cap = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.4, 0.5, 0.6, 12),
+          trimMaterial
+        );
+        cap.position.set(x, y + 1.5, z);
+        cap.castShadow = true;
+        scene.add(cap);
+      });
+
+      const pad = new THREE.Mesh(
+        new THREE.CylinderGeometry(12, 12, 0.6, 48),
+        walkwayMaterial
+      );
+      pad.position.set(0, 0.3, 30);
+      pad.receiveShadow = true;
+      pad.castShadow = true;
+      scene.add(pad);
+
+      const padTrim = new THREE.Mesh(
+        new THREE.RingGeometry(10.5, 11.5, 48),
+        trimMaterial
+      );
+      padTrim.rotation.x = -Math.PI / 2;
+      padTrim.position.set(0, 0.61, 30);
+      scene.add(padTrim);
+
+      const towerMaterial = new THREE.MeshStandardMaterial({
+        color: 0x556d87,
+        roughness: 0.35,
+        metalness: 0.4,
+      });
+      const towerPositions = [
+        [-40, -0.99, -40],
+        [40, -0.99, -40],
+        [40, -0.99, 40],
+        [-40, -0.99, 40],
+      ];
+
+      towerPositions.forEach(([x, y, z]) => {
+        const tower = new THREE.Mesh(
+          new THREE.CylinderGeometry(2.8, 3.2, 18, 16),
+          towerMaterial
+        );
+        tower.position.set(x, y + 9, z);
+        tower.castShadow = true;
+        tower.receiveShadow = true;
+        scene.add(tower);
+
+        const light = new THREE.PointLight(0x7fb4ff, 2.2, 35, 2);
+        light.position.set(x, y + 20, z);
+        light.castShadow = true;
+        scene.add(light);
+      });
+
       const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x3fbf7f });
       const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
 
@@ -151,6 +327,15 @@
         const radius = 0.5 + Math.random() * 1.5;
         const rockGeometry = new THREE.DodecahedronGeometry(radius);
         const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+
+        let x = 0;
+        let z = 0;
+        do {
+          x = (Math.random() - 0.5) * 200;
+          z = (Math.random() - 0.5) * 200;
+        } while (Math.abs(x) < 25 && Math.abs(z) < 25);
+
+        rock.position.set(x, radius / 2, z);
         rock.position.set(
           (Math.random() - 0.5) * 200,
           radius / 2,
@@ -167,17 +352,36 @@
 
       const overlay = document.getElementById("overlay");
       const startButton = document.getElementById("startButton");
+      const statusMessage = document.getElementById("statusMessage");
+
+      startButton.addEventListener("click", () => {
+        startButton.disabled = true;
+        statusMessage.textContent = "Requesting pointer lock… if it stalls, click the page once.";
 
       startButton.addEventListener("click", () => {
         controls.lock();
       });
 
       controls.addEventListener("lock", () => {
+        startButton.disabled = false;
+        overlay.classList.add("hidden");
+        statusMessage.textContent =
+          "Press Esc to release the pointer. Use WASD/QE + mouse to fly around.";
         overlay.classList.add("hidden");
       });
 
       controls.addEventListener("unlock", () => {
         overlay.classList.remove("hidden");
+        statusMessage.textContent =
+          "Pointer lock released. Click Enter Simulation to continue exploring.";
+        startButton.focus();
+      });
+
+      document.addEventListener("pointerlockerror", () => {
+        overlay.classList.remove("hidden");
+        startButton.disabled = false;
+        statusMessage.textContent =
+          "Pointer lock was blocked by the browser. Click Enter Simulation again to retry.";
       });
 
       const keyState = {
