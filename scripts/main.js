@@ -28,20 +28,21 @@ function createShader(type, source) {
 
 const vertexSource = `
   attribute vec3 position;
-  attribute vec3 color;
   uniform mat4 viewProjection;
-  varying vec3 vColor;
+  varying float vDepth;
   void main() {
-    gl_Position = viewProjection * vec4(position, 1.0);
-    vColor = color;
+    vec4 worldPosition = vec4(position, 1.0);
+    gl_Position = viewProjection * worldPosition;
+    vDepth = position.y;
   }
 `;
 
 const fragmentSource = `
   precision mediump float;
-  varying vec3 vColor;
+  varying float vDepth;
   void main() {
-    gl_FragColor = vec4(vColor, 1.0);
+    vec3 baseColor = mix(vec3(0.18, 0.4, 0.6), vec3(0.08, 0.16, 0.24), clamp(-vDepth * 0.02, 0.0, 1.0));
+    gl_FragColor = vec4(baseColor, 1.0);
   }
 `;
 
@@ -65,74 +66,31 @@ if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
 gl.useProgram(program);
 
 const positionAttribute = gl.getAttribLocation(program, 'position');
-const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 
-const blockSize = 0.5; // metros virtuales
-const blocksPerChunk = 8;
-const chunksPerSide = 16;
-const chunkSize = blockSize * blocksPerChunk;
-const baseplateSize = chunkSize * chunksPerSide;
+const gridSize = 200;
+const gridDivisions = 50;
 
-const floatsPerVertex = 6;
-const vertexStride = floatsPerVertex * Float32Array.BYTES_PER_ELEMENT;
-
-function createBaseplate(size, color, yOffset) {
+function createGridBuffer(size, divisions) {
   const half = size / 2;
-  return new Float32Array([
-    -half, yOffset, -half, color[0], color[1], color[2],
-    half, yOffset, -half, color[0], color[1], color[2],
-    half, yOffset, half, color[0], color[1], color[2],
-    -half, yOffset, -half, color[0], color[1], color[2],
-    half, yOffset, half, color[0], color[1], color[2],
-    -half, yOffset, half, color[0], color[1], color[2],
-  ]);
-}
-
-function createLineGrid(size, step, color, yOffset) {
-  const half = size / 2;
-  const lineCount = Math.round(size / step);
+  const step = size / divisions;
   const vertices = [];
-  for (let i = 0; i <= lineCount; i++) {
+  for (let i = 0; i <= divisions; i++) {
     const position = -half + i * step;
-    // Líneas paralelas al eje Z
-    vertices.push(position, yOffset, -half, color[0], color[1], color[2]);
-    vertices.push(position, yOffset, half, color[0], color[1], color[2]);
-    // Líneas paralelas al eje X
-    vertices.push(-half, yOffset, position, color[0], color[1], color[2]);
-    vertices.push(half, yOffset, position, color[0], color[1], color[2]);
+    // Línea paralela al eje Z
+    vertices.push(position, 0, -half);
+    vertices.push(position, 0, half);
+    // Línea paralela al eje X
+    vertices.push(-half, 0, position);
+    vertices.push(half, 0, position);
   }
   return new Float32Array(vertices);
 }
 
-function createBuffer(data) {
-  const buffer = gl.createBuffer();
-  if (!buffer) {
-    throw new Error('No se pudo crear el buffer');
-  }
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-  return buffer;
-}
-
-const baseplateColor = [0.1, 0.18, 0.22];
-const blockLineColor = [0.22, 0.3, 0.36];
-const chunkLineColor = [0.33, 0.42, 0.48];
-
-const baseplateVertices = createBaseplate(baseplateSize, baseplateColor, -0.01);
-const blockGridVertices = createLineGrid(baseplateSize, blockSize, blockLineColor, 0);
-const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColor, 0.002);
-
-const baseplateBuffer = createBuffer(baseplateVertices);
-const blockGridBuffer = createBuffer(blockGridVertices);
-const chunkGridBuffer = createBuffer(chunkGridVertices);
-
-const baseplateVertexCount = baseplateVertices.length / floatsPerVertex;
-const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
-const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
-
-gl.enableVertexAttribArray(positionAttribute);
-gl.enableVertexAttribArray(colorAttribute);
+const gridVertices = createGridBuffer(gridSize, gridDivisions);
+const gridBuffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, gridBuffer);
+gl.bufferData(gl.ARRAY_BUFFER, gridVertices, gl.STATIC_DRAW);
 
 const worldUp = [0, 1, 0];
 const movementState = {
@@ -376,23 +334,15 @@ function update(deltaTime) {
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
 }
 
-function bindGeometry(buffer) {
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.vertexAttribPointer(positionAttribute, 3, gl.FLOAT, false, vertexStride, 0);
-  gl.vertexAttribPointer(colorAttribute, 3, gl.FLOAT, false, vertexStride, 12);
-}
-
 function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  bindGeometry(baseplateBuffer);
-  gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gridBuffer);
+  gl.enableVertexAttribArray(positionAttribute);
+  gl.vertexAttribPointer(positionAttribute, 3, gl.FLOAT, false, 0, 0);
 
-  bindGeometry(blockGridBuffer);
-  gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
-
-  bindGeometry(chunkGridBuffer);
-  gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+  const vertexCount = gridVertices.length / 3;
+  gl.drawArrays(gl.LINES, 0, vertexCount);
 }
 
 function loop(currentTime) {
