@@ -69,6 +69,29 @@ const GL_NO_ERROR = gl.NO_ERROR ?? 0;
 gl.clearColor(0.05, 0.08, 0.12, 1);
 gl.enable(gl.DEPTH_TEST);
 
+const secondsPerDay = 24 * 60;
+const dawnDuration = 2 * 60;
+const dayDuration = 8 * 60;
+const duskDuration = 2 * 60;
+const sunCycleDuration = dawnDuration + dayDuration + duskDuration;
+const moonCycleDuration = secondsPerDay - sunCycleDuration;
+const dawnEnd = dawnDuration;
+const dayEnd = dawnEnd + dayDuration;
+const duskEnd = dayEnd + duskDuration;
+
+const nightSkyTop = [0.09, 0.13, 0.2];
+const nightSkyBottom = [0.02, 0.03, 0.05];
+const dawnSkyTop = [0.98, 0.6, 0.45];
+const dawnSkyBottom = [0.55, 0.23, 0.36];
+const daySkyTop = [0.36, 0.62, 0.95];
+const daySkyBottom = [0.64, 0.82, 0.98];
+const duskSkyTop = [0.88, 0.45, 0.6];
+const duskSkyBottom = [0.32, 0.12, 0.28];
+
+const sunDayColor = [1, 0.88, 0.45];
+const sunWarmColor = [1, 0.6, 0.3];
+const moonSoftColor = [0.83, 0.86, 1];
+
 function createShader(type, source) {
   const shader = gl.createShader(type);
   if (!shader) {
@@ -126,7 +149,7 @@ const positionAttribute = gl.getAttribLocation(program, 'position');
 const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 
-const blockSize = 0.5; // metros virtuales
+const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
 const chunksPerSide = 16;
 const chunkSize = blockSize * blocksPerChunk;
@@ -134,22 +157,6 @@ const baseplateSize = chunkSize * chunksPerSide;
 
 const floatsPerVertex = 6;
 const vertexStride = floatsPerVertex * Float32Array.BYTES_PER_ELEMENT;
-
-function createLineGrid(size, step, color, yOffset) {
-  const half = size / 2;
-  const lineCount = Math.round(size / step);
-  const vertices = [];
-  for (let i = 0; i <= lineCount; i++) {
-    const position = -half + i * step;
-    // Líneas paralelas al eje Z
-    vertices.push(position, yOffset, -half, color[0], color[1], color[2]);
-    vertices.push(position, yOffset, half, color[0], color[1], color[2]);
-    // Líneas paralelas al eje X
-    vertices.push(-half, yOffset, position, color[0], color[1], color[2]);
-    vertices.push(half, yOffset, position, color[0], color[1], color[2]);
-  }
-  return new Float32Array(vertices);
-}
 
 function createBuffer(data) {
   const buffer = gl.createBuffer();
@@ -165,10 +172,10 @@ const blockLineColor = [0.92, 0.88, 0.78];
 const chunkLineColor = [0.7, 0.64, 0.52];
 const sandDarkColor = [0.73, 0.64, 0.48];
 const sandLightColor = [0.97, 0.91, 0.74];
-const terrainNoiseScale = 5.2;
+const terrainNoiseScale = 4.8;
 const maxTerrainHeight = 20;
 const minVisibleHeight = 0.001;
-const falloffRadius = 1.05;
+const falloffRadius = 0.9;
 const falloffExponent = 3.1;
 const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
@@ -178,14 +185,11 @@ const lightDirection = (() => {
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
 
-const blockGridVertices = createLineGrid(baseplateSize, blockSize, blockLineColor, 0.02);
-const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColor, 0.04);
+const blockGridBuffer = createBuffer(new Float32Array(0));
+const chunkGridBuffer = createBuffer(new Float32Array(0));
 
-const blockGridBuffer = createBuffer(blockGridVertices);
-const chunkGridBuffer = createBuffer(chunkGridVertices);
-
-const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
-const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
+let blockGridVertexCount = 0;
+let chunkGridVertexCount = 0;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -197,6 +201,8 @@ const terrainInfo = {
   visibleVertices: 0,
   visibleVertexRatio: 0,
 };
+
+let terrainHeightField = null;
 
 if (typeof window !== 'undefined') {
   window.__terrainInfo = terrainInfo;
@@ -282,6 +288,20 @@ function mixColor(a, b, t) {
   ];
 }
 
+function colorToCss(color) {
+  const r = Math.round(clamp(color[0], 0, 1) * 255);
+  const g = Math.round(clamp(color[1], 0, 1) * 255);
+  const b = Math.round(clamp(color[2], 0, 1) * 255);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function colorToRgba(color, alpha) {
+  const r = Math.round(clamp(color[0], 0, 1) * 255);
+  const g = Math.round(clamp(color[1], 0, 1) * 255);
+  const b = Math.round(clamp(color[2], 0, 1) * 255);
+  return `rgba(${r}, ${g}, ${b}, ${clamp(alpha, 0, 1)})`;
+}
+
 function pushVertex(buffer, offset, x, y, z, color) {
   buffer[offset + 0] = x;
   buffer[offset + 1] = y;
@@ -292,15 +312,90 @@ function pushVertex(buffer, offset, x, y, z, color) {
   return offset + floatsPerVertex;
 }
 
+function createTerrainGridVertices(heightField, step, color, heightOffset) {
+  if (!heightField) {
+    return new Float32Array(0);
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  const half = baseplateSize / 2;
+
+  const collectAxisIndices = () => {
+    const indices = [];
+    for (let index = 0; index <= blocksPerSide; index += step) {
+      indices.push(index);
+    }
+    if (indices[indices.length - 1] !== blocksPerSide) {
+      indices.push(blocksPerSide);
+    }
+    return indices;
+  };
+
+  const axisIndices = collectAxisIndices();
+  const totalVertices = axisIndices.length * blocksPerSide * 4;
+  const vertexData = new Float32Array(totalVertices * floatsPerVertex);
+  let offset = 0;
+
+  const sample = (x, z) => {
+    const clampedX = Math.max(0, Math.min(blocksPerSide, x));
+    const clampedZ = Math.max(0, Math.min(blocksPerSide, z));
+    return heightField[clampedZ][clampedX];
+  };
+
+  for (const xi of axisIndices) {
+    const worldX = -half + xi * blockSize;
+    for (let zi = 0; zi < blocksPerSide; zi++) {
+      const z0 = -half + zi * blockSize;
+      const z1 = z0 + blockSize;
+      const y0 = sample(xi, zi) + heightOffset;
+      const y1 = sample(xi, zi + 1) + heightOffset;
+      offset = pushVertex(vertexData, offset, worldX, y0, z0, color);
+      offset = pushVertex(vertexData, offset, worldX, y1, z1, color);
+    }
+  }
+
+  for (const zi of axisIndices) {
+    const worldZ = -half + zi * blockSize;
+    for (let xi = 0; xi < blocksPerSide; xi++) {
+      const x0 = -half + xi * blockSize;
+      const x1 = x0 + blockSize;
+      const y0 = sample(xi, zi) + heightOffset;
+      const y1 = sample(xi + 1, zi) + heightOffset;
+      offset = pushVertex(vertexData, offset, x0, y0, worldZ, color);
+      offset = pushVertex(vertexData, offset, x1, y1, worldZ, color);
+    }
+  }
+
+  if (offset === vertexData.length) {
+    return vertexData;
+  }
+  return vertexData.subarray(0, offset);
+}
+
+function updateGridBuffers(heightField) {
+  const blockVertices = createTerrainGridVertices(heightField, 1, blockLineColor, 0.08);
+  gl.bindBuffer(gl.ARRAY_BUFFER, blockGridBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, blockVertices, gl.STATIC_DRAW);
+  blockGridVertexCount = blockVertices.length / floatsPerVertex;
+
+  const chunkVertices = createTerrainGridVertices(
+    heightField,
+    blocksPerChunk,
+    chunkLineColor,
+    0.12
+  );
+  gl.bindBuffer(gl.ARRAY_BUFFER, chunkGridBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, chunkVertices, gl.STATIC_DRAW);
+  chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
+}
+
 function generateTerrainVertices(seedString) {
   const numericSeed = stringToSeed(seedString);
   const blocksPerSide = chunksPerSide * blocksPerChunk;
   const vertexFloatCount = blocksPerSide * blocksPerSide * 6 * floatsPerVertex;
   const vertexData = new Float32Array(vertexFloatCount);
-  const heights = new Array(blocksPerSide + 1);
-  const islandMask = new Array(blocksPerSide + 1);
-  let minHeight = Infinity;
-  let maxHeight = -Infinity;
+  let heights = new Array(blocksPerSide + 1);
+  let islandMask = new Array(blocksPerSide + 1);
 
   for (let z = 0; z <= blocksPerSide; z++) {
     heights[z] = new Array(blocksPerSide + 1);
@@ -309,27 +404,98 @@ function generateTerrainVertices(seedString) {
       const sampleX = (x / blocksPerSide) * terrainNoiseScale;
       const sampleZ = (z / blocksPerSide) * terrainNoiseScale;
       const baseNoise = fbm(sampleX, sampleZ, numericSeed);
-      const duneNoise = fbm(sampleX * 2.3, sampleZ * 2.3, numericSeed ^ 0x27d4eb2d);
+      const duneNoise = fbm(sampleX * 1.6, sampleZ * 1.6, numericSeed ^ 0x27d4eb2d);
 
-      const shapedBase = clamp01(baseNoise * 1.18 - 0.18);
-      const dunePeaks = Math.pow(1 - Math.abs(duneNoise * 2 - 1), 2.4);
+      const shapedBase = clamp01(baseNoise * 1.12 - 0.12);
+      const dunePeaks = Math.pow(1 - Math.abs(duneNoise * 2 - 1), 1.8);
 
       const nx = x / blocksPerSide;
       const nz = z / blocksPerSide;
       const centeredX = nx * 2 - 1;
       const centeredZ = nz * 2 - 1;
-      const radialDistance = Math.hypot(centeredX, centeredZ);
-      const normalizedDistance = Math.min(1, radialDistance / falloffRadius);
+      const squareDistance = Math.max(Math.abs(centeredX), Math.abs(centeredZ));
+      const normalizedDistance = Math.min(1, squareDistance / falloffRadius);
       const falloff = Math.pow(normalizedDistance, falloffExponent);
       const mask = clamp01(1 - falloff);
 
-      const combined = clamp01((shapedBase + dunePeaks * 0.45) * mask + mask * 0.08);
-      const height = clamp01(combined) * maxTerrainHeight;
+      const combined = clamp01((shapedBase + dunePeaks * 0.35) * mask + mask * 0.1);
+      const height = clamp(combined * maxTerrainHeight, 0, maxTerrainHeight);
 
       heights[z][x] = height;
       islandMask[z][x] = mask;
-      if (height < minHeight) minHeight = height;
-      if (height > maxHeight) maxHeight = height;
+    }
+  }
+
+  const smoothField = (field, passes, clampFn) => {
+    let current = field;
+    const kernel = [
+      [1, 2, 1],
+      [2, 4, 2],
+      [1, 2, 1],
+    ];
+    for (let pass = 0; pass < passes; pass++) {
+      const next = new Array(blocksPerSide + 1);
+      for (let z = 0; z <= blocksPerSide; z++) {
+        next[z] = new Array(blocksPerSide + 1);
+        for (let x = 0; x <= blocksPerSide; x++) {
+          let sum = 0;
+          let weightSum = 0;
+          for (let dz = -1; dz <= 1; dz++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const weight = kernel[dz + 1][dx + 1];
+              const sampleX = Math.max(0, Math.min(blocksPerSide, x + dx));
+              const sampleZ = Math.max(0, Math.min(blocksPerSide, z + dz));
+              sum += current[sampleZ][sampleX] * weight;
+              weightSum += weight;
+            }
+          }
+          const smoothed = sum / (weightSum || 1);
+          next[z][x] = clampFn ? clampFn(smoothed) : smoothed;
+        }
+      }
+      current = next;
+    }
+    return current;
+  };
+
+  heights = smoothField(heights, 2, (value) => clamp(value, 0, maxTerrainHeight));
+  islandMask = smoothField(islandMask, 1, clamp01);
+
+  const finalHeights = new Array(blocksPerSide + 1);
+  let minPre = Infinity;
+  let maxPre = -Infinity;
+  for (let z = 0; z <= blocksPerSide; z++) {
+    finalHeights[z] = new Array(blocksPerSide + 1);
+    for (let x = 0; x <= blocksPerSide; x++) {
+      const mask = clamp01(islandMask[z][x]);
+      const normalizedHeight = maxTerrainHeight > 0 ? heights[z][x] / maxTerrainHeight : 0;
+      const blended = clamp01(normalizedHeight * 0.85 + mask * 0.15);
+      const height = clamp(blended * maxTerrainHeight, 0, maxTerrainHeight);
+      finalHeights[z][x] = height;
+      if (height < minPre) minPre = height;
+      if (height > maxPre) maxPre = height;
+    }
+  }
+
+  if (maxPre > minPre) {
+    const scale = maxTerrainHeight / (maxPre - minPre);
+    for (let z = 0; z <= blocksPerSide; z++) {
+      for (let x = 0; x <= blocksPerSide; x++) {
+        const shifted = finalHeights[z][x] - minPre;
+        finalHeights[z][x] = clamp(shifted * scale, 0, maxTerrainHeight);
+      }
+    }
+  }
+
+  heights = finalHeights;
+
+  let minHeight = Infinity;
+  let maxHeight = -Infinity;
+  for (let z = 0; z <= blocksPerSide; z++) {
+    for (let x = 0; x <= blocksPerSide; x++) {
+      const value = heights[z][x];
+      if (value < minHeight) minHeight = value;
+      if (value > maxHeight) maxHeight = value;
     }
   }
 
@@ -400,15 +566,17 @@ function generateTerrainVertices(seedString) {
     }
   }
 
-  return { vertexData, minHeight, maxHeight, visibleVertices };
+  return { vertexData, minHeight, maxHeight, visibleVertices, heightField: heights };
 }
 
 function regenerateTerrain(seedString) {
-  const { vertexData, minHeight, maxHeight, visibleVertices } =
+  const { vertexData, minHeight, maxHeight, visibleVertices, heightField } =
     generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
+  terrainHeightField = heightField;
+  updateGridBuffers(heightField);
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
   terrainInfo.maxHeight = Math.min(maxTerrainHeight, maxHeight);
@@ -563,16 +731,194 @@ function createLookAtMatrix(eye, target, up) {
 
 function multiplyMatrices(a, b) {
   const result = new Float32Array(16);
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 4; col++) {
-      let sum = 0;
-      for (let i = 0; i < 4; i++) {
-        sum += a[i + row * 4] * b[col + i * 4];
-      }
-      result[col + row * 4] = sum;
-    }
-  }
+  const a00 = a[0];
+  const a01 = a[1];
+  const a02 = a[2];
+  const a03 = a[3];
+  const a10 = a[4];
+  const a11 = a[5];
+  const a12 = a[6];
+  const a13 = a[7];
+  const a20 = a[8];
+  const a21 = a[9];
+  const a22 = a[10];
+  const a23 = a[11];
+  const a30 = a[12];
+  const a31 = a[13];
+  const a32 = a[14];
+  const a33 = a[15];
+
+  const b00 = b[0];
+  const b01 = b[1];
+  const b02 = b[2];
+  const b03 = b[3];
+  const b10 = b[4];
+  const b11 = b[5];
+  const b12 = b[6];
+  const b13 = b[7];
+  const b20 = b[8];
+  const b21 = b[9];
+  const b22 = b[10];
+  const b23 = b[11];
+  const b30 = b[12];
+  const b31 = b[13];
+  const b32 = b[14];
+  const b33 = b[15];
+
+  result[0] = b00 * a00 + b01 * a10 + b02 * a20 + b03 * a30;
+  result[1] = b00 * a01 + b01 * a11 + b02 * a21 + b03 * a31;
+  result[2] = b00 * a02 + b01 * a12 + b02 * a22 + b03 * a32;
+  result[3] = b00 * a03 + b01 * a13 + b02 * a23 + b03 * a33;
+
+  result[4] = b10 * a00 + b11 * a10 + b12 * a20 + b13 * a30;
+  result[5] = b10 * a01 + b11 * a11 + b12 * a21 + b13 * a31;
+  result[6] = b10 * a02 + b11 * a12 + b12 * a22 + b13 * a32;
+  result[7] = b10 * a03 + b11 * a13 + b12 * a23 + b13 * a33;
+
+  result[8] = b20 * a00 + b21 * a10 + b22 * a20 + b23 * a30;
+  result[9] = b20 * a01 + b21 * a11 + b22 * a21 + b23 * a31;
+  result[10] = b20 * a02 + b21 * a12 + b22 * a22 + b23 * a32;
+  result[11] = b20 * a03 + b21 * a13 + b22 * a23 + b23 * a33;
+
+  result[12] = b30 * a00 + b31 * a10 + b32 * a20 + b33 * a30;
+  result[13] = b30 * a01 + b31 * a11 + b32 * a21 + b33 * a31;
+  result[14] = b30 * a02 + b31 * a12 + b32 * a22 + b33 * a32;
+  result[15] = b30 * a03 + b31 * a13 + b32 * a23 + b33 * a33;
+
   return result;
+}
+
+function smoothStep(t) {
+  return t * t * (3 - 2 * t);
+}
+
+function computeCelestialPosition(progress) {
+  const clamped = clamp(progress, 0, 1);
+  const angle = clamped * Math.PI - Math.PI / 2;
+  const horizontal = Math.cos(angle);
+  const vertical = Math.sin(angle);
+  const x = 50 + horizontal * 45;
+  const y = 68 - vertical * 55;
+  return { x, y };
+}
+
+function applyCelestialAppearance(element, baseColor, accentColor, glowRadius) {
+  if (!element) {
+    return;
+  }
+  const highlight = mixColor([1, 1, 1], baseColor, 0.35);
+  const rim = mixColor(baseColor, accentColor, 0.55);
+  element.style.background = `radial-gradient(circle at 30% 30%, ${colorToCss(highlight)} 0%, ${colorToCss(
+    baseColor
+  )} 55%, ${colorToCss(rim)} 100%)`;
+  element.style.boxShadow = `0 0 ${glowRadius}px ${colorToRgba(baseColor, 0.85)}`;
+}
+
+function updateCelestialBody(element, visibility, progress, baseColor, accentColor, glowRadius) {
+  if (!element) {
+    return;
+  }
+  const position = computeCelestialPosition(progress);
+  element.style.opacity = visibility.toFixed(3);
+  element.style.left = `${position.x}%`;
+  element.style.top = `${position.y}%`;
+  applyCelestialAppearance(element, baseColor, accentColor, glowRadius);
+}
+
+function calculateMoonState(cycleSeconds) {
+  const timeSinceMoonRise = (cycleSeconds - duskEnd + secondsPerDay + secondsPerDay) % secondsPerDay;
+  const visibleWindow = moonCycleDuration + dawnDuration;
+  let visibility = 0;
+  let progress = 0;
+
+  if (timeSinceMoonRise <= visibleWindow) {
+    progress = clamp(timeSinceMoonRise / moonCycleDuration, 0, 1);
+    const fadeIn = timeSinceMoonRise < duskDuration ? fade(timeSinceMoonRise / duskDuration) : 1;
+    const fadeOutStart = Math.max(0, timeSinceMoonRise - moonCycleDuration);
+    const fadeOut =
+      timeSinceMoonRise > moonCycleDuration
+        ? 1 - fade(Math.min(1, fadeOutStart / Math.max(dawnDuration, 1)))
+        : 1;
+    visibility = clamp(fadeIn * fadeOut, 0, 1);
+  }
+
+  return { visibility, progress };
+}
+
+function calculateSunState(cycleSeconds) {
+  const clampedCycle = Math.min(cycleSeconds, sunCycleDuration);
+  const progress = clamp(clampedCycle / sunCycleDuration, 0, 1);
+  let visibility = 0;
+
+  if (cycleSeconds <= sunCycleDuration) {
+    const fadeIn = cycleSeconds < dawnDuration ? fade(cycleSeconds / Math.max(dawnDuration, 1)) : 1;
+    const fadeOutStart = Math.max(0, cycleSeconds - dayEnd);
+    const fadeOut =
+      cycleSeconds > dayEnd
+        ? 1 - fade(Math.min(1, fadeOutStart / Math.max(duskDuration, 1)))
+        : 1;
+    visibility = clamp(fadeIn * fadeOut, 0, 1);
+  }
+
+  return { visibility, progress };
+}
+
+function updateSkyCycle(cycleSeconds) {
+  const cycle = cycleSeconds % secondsPerDay;
+  let topColor = nightSkyTop;
+  let bottomColor = nightSkyBottom;
+
+  const sunState = calculateSunState(cycle);
+  const moonState = calculateMoonState(cycle);
+
+  let sunColor = sunDayColor;
+  let sunAccent = sunWarmColor;
+
+  if (cycle < dawnEnd) {
+    const normalized = cycle / Math.max(dawnDuration, 1);
+    const warmBlend = fade(normalized);
+    const warmTop = mixColor(nightSkyTop, dawnSkyTop, warmBlend);
+    const warmBottom = mixColor(nightSkyBottom, dawnSkyBottom, warmBlend);
+    const toDay = fade(Math.max(0, (cycle - dawnDuration * 0.5) / Math.max(dawnDuration * 0.5, 1)));
+    topColor = mixColor(warmTop, daySkyTop, toDay);
+    bottomColor = mixColor(warmBottom, daySkyBottom, toDay);
+
+    const warmFactor = 1 - smoothStep(Math.min(1, normalized));
+    sunColor = mixColor(sunDayColor, sunWarmColor, warmFactor);
+    sunAccent = mixColor(sunWarmColor, sunDayColor, smoothStep(normalized));
+  } else if (cycle < dayEnd) {
+    const dayProgress = (cycle - dawnEnd) / Math.max(dayDuration, 1);
+    const middayLift = 0.2 * Math.sin(dayProgress * Math.PI);
+    topColor = mixColor(daySkyTop, mixColor(daySkyTop, [0.75, 0.85, 1], 0.65), clamp01(middayLift));
+    bottomColor = mixColor(daySkyBottom, mixColor(daySkyBottom, [0.85, 0.94, 1], 0.6), clamp01(middayLift));
+    sunColor = sunDayColor;
+    sunAccent = mixColor(sunDayColor, [1, 0.95, 0.7], 0.4);
+  } else if (cycle < duskEnd) {
+    const duskProgress = (cycle - dayEnd) / Math.max(duskDuration, 1);
+    const warmBlend = fade(duskProgress);
+    const warmTop = mixColor(daySkyTop, duskSkyTop, warmBlend);
+    const warmBottom = mixColor(daySkyBottom, duskSkyBottom, warmBlend);
+    const toNight = fade(Math.max(0, (cycle - dayEnd - duskDuration * 0.5) / Math.max(duskDuration * 0.5, 1)));
+    topColor = mixColor(warmTop, nightSkyTop, toNight);
+    bottomColor = mixColor(warmBottom, nightSkyBottom, toNight);
+
+    const warmFactor = smoothStep(Math.min(1, duskProgress));
+    sunColor = mixColor(sunDayColor, sunWarmColor, warmFactor);
+    sunAccent = mixColor(sunWarmColor, sunDayColor, 0.25);
+  } else {
+    const nightProgress = (cycle - duskEnd) / Math.max(moonCycleDuration, 1);
+    const moonGlow = 0.25 + 0.25 * Math.sin(nightProgress * Math.PI);
+    topColor = mixColor(nightSkyTop, [0.14, 0.19, 0.3], clamp01(moonGlow));
+    bottomColor = mixColor(nightSkyBottom, [0.05, 0.07, 0.12], clamp01(moonGlow * 0.8));
+  }
+
+  const topCss = colorToCss(topColor);
+  const bottomCss = colorToCss(bottomColor);
+  canvas.style.background = `linear-gradient(180deg, ${topCss} 0%, ${bottomCss} 100%)`;
+  gl.clearColor(bottomColor[0], bottomColor[1], bottomColor[2], 1);
+
+  updateCelestialBody(sunElement, sunState.visibility, sunState.progress, sunColor, sunAccent, 45);
+  updateCelestialBody(moonElement, moonState.visibility, moonState.progress, moonSoftColor, [0.6, 0.64, 0.9], 36);
 }
 
 function updateCanvasSize() {
@@ -671,7 +1017,7 @@ document.addEventListener('pointerlockchange', () => {
 
 document.addEventListener('mousemove', (event) => {
   if (document.pointerLockElement === canvas) {
-    yaw -= event.movementX * pointerSensitivity;
+    yaw += event.movementX * pointerSensitivity;
     pitch -= event.movementY * pointerSensitivity;
     const limit = Math.PI / 2 - 0.01;
     pitch = clamp(pitch, -limit, limit);
@@ -747,6 +1093,7 @@ document.addEventListener('keyup', (event) => {
 });
 
 let previousTime = performance.now();
+let simulationTime = 0;
 let fpsAccumulator = 0;
 let fpsSamples = 0;
 let displayedFps = 0;
@@ -848,6 +1195,9 @@ function tickSimulation(deltaTime) {
 }
 
 function update(deltaTime) {
+  simulationTime = (simulationTime + deltaTime) % secondsPerDay;
+  updateSkyCycle(simulationTime);
+
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),

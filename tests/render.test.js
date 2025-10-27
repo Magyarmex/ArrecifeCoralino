@@ -8,6 +8,7 @@ function createWebGLStub() {
     boundArrayBuffer: null,
     viewport: [0, 0, 0, 0],
     draws: [],
+    viewProjection: null,
   };
 
   const gl = {
@@ -53,7 +54,11 @@ function createWebGLStub() {
     bufferData: () => {},
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
-    uniformMatrix4fv: () => {},
+    uniformMatrix4fv: (location, transpose, value) => {
+      if (value && typeof value.length === 'number') {
+        state.viewProjection = Array.from(value);
+      }
+    },
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
@@ -221,6 +226,8 @@ function runTests() {
   const chunksPerSide = 16;
   const blocksPerSide = blocksPerChunk * chunksPerSide;
   const expectedTerrainVertices = blocksPerSide * blocksPerSide * 6;
+  const expectedBlockLineVertices = (blocksPerSide + 1) * blocksPerSide * 4;
+  const expectedChunkLineVertices = (blocksPerSide / blocksPerChunk + 1) * blocksPerSide * 4;
 
   assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
   assert(canvas.height === window.innerHeight, 'El canvas debe igualar el alto de la ventana');
@@ -228,16 +235,27 @@ function runTests() {
   assert(glState.viewport[2] === window.innerWidth, 'Viewport debe usar el ancho completo');
   assert(glState.viewport[3] === window.innerHeight, 'Viewport debe usar el alto completo');
 
+  assert(Array.isArray(glState.viewProjection), 'La matriz viewProjection debe enviarse al shader');
+  const viewProjectionW = glState.viewProjection[15];
+  assert(
+    Number.isFinite(viewProjectionW) && Math.abs(viewProjectionW) > 1e-5,
+    'La matriz viewProjection debe preservar un componente w distinto de cero'
+  );
+
   const triangleDraw = glState.draws.find(
     (draw) => draw.mode === 0x0004 && draw.count === expectedTerrainVertices
   );
   assert(triangleDraw, 'El terreno debe renderizar todos los vértices esperados');
 
-  const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 516);
-  assert(blockLines, 'La grid de bloques debe contener 516 vértices de línea');
+  const blockLines = glState.draws.find(
+    (draw) => draw.mode === 0x0001 && draw.count === expectedBlockLineVertices
+  );
+  assert(blockLines, 'La grid de bloques debe seguir el relieve del terreno completo');
 
-  const chunkLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 68);
-  assert(chunkLines, 'La grid de chunks debe contener 68 vértices de línea');
+  const chunkLines = glState.draws.find(
+    (draw) => draw.mode === 0x0001 && draw.count === expectedChunkLineVertices
+  );
+  assert(chunkLines, 'La grid de chunks debe trazar todos los límites sobre el terreno');
 
   assert(glState.draws.length >= 3, 'Se esperan múltiples draw calls por cuadro');
 
