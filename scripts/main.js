@@ -673,6 +673,34 @@ let fpsSamples = 0;
 let displayedFps = 0;
 let lastGlError = 'ninguno';
 
+const targetTickRate = 20;
+const tickInterval = 1 / targetTickRate;
+let tickAccumulator = 0;
+let tickStatsAccumulator = 0;
+let tickSamples = 0;
+let displayedTps = 0;
+let totalTicks = 0;
+let simulationTime = 0;
+let ticksLastFrame = 0;
+
+const simulationInfo = {
+  tickRate: targetTickRate,
+  tickInterval,
+  time: simulationTime,
+  totalTicks,
+  displayedTps,
+  ticksLastFrame,
+};
+
+if (typeof window !== 'undefined') {
+  window.__simulationInfo = simulationInfo;
+}
+
+function tickSimulation(deltaTime) {
+  // Punto de extensión para futuros sistemas de simulación basados en ticks.
+  void deltaTime;
+}
+
 function update(deltaTime) {
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
@@ -780,6 +808,9 @@ function updateDebugConsole(deltaTime) {
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
+    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate})`,
+    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
+    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Terreno seed: ${terrainInfo.seed}`,
@@ -800,6 +831,30 @@ function updateDebugConsole(deltaTime) {
 function loop(currentTime) {
   const deltaTime = (currentTime - previousTime) / 1000;
   previousTime = currentTime;
+
+  tickAccumulator += deltaTime;
+  ticksLastFrame = 0;
+
+  while (tickAccumulator >= tickInterval) {
+    tickSimulation(tickInterval);
+    tickAccumulator -= tickInterval;
+    simulationTime += tickInterval;
+    totalTicks += 1;
+    ticksLastFrame += 1;
+    tickStatsAccumulator += tickInterval;
+    tickSamples += 1;
+  }
+
+  if (tickStatsAccumulator >= 0.5) {
+    displayedTps = tickSamples / tickStatsAccumulator;
+    tickStatsAccumulator = 0;
+    tickSamples = 0;
+  }
+
+  simulationInfo.time = simulationTime;
+  simulationInfo.totalTicks = totalTicks;
+  simulationInfo.displayedTps = displayedTps;
+  simulationInfo.ticksLastFrame = ticksLastFrame;
 
   update(deltaTime);
   render();
