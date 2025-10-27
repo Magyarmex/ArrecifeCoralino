@@ -11,10 +11,211 @@ body {
 }
 
 #scene {
+  position: fixed;
+  top: 0;
+  left: 0;
   width: 100vw;
   height: 100vh;
   display: block;
   background: radial-gradient(circle at center, #1f2a3a 0%, #0b0c10 70%);
+  transition: background 1.2s ease;
+}
+
+#skybox-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#time-indicator {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(320px, 60vw, 640px);
+  pointer-events: none;
+  z-index: 15;
+}
+
+#time-indicator .time-bar {
+  position: relative;
+  width: 100%;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#time-indicator .time-track {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 12px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0d1a2b 0%, #f39c54 25%, #87d3ff 50%, #d781b9 75%, #0d1a2b 100%);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  opacity: 0.92;
+}
+
+#time-indicator .time-progress {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  height: 12px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.05));
+  box-shadow: inset 0 0 6px rgba(255, 255, 255, 0.22);
+  width: 0%;
+  z-index: 0;
+}
+
+#time-indicator .time-pointer {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.65);
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  opacity: 0.96;
+}
+
+.time-icon {
+  position: absolute;
+  top: 50%;
+  left: var(--marker-position, 0%);
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.time-icon::before,
+.time-icon::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.time-icon.dawn {
+  background: linear-gradient(180deg, #ffd18a 0%, #f97d45 55%, #1a6ba8 56%, #0d3d68 100%);
+}
+
+.time-icon.dawn::before {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  left: 50%;
+  top: 14px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 30% 30%, #fff7c4 0%, #ffd669 60%, #ff9d3c 100%);
+  box-shadow: 0 0 14px rgba(255, 199, 112, 0.7);
+}
+
+.time-icon.dawn::after {
+  bottom: 6px;
+  height: 18px;
+  background: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 65%),
+    linear-gradient(180deg, rgba(26, 107, 168, 0.7) 0%, rgba(12, 49, 85, 0.95) 100%);
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+.time-icon.midday {
+  background: linear-gradient(180deg, #73c7ff 0%, #2f82ff 100%);
+}
+
+.time-icon.midday::before {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 35% 30%, #fff6c9 0%, #ffe071 55%, #ffc24a 100%);
+  box-shadow: 0 0 16px rgba(255, 209, 120, 0.75);
+}
+
+.time-icon.dusk {
+  background: linear-gradient(180deg, #f78a9b 0%, #b16ccf 55%, #1b3364 56%, #0f1f3e 100%);
+}
+
+.time-icon.dusk::before {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  left: 50%;
+  top: 18px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 35% 40%, #ffffff 0%, #e7ebff 55%, #c2c8ff 100%);
+  box-shadow: 0 0 14px rgba(198, 205, 255, 0.65);
+}
+
+.time-icon.dusk::after {
+  bottom: 6px;
+  height: 18px;
+  background: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, rgba(37, 59, 112, 0.8) 0%, rgba(11, 24, 49, 0.95) 100%);
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+
+.time-icon.midnight {
+  background: linear-gradient(180deg, #0f1d39 0%, #050912 100%);
+}
+
+.time-icon.midnight::before {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 30% 30%, #ffffff 0%, #dfe3ff 60%, #a8b5ff 100%);
+  box-shadow: 0 0 18px rgba(160, 176, 255, 0.7);
+}
+
+.time-icon.midnight::after {
+  inset: 8px 10px auto auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 8px -10px 0 rgba(255, 255, 255, 0.3), -9px -6px 0 rgba(255, 255, 255, 0.45);
+}
+
+.celestial-body {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  filter: blur(0.2px) drop-shadow(0 0 22px rgba(255, 255, 255, 0.35));
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: background 1s ease;
+}
+
+.celestial-body.sun {
+  background: radial-gradient(circle at 30% 30%, #fff6bf 0%, #ffdf73 55%, #ffb347 100%);
+  box-shadow: 0 0 45px rgba(255, 215, 110, 0.8);
+}
+
+.celestial-body.moon {
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #dfe7ff 55%, #a8b5ff 100%);
+  box-shadow: 0 0 32px rgba(180, 190, 255, 0.7);
 }
 
 #overlay {
@@ -29,6 +230,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
   transition: opacity 0.3s ease;
+  z-index: 10;
 }
 
 #overlay h1 {
@@ -89,6 +291,7 @@ body {
   overflow: auto;
   white-space: pre-wrap;
   pointer-events: none;
+  z-index: 10;
 }
 
 #settings-container {

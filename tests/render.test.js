@@ -223,7 +223,7 @@ function runTests() {
   const { canvas, overlay, debugConsole, glState } = runGameScript();
 
   const blocksPerChunk = 8;
-  const chunksPerSide = 16;
+  const chunksPerSide = 32;
   const blocksPerSide = blocksPerChunk * chunksPerSide;
   const expectedTerrainVertices = blocksPerSide * blocksPerSide * 6;
 
@@ -245,11 +245,11 @@ function runTests() {
   );
   assert(triangleDraw, 'El terreno debe renderizar todos los vértices esperados');
 
-  const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 516);
-  assert(blockLines, 'La grid de bloques debe contener 516 vértices de línea');
+  const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 1028);
+  assert(blockLines, 'La grid de bloques debe contener 1028 vértices de línea');
 
-  const chunkLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 68);
-  assert(chunkLines, 'La grid de chunks debe contener 68 vértices de línea');
+  const chunkLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 132);
+  assert(chunkLines, 'La grid de chunks debe contener 132 vértices de línea');
 
   assert(glState.draws.length >= 3, 'Se esperan múltiples draw calls por cuadro');
 

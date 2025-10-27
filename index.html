@@ -8,6 +8,37 @@
   </head>
   <body>
     <canvas id="scene"></canvas>
+    <div id="skybox-overlay" aria-hidden="true">
+      <div id="sun" class="celestial-body sun"></div>
+      <div id="moon" class="celestial-body moon"></div>
+    </div>
+    <div id="time-indicator" aria-hidden="true">
+      <div class="time-bar">
+        <div class="time-track"></div>
+        <div class="time-progress" id="time-progress"></div>
+        <div class="time-pointer" id="time-pointer"></div>
+        <span
+          class="time-icon dawn"
+          data-time-marker="dawn"
+          title="Amanecer"
+        ></span>
+        <span
+          class="time-icon midday"
+          data-time-marker="midday"
+          title="Mediodía"
+        ></span>
+        <span
+          class="time-icon dusk"
+          data-time-marker="dusk"
+          title="Atardecer"
+        ></span>
+        <span
+          class="time-icon midnight"
+          data-time-marker="midnight"
+          title="Medianoche"
+        ></span>
+      </div>
+    </div>
     <div id="overlay" class="visible">
       <h1>Exploración Libre</h1>
       <p>Haz clic para capturar el cursor y usa el ratón para mirar.</p>
@@ -16,7 +47,7 @@
         &bull; Altura: <strong>Q</strong> (bajar), <strong>E</strong> (subir)
       </p>
       <p>
-        Explora la isla submarina arenosa segmentada en 16&times;16 chunks y su
+        Explora la isla submarina arenosa segmentada en 32&times;32 chunks y su
         grid de bloques.
       </p>
       <p>

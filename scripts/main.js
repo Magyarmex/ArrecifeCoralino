@@ -6,6 +6,14 @@ const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
 const randomSeedButton = document.getElementById('random-seed');
+const sunElement = document.getElementById('sun');
+const moonElement = document.getElementById('moon');
+const timeProgressElement = document.getElementById('time-progress');
+const timePointerElement = document.getElementById('time-pointer');
+const timeMarkerElements =
+  typeof document !== 'undefined' && typeof document.querySelectorAll === 'function'
+    ? Array.from(document.querySelectorAll('[data-time-marker]'))
+    : [];
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -18,6 +26,36 @@ const GL_NO_ERROR = gl.NO_ERROR ?? 0;
 
 gl.clearColor(0.05, 0.08, 0.12, 1);
 gl.enable(gl.DEPTH_TEST);
+
+const secondsPerDay = 24 * 60;
+const dawnDuration = 2 * 60;
+const dayDuration = 8 * 60;
+const duskDuration = 2 * 60;
+const sunCycleDuration = dawnDuration + dayDuration + duskDuration;
+const moonCycleDuration = secondsPerDay - sunCycleDuration;
+const dawnEnd = dawnDuration;
+const dayEnd = dawnEnd + dayDuration;
+const duskEnd = dayEnd + duskDuration;
+
+const timeMarkerPositions = {
+  dawn: 0,
+  midday: (dawnEnd + dayDuration / 2) / secondsPerDay,
+  dusk: duskEnd / secondsPerDay,
+  midnight: ((duskEnd + moonCycleDuration / 2) % secondsPerDay) / secondsPerDay,
+};
+
+const nightSkyTop = [0.09, 0.13, 0.2];
+const nightSkyBottom = [0.02, 0.03, 0.05];
+const dawnSkyTop = [0.98, 0.6, 0.45];
+const dawnSkyBottom = [0.55, 0.23, 0.36];
+const daySkyTop = [0.36, 0.62, 0.95];
+const daySkyBottom = [0.64, 0.82, 0.98];
+const duskSkyTop = [0.88, 0.45, 0.6];
+const duskSkyBottom = [0.32, 0.12, 0.28];
+
+const sunDayColor = [1, 0.88, 0.45];
+const sunWarmColor = [1, 0.6, 0.3];
+const moonSoftColor = [0.83, 0.86, 1];
 
 function createShader(type, source) {
   const shader = gl.createShader(type);
@@ -76,11 +114,28 @@ const positionAttribute = gl.getAttribLocation(program, 'position');
 const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 
-const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
-const chunksPerSide = 16;
-const chunkSize = blockSize * blocksPerChunk;
-const baseplateSize = chunkSize * chunksPerSide;
+const chunksPerSide = 32;
+const squareSizeCentimeters = 10;
+const centimetersPerMeter = 100;
+const squareSizeMeters = squareSizeCentimeters / centimetersPerMeter;
+const chunkSizeCentimeters = squareSizeCentimeters * blocksPerChunk;
+const chunkSizeMeters = chunkSizeCentimeters / centimetersPerMeter;
+const mapSizeCentimeters = chunkSizeCentimeters * chunksPerSide;
+const mapSizeMeters = mapSizeCentimeters / centimetersPerMeter;
+
+const blockSize = squareSizeMeters;
+const chunkSize = chunkSizeMeters;
+const baseplateSize = mapSizeMeters;
+
+const mapDimensions = {
+  squareSizeCentimeters,
+  squareSizeMeters,
+  chunkSizeCentimeters,
+  chunkSizeMeters,
+  mapSizeCentimeters,
+  mapSizeMeters,
+};
 
 const floatsPerVertex = 6;
 const vertexStride = floatsPerVertex * Float32Array.BYTES_PER_ELEMENT;
@@ -133,6 +188,9 @@ const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColo
 
 const blockGridBuffer = createBuffer(blockGridVertices);
 const chunkGridBuffer = createBuffer(chunkGridVertices);
+
+applyTimeMarkerPositions();
+updateTimeIndicator(0);
 
 const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
 const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
@@ -230,6 +288,20 @@ function mixColor(a, b, t) {
     lerp(a[1], b[1], t),
     lerp(a[2], b[2], t),
   ];
+}
+
+function colorToCss(color) {
+  const r = Math.round(clamp(color[0], 0, 1) * 255);
+  const g = Math.round(clamp(color[1], 0, 1) * 255);
+  const b = Math.round(clamp(color[2], 0, 1) * 255);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function colorToRgba(color, alpha) {
+  const r = Math.round(clamp(color[0], 0, 1) * 255);
+  const g = Math.round(clamp(color[1], 0, 1) * 255);
+  const b = Math.round(clamp(color[2], 0, 1) * 255);
+  return `rgba(${r}, ${g}, ${b}, ${clamp(alpha, 0, 1)})`;
 }
 
 function pushVertex(buffer, offset, x, y, z, color) {
@@ -639,6 +711,163 @@ function multiplyMatrices(a, b) {
   return result;
 }
 
+function smoothStep(t) {
+  return t * t * (3 - 2 * t);
+}
+
+function computeCelestialPosition(progress) {
+  const clamped = clamp(progress, 0, 1);
+  const angle = clamped * Math.PI - Math.PI / 2;
+  const horizontal = Math.cos(angle);
+  const vertical = Math.sin(angle);
+  const x = 50 + horizontal * 45;
+  const y = 68 - vertical * 55;
+  return { x, y };
+}
+
+function applyCelestialAppearance(element, baseColor, accentColor, glowRadius) {
+  if (!element) {
+    return;
+  }
+  const highlight = mixColor([1, 1, 1], baseColor, 0.35);
+  const rim = mixColor(baseColor, accentColor, 0.55);
+  element.style.background = `radial-gradient(circle at 30% 30%, ${colorToCss(highlight)} 0%, ${colorToCss(
+    baseColor
+  )} 55%, ${colorToCss(rim)} 100%)`;
+  element.style.boxShadow = `0 0 ${glowRadius}px ${colorToRgba(baseColor, 0.85)}`;
+}
+
+function updateCelestialBody(element, visibility, progress, baseColor, accentColor, glowRadius) {
+  if (!element) {
+    return;
+  }
+  const position = computeCelestialPosition(progress);
+  element.style.opacity = visibility.toFixed(3);
+  element.style.left = `${position.x}%`;
+  element.style.top = `${position.y}%`;
+  applyCelestialAppearance(element, baseColor, accentColor, glowRadius);
+}
+
+function applyTimeMarkerPositions() {
+  if (timeMarkerElements.length === 0) {
+    return;
+  }
+  timeMarkerElements.forEach((element) => {
+    const marker = element.dataset.timeMarker;
+    const progress = timeMarkerPositions[marker];
+    if (typeof progress !== 'number') {
+      return;
+    }
+    element.style.setProperty('--marker-position', `${(progress * 100).toFixed(2)}%`);
+  });
+}
+
+function updateTimeIndicator(cycleSeconds) {
+  if (!timeProgressElement || !timePointerElement) {
+    return;
+  }
+  const normalized = clamp01((cycleSeconds % secondsPerDay) / secondsPerDay);
+  const percent = `${(normalized * 100).toFixed(3)}%`;
+  timeProgressElement.style.width = percent;
+  timePointerElement.style.left = percent;
+}
+
+function calculateMoonState(cycleSeconds) {
+  const timeSinceMoonRise = (cycleSeconds - duskEnd + secondsPerDay + secondsPerDay) % secondsPerDay;
+  const visibleWindow = moonCycleDuration + dawnDuration;
+  let visibility = 0;
+  let progress = 0;
+
+  if (timeSinceMoonRise <= visibleWindow) {
+    progress = clamp(timeSinceMoonRise / moonCycleDuration, 0, 1);
+    const fadeIn = timeSinceMoonRise < duskDuration ? fade(timeSinceMoonRise / duskDuration) : 1;
+    const fadeOutStart = Math.max(0, timeSinceMoonRise - moonCycleDuration);
+    const fadeOut =
+      timeSinceMoonRise > moonCycleDuration
+        ? 1 - fade(Math.min(1, fadeOutStart / Math.max(dawnDuration, 1)))
+        : 1;
+    visibility = clamp(fadeIn * fadeOut, 0, 1);
+  }
+
+  return { visibility, progress };
+}
+
+function calculateSunState(cycleSeconds) {
+  const clampedCycle = Math.min(cycleSeconds, sunCycleDuration);
+  const progress = clamp(clampedCycle / sunCycleDuration, 0, 1);
+  let visibility = 0;
+
+  if (cycleSeconds <= sunCycleDuration) {
+    const fadeIn = cycleSeconds < dawnDuration ? fade(cycleSeconds / Math.max(dawnDuration, 1)) : 1;
+    const fadeOutStart = Math.max(0, cycleSeconds - dayEnd);
+    const fadeOut =
+      cycleSeconds > dayEnd
+        ? 1 - fade(Math.min(1, fadeOutStart / Math.max(duskDuration, 1)))
+        : 1;
+    visibility = clamp(fadeIn * fadeOut, 0, 1);
+  }
+
+  return { visibility, progress };
+}
+
+function updateSkyCycle(cycleSeconds) {
+  const cycle = cycleSeconds % secondsPerDay;
+  let topColor = nightSkyTop;
+  let bottomColor = nightSkyBottom;
+
+  const sunState = calculateSunState(cycle);
+  const moonState = calculateMoonState(cycle);
+
+  let sunColor = sunDayColor;
+  let sunAccent = sunWarmColor;
+
+  if (cycle < dawnEnd) {
+    const normalized = cycle / Math.max(dawnDuration, 1);
+    const warmBlend = fade(normalized);
+    const warmTop = mixColor(nightSkyTop, dawnSkyTop, warmBlend);
+    const warmBottom = mixColor(nightSkyBottom, dawnSkyBottom, warmBlend);
+    const toDay = fade(Math.max(0, (cycle - dawnDuration * 0.5) / Math.max(dawnDuration * 0.5, 1)));
+    topColor = mixColor(warmTop, daySkyTop, toDay);
+    bottomColor = mixColor(warmBottom, daySkyBottom, toDay);
+
+    const warmFactor = 1 - smoothStep(Math.min(1, normalized));
+    sunColor = mixColor(sunDayColor, sunWarmColor, warmFactor);
+    sunAccent = mixColor(sunWarmColor, sunDayColor, smoothStep(normalized));
+  } else if (cycle < dayEnd) {
+    const dayProgress = (cycle - dawnEnd) / Math.max(dayDuration, 1);
+    const middayLift = 0.2 * Math.sin(dayProgress * Math.PI);
+    topColor = mixColor(daySkyTop, mixColor(daySkyTop, [0.75, 0.85, 1], 0.65), clamp01(middayLift));
+    bottomColor = mixColor(daySkyBottom, mixColor(daySkyBottom, [0.85, 0.94, 1], 0.6), clamp01(middayLift));
+    sunColor = sunDayColor;
+    sunAccent = mixColor(sunDayColor, [1, 0.95, 0.7], 0.4);
+  } else if (cycle < duskEnd) {
+    const duskProgress = (cycle - dayEnd) / Math.max(duskDuration, 1);
+    const warmBlend = fade(duskProgress);
+    const warmTop = mixColor(daySkyTop, duskSkyTop, warmBlend);
+    const warmBottom = mixColor(daySkyBottom, duskSkyBottom, warmBlend);
+    const toNight = fade(Math.max(0, (cycle - dayEnd - duskDuration * 0.5) / Math.max(duskDuration * 0.5, 1)));
+    topColor = mixColor(warmTop, nightSkyTop, toNight);
+    bottomColor = mixColor(warmBottom, nightSkyBottom, toNight);
+
+    const warmFactor = smoothStep(Math.min(1, duskProgress));
+    sunColor = mixColor(sunDayColor, sunWarmColor, warmFactor);
+    sunAccent = mixColor(sunWarmColor, sunDayColor, 0.25);
+  } else {
+    const nightProgress = (cycle - duskEnd) / Math.max(moonCycleDuration, 1);
+    const moonGlow = 0.25 + 0.25 * Math.sin(nightProgress * Math.PI);
+    topColor = mixColor(nightSkyTop, [0.14, 0.19, 0.3], clamp01(moonGlow));
+    bottomColor = mixColor(nightSkyBottom, [0.05, 0.07, 0.12], clamp01(moonGlow * 0.8));
+  }
+
+  const topCss = colorToCss(topColor);
+  const bottomCss = colorToCss(bottomColor);
+  canvas.style.background = `linear-gradient(180deg, ${topCss} 0%, ${bottomCss} 100%)`;
+  gl.clearColor(bottomColor[0], bottomColor[1], bottomColor[2], 1);
+
+  updateCelestialBody(sunElement, sunState.visibility, sunState.progress, sunColor, sunAccent, 45);
+  updateCelestialBody(moonElement, moonState.visibility, moonState.progress, moonSoftColor, [0.6, 0.64, 0.9], 36);
+}
+
 function updateCanvasSize() {
   const width = window.innerWidth;
   const height = window.innerHeight;
@@ -782,12 +1011,17 @@ document.addEventListener('keyup', (event) => {
 });
 
 let previousTime = performance.now();
+let simulationTime = 0;
 let fpsAccumulator = 0;
 let fpsSamples = 0;
 let displayedFps = 0;
 let lastGlError = 'ninguno';
 
 function update(deltaTime) {
+  simulationTime = (simulationTime + deltaTime) % secondsPerDay;
+  updateSkyCycle(simulationTime);
+  updateTimeIndicator(simulationTime);
+
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),
@@ -899,6 +1133,9 @@ function updateDebugConsole(deltaTime) {
     `Terreno seed: ${terrainInfo.seed}`,
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
+    `Mapa: ${chunksPerSide}x${chunksPerSide} chunks (${mapDimensions.mapSizeMeters.toFixed(2)}m por lado)`,
+    `Chunk: ${blocksPerChunk}x${blocksPerChunk} cuadros (${mapDimensions.chunkSizeMeters.toFixed(2)}m)`,
+    `Cuadro: ${mapDimensions.squareSizeCentimeters}cm (${mapDimensions.squareSizeMeters.toFixed(2)}m)`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
