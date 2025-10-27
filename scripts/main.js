@@ -17,7 +17,133 @@ const simulationSpeedSettingsDisplay = document.getElementById(
 const settingsDebugLog = document.getElementById('settings-debug-log');
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
+function createFallbackInfoPanel() {
+  let hiddenState = true;
+  return {
+    get hidden() {
+      return hiddenState;
+    },
+    set hidden(value) {
+      hiddenState = Boolean(value);
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+}
+
+function createFallbackTextField() {
+  return {
+    textContent: '',
+  };
+}
+
+function createFallbackButton() {
+  return {
+    addEventListener: () => {},
+  };
+}
+
+const selectionInfoPanel =
+  document.getElementById('selection-info') ?? createFallbackInfoPanel();
+const selectionBlockField =
+  document.getElementById('selection-info-block') ?? createFallbackTextField();
+const selectionChunkField =
+  document.getElementById('selection-info-chunk') ?? createFallbackTextField();
+const selectionWorldField =
+  document.getElementById('selection-info-world') ?? createFallbackTextField();
+const selectionHeightField =
+  document.getElementById('selection-info-height') ?? createFallbackTextField();
+const selectionWaterField =
+  document.getElementById('selection-info-water') ?? createFallbackTextField();
+const selectionDepthField =
+  document.getElementById('selection-info-depth') ?? createFallbackTextField();
+const selectionCloseButton =
+  document.getElementById('selection-close') ?? createFallbackButton();
+
 const bodyElement = document.body;
+
+function ensureEventDispatchSupport(element) {
+  if (!element) {
+    return;
+  }
+
+  if (typeof element.dispatch === 'function' && typeof element.dispatchEvent === 'function') {
+    return;
+  }
+
+  if (typeof element.dispatch !== 'function' && typeof element.dispatchEvent === 'function') {
+    element.dispatch = (typeOrEvent) => {
+      const event =
+        typeof typeOrEvent === 'string'
+          ? typeof Event === 'function'
+            ? new Event(typeOrEvent)
+            : { type: typeOrEvent }
+          : typeOrEvent;
+      if (event) {
+        element.dispatchEvent(event);
+      }
+      return true;
+    };
+    return;
+  }
+
+  const listenerRegistry = new Map();
+  const originalAdd =
+    typeof element.addEventListener === 'function' ? element.addEventListener.bind(element) : null;
+  const originalRemove =
+    typeof element.removeEventListener === 'function'
+      ? element.removeEventListener.bind(element)
+      : null;
+
+  element.addEventListener = (type, handler, options) => {
+    if (originalAdd) {
+      originalAdd(type, handler, options);
+    }
+    if (!listenerRegistry.has(type)) {
+      listenerRegistry.set(type, new Set());
+    }
+    listenerRegistry.get(type).add(handler);
+  };
+
+  if (originalRemove) {
+    element.removeEventListener = (type, handler, options) => {
+      if (listenerRegistry.has(type)) {
+        listenerRegistry.get(type).delete(handler);
+      }
+      originalRemove(type, handler, options);
+    };
+  }
+
+  const dispatchInternal = (typeOrEvent) => {
+    const type = typeof typeOrEvent === 'string' ? typeOrEvent : typeOrEvent?.type;
+    if (!type) {
+      return false;
+    }
+    const listeners = listenerRegistry.get(type);
+    if (!listeners || listeners.size === 0) {
+      return false;
+    }
+    const event =
+      typeof typeOrEvent === 'object' && typeOrEvent !== null
+        ? typeOrEvent
+        : { type, target: element, currentTarget: element };
+    for (const handler of listeners) {
+      try {
+        handler.call(element, event);
+      } catch (error) {
+        setTimeout(() => {
+          throw error;
+        });
+      }
+    }
+    return true;
+  };
+
+  element.dispatch = dispatchInternal;
+  element.dispatchEvent = dispatchInternal;
+}
+
+ensureEventDispatchSupport(debugTerrainToggle);
 
 const initialTutorialActive = overlay?.classList?.contains('visible') ?? false;
 let tutorialActive = initialTutorialActive;
@@ -180,18 +306,16 @@ let baseplateVertexCount = 0;
 const blockGridBuffer = createBuffer(new Float32Array(0));
 const chunkGridBuffer = createBuffer(new Float32Array(0));
 const selectionHighlightBuffer = createBuffer(new Float32Array(0));
-
-const blockGridBuffer = createBuffer(blockGridVertices);
-const chunkGridBuffer = createBuffer(chunkGridVertices);
-
 const rockBuffer = createBuffer(new Float32Array(0));
 
-const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
-const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
+let blockGridVertexCount = 0;
+let chunkGridVertexCount = 0;
 let rockVertexCount = 0;
+let selectionHighlightVertexCount = 0;
 
-let terrainHeightfield = null;
-let terrainMaskfield = null;
+let terrainHeightField = null;
+let terrainMaskField = null;
+let forceGridVisible = false;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -204,8 +328,6 @@ const terrainInfo = {
   visibleVertexRatio: 0,
   rockCount: 0,
 };
-
-let terrainHeightField = null;
 let seeThroughTerrain = false;
 let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
@@ -218,6 +340,18 @@ if (typeof window !== 'undefined') {
   window.__selectedSquare = null;
   window.__selectBlockAt = (x, y) => selectBlockAtScreen(x, y);
   window.__clearSelection = () => clearSelection();
+  if (debugTerrainToggle) {
+    if (!('seeThroughToggle' in window)) {
+      window.seeThroughToggle = debugTerrainToggle;
+    }
+    if (typeof globalThis !== 'undefined') {
+      globalThis.seeThroughToggle = debugTerrainToggle;
+    }
+  }
+  if (typeof globalThis !== 'undefined') {
+    globalThis.selectionInfoPanel = selectionInfoPanel;
+    globalThis.selectionBlockField = selectionBlockField;
+  }
 }
 
 if (seedInput) {
@@ -391,6 +525,8 @@ function applyTranslucentTerrainSetting(enabled) {
   const active = Boolean(enabled);
   terrainRenderState.translucent = active;
   terrainRenderState.alpha = active ? translucentTerrainAlpha : 1;
+  seeThroughTerrain = active;
+  forceGridVisible = active;
 
   if (debugTerrainToggle && debugTerrainToggle.checked !== active) {
     debugTerrainToggle.checked = active;
@@ -482,8 +618,44 @@ function createTerrainGridVertices(heightField, step, color, heightOffset) {
   return vertexData.subarray(0, offset);
 }
 
+function createBlockGridVertices(heightField, color, heightOffset) {
+  if (!heightField) {
+    return new Float32Array(0);
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  const half = baseplateSize / 2;
+  const totalLines = (blocksPerSide + 1) * 2;
+  const vertexData = new Float32Array(totalLines * 2 * floatsPerVertex);
+  let offset = 0;
+
+  const sample = (xIndex, zIndex) => {
+    const clampedX = Math.max(0, Math.min(blocksPerSide, xIndex));
+    const clampedZ = Math.max(0, Math.min(blocksPerSide, zIndex));
+    return heightField[clampedZ][clampedX] + heightOffset;
+  };
+
+  for (let xi = 0; xi <= blocksPerSide; xi++) {
+    const worldX = -half + xi * blockSize;
+    const startHeight = sample(xi, 0);
+    const endHeight = sample(xi, blocksPerSide);
+    offset = pushVertex(vertexData, offset, worldX, startHeight, -half, color);
+    offset = pushVertex(vertexData, offset, worldX, endHeight, half, color);
+  }
+
+  for (let zi = 0; zi <= blocksPerSide; zi++) {
+    const worldZ = -half + zi * blockSize;
+    const startHeight = sample(0, zi);
+    const endHeight = sample(blocksPerSide, zi);
+    offset = pushVertex(vertexData, offset, -half, startHeight, worldZ, color);
+    offset = pushVertex(vertexData, offset, half, endHeight, worldZ, color);
+  }
+
+  return offset === vertexData.length ? vertexData : vertexData.subarray(0, offset);
+}
+
 function updateGridBuffers(heightField) {
-  const blockVertices = createTerrainGridVertices(heightField, 1, blockLineColor, 0.08);
+  const blockVertices = createBlockGridVertices(heightField, blockLineColor, 0.08);
   gl.bindBuffer(gl.ARRAY_BUFFER, blockGridBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, blockVertices, gl.STATIC_DRAW);
   blockGridVertexCount = blockVertices.length / floatsPerVertex;
@@ -1313,12 +1485,12 @@ function sampleFieldValue(field, x, z, fallback) {
 
 function sampleTerrainHeight(x, z) {
   const fallback = terrainInfo.minHeight ?? 0;
-  return sampleFieldValue(terrainHeightfield, x, z, fallback);
+  return sampleFieldValue(terrainHeightField, x, z, fallback);
 }
 
 function sampleTerrainMask(x, z) {
   const fallback = 0;
-  return sampleFieldValue(terrainMaskfield, x, z, fallback);
+  return sampleFieldValue(terrainMaskField, x, z, fallback);
 }
 
 function sampleTerrainNormal(x, z) {
@@ -1444,8 +1616,9 @@ function regenerateTerrain(seedString) {
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
-  terrainHeightField = heightField;
-  updateGridBuffers(heightField);
+  terrainHeightField = heightfield;
+  terrainMaskField = maskfield;
+  updateGridBuffers(heightfield);
   refreshSelectionAfterTerrain();
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
@@ -1455,8 +1628,6 @@ function regenerateTerrain(seedString) {
   terrainInfo.visibleVertexRatio = baseplateVertexCount
     ? visibleVertices / baseplateVertexCount
     : 0;
-  terrainHeightfield = heightfield;
-  terrainMaskfield = maskfield;
   regenerateRocks(seedString, heightfield, maskfield);
 }
 
@@ -1818,6 +1989,12 @@ if (simulationSpeedSlider) {
 if (debugTerrainToggle) {
   debugTerrainToggle.addEventListener('change', (event) => {
     applyTranslucentTerrainSetting(event.target.checked);
+  });
+}
+
+if (selectionCloseButton) {
+  selectionCloseButton.addEventListener('click', () => {
+    clearSelection();
   });
 }
 
@@ -2204,6 +2381,7 @@ function updateDebugConsole(deltaTime) {
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
+    `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
     `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
