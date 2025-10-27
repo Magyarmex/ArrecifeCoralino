@@ -58,8 +58,16 @@ function createWebGLStub() {
     bufferData: () => {},
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
-    uniformMatrix4fv: () => {},
-    uniform3f: () => {},
+    uniformMatrix4fv: (location, transpose, value) => {
+      if (value && typeof value.length === 'number') {
+        state.viewProjection = Array.from(value);
+      }
+    },
+    uniform1f: (location, value) => {
+      if (typeof value === 'number') {
+        state.opacity = value;
+      }
+    },
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
@@ -107,6 +115,7 @@ function runGameScript() {
         document._pointerLockChange();
       }
     },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: canvas.width, height: canvas.height }),
   };
 
   const overlay = {
@@ -165,6 +174,23 @@ function runGameScript() {
     },
   };
 
+  const selectionInfoPanel = {
+    hidden: true,
+  };
+
+  const selectionCloseButton = {
+    addEventListener: () => {},
+  };
+
+  const createField = () => ({ textContent: '—' });
+
+  const selectionBlockField = createField();
+  const selectionChunkField = createField();
+  const selectionWorldField = createField();
+  const selectionHeightField = createField();
+  const selectionWaterField = createField();
+  const selectionDepthField = createField();
+
   const listeners = {
     document: {},
     window: {},
@@ -197,6 +223,14 @@ function runGameScript() {
       if (id === 'seed-input') return seedInput;
       if (id === 'random-seed') return randomSeedButton;
       if (id === 'see-through-toggle') return seeThroughToggle;
+      if (id === 'selection-info') return selectionInfoPanel;
+      if (id === 'selection-close') return selectionCloseButton;
+      if (id === 'selection-info-block') return selectionBlockField;
+      if (id === 'selection-info-chunk') return selectionChunkField;
+      if (id === 'selection-info-world') return selectionWorldField;
+      if (id === 'selection-info-height') return selectionHeightField;
+      if (id === 'selection-info-water') return selectionWaterField;
+      if (id === 'selection-info-depth') return selectionDepthField;
       return null;
     },
   };
@@ -232,7 +266,16 @@ function runGameScript() {
 
   stepFrames(3);
 
-  return { canvas, overlay, debugConsole, glState: state, stepFrame: stepFrames, seeThroughToggle };
+  return {
+    canvas,
+    overlay,
+    debugConsole,
+    glState: state,
+    stepFrame: stepFrames,
+    seeThroughToggle,
+    selectionInfoPanel,
+    selectionBlockField,
+  };
 }
 
 function assert(condition, message) {
@@ -242,7 +285,16 @@ function assert(condition, message) {
 }
 
 function runTests() {
-  const { canvas, overlay, debugConsole, glState, stepFrame, seeThroughToggle } = runGameScript();
+  const {
+    canvas,
+    overlay,
+    debugConsole,
+    glState,
+    stepFrame,
+    seeThroughToggle,
+    selectionInfoPanel,
+    selectionBlockField,
+  } = runGameScript();
 
   const blocksPerChunk = 8;
   const chunksPerSide = 16;
@@ -306,6 +358,11 @@ function runTests() {
     'La consola de depuración debe reportar el porcentaje de terreno visible'
   );
 
+  assert(
+    debugConsole.textContent.includes('Selección:'),
+    'La consola de depuración debe reflejar el estado de selección de cuadros'
+  );
+
   assert(!seeThroughToggle.checked, 'El modo see-through debe iniciar desactivado');
 
   assert(
@@ -351,6 +408,32 @@ function runTests() {
     debugConsole.textContent.includes('Terreno translúcido: Sí'),
     'El panel de debug debe actualizar el estado translúcido tras activar la opción'
   );
+
+  const selectBlockAt = global.window.__selectBlockAt;
+  assert(typeof selectBlockAt === 'function', 'Debe existir una API para seleccionar un bloque');
+
+  const centerX = canvas.width / 2;
+  const centerY = canvas.height / 2;
+  selectBlockAt(centerX, centerY);
+  stepFrame(3);
+
+  assert(selectionInfoPanel.hidden === false, 'La ventana de selección debe mostrarse tras hacer clic');
+
+  const selectedSquare = global.window.__selectedSquare;
+  assert(selectedSquare, 'La selección debe exponer información del cuadro activo');
+  assert(Number.isInteger(selectedSquare.blockX), 'La selección debe indicar el índice de bloque en X');
+  assert(Number.isInteger(selectedSquare.blockZ), 'La selección debe indicar el índice de bloque en Z');
+  assert(
+    typeof selectedSquare.height === 'number' && selectedSquare.height >= 0,
+    'La selección debe incluir la altura del terreno en el cuadro'
+  );
+  assert(
+    typeof selectionBlockField.textContent === 'string' && selectionBlockField.textContent.includes(','),
+    'El panel de selección debe mostrar las coordenadas del bloque'
+  );
+
+  const highlightDraw = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 8);
+  assert(highlightDraw, 'Seleccionar un cuadro debe renderizar un contorno destacado sobre el terreno');
 
   console.log('✅ Todas las pruebas pasaron');
   return { canvas, overlay, debugConsole, glState };

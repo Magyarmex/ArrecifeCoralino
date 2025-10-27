@@ -1,61 +1,20 @@
 const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
-const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
 const randomSeedButton = document.getElementById('random-seed');
-const simulationClock = document.getElementById('simulation-clock');
-const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
-const simulationSpeedSlider = document.getElementById('simulation-speed');
-const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
-const simulationSpeedSettingsDisplay = document.getElementById(
-  'simulation-speed-display-settings',
-);
-
-const bodyElement = document.body;
-
-const initialTutorialActive = overlay?.classList?.contains('visible') ?? false;
-let tutorialActive = initialTutorialActive;
-let overlayDismissed = !initialTutorialActive;
-
-function applyTutorialState(active) {
-  tutorialActive = active;
-  if (overlay) {
-    if (overlay.classList) {
-      overlay.classList.toggle('visible', active);
-      overlay.classList.toggle('hidden', !active);
-    } else {
-      overlay.className = active ? 'visible' : 'hidden';
-    }
-    if (typeof overlay.setAttribute === 'function') {
-      overlay.setAttribute('aria-hidden', String(!active));
-    }
-  }
-  if (simulationHud && typeof simulationHud.setAttribute === 'function') {
-    simulationHud.setAttribute('aria-hidden', String(active));
-  }
-  if (bodyElement?.classList) {
-    bodyElement.classList.toggle('tutorial-active', active);
-  }
-}
-
-function showTutorialOverlay() {
-  if (overlayDismissed) {
-    applyTutorialState(false);
-    return;
-  }
-  applyTutorialState(true);
-}
-
-function dismissTutorialOverlay() {
-  overlayDismissed = true;
-  applyTutorialState(false);
-}
-
-applyTutorialState(tutorialActive);
+const seeThroughToggle = document.getElementById('see-through-toggle');
+const selectionInfoPanel = document.getElementById('selection-info');
+const selectionCloseButton = document.getElementById('selection-close');
+const selectionBlockField = document.getElementById('selection-info-block');
+const selectionChunkField = document.getElementById('selection-info-chunk');
+const selectionWorldField = document.getElementById('selection-info-world');
+const selectionHeightField = document.getElementById('selection-info-height');
+const selectionWaterField = document.getElementById('selection-info-water');
+const selectionDepthField = document.getElementById('selection-info-depth');
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -98,9 +57,9 @@ const vertexSource = `
 const fragmentSource = `
   precision mediump float;
   varying vec3 vColor;
-  uniform vec3 globalLightColor;
+  uniform float opacity;
   void main() {
-    gl_FragColor = vec4(vColor * globalLightColor, 1.0);
+    gl_FragColor = vec4(vColor, opacity);
   }
 `;
 
@@ -126,7 +85,7 @@ gl.useProgram(program);
 const positionAttribute = gl.getAttribLocation(program, 'position');
 const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
-const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
+const opacityUniform = gl.getUniformLocation(program, 'opacity');
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -160,15 +119,19 @@ const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
+const seaLevel = 6;
+const selectionHighlightColor = [0.32, 0.78, 0.94];
 
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
 
 const blockGridBuffer = createBuffer(new Float32Array(0));
 const chunkGridBuffer = createBuffer(new Float32Array(0));
+const selectionHighlightBuffer = createBuffer(new Float32Array(0));
 
 let blockGridVertexCount = 0;
 let chunkGridVertexCount = 0;
+let selectionHighlightVertexCount = 0;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -183,12 +146,17 @@ const terrainInfo = {
 
 let terrainHeightField = null;
 let seeThroughTerrain = false;
+let selectedBlock = null;
+let inverseViewProjectionMatrix = null;
 
 const defaultTerrainOpacity = 1;
 const seeThroughTerrainOpacity = 0.45;
 
 if (typeof window !== 'undefined') {
   window.__terrainInfo = terrainInfo;
+  window.__selectedSquare = null;
+  window.__selectBlockAt = (x, y) => selectBlockAtScreen(x, y);
+  window.__clearSelection = () => clearSelection();
 }
 
 if (seedInput) {
@@ -269,45 +237,6 @@ function mixColor(a, b, t) {
     lerp(a[1], b[1], t),
     lerp(a[2], b[2], t),
   ];
-}
-
-const nightSkyColor = [0.02, 0.03, 0.08];
-const daySkyColor = [0.32, 0.56, 0.84];
-const nightLightTint = [0.55, 0.68, 0.95];
-const dayLightTint = [1, 0.97, 0.9];
-const dayNightCycleDuration = 240;
-
-const dayNightCycleState = {
-  length: dayNightCycleDuration,
-  normalizedTime: 0,
-  daylight: 0,
-  intensity: 1,
-  skyColor: nightSkyColor.slice(),
-  lightColor: [1, 1, 1],
-  sunAngle: -Math.PI / 2,
-};
-
-function updateDayNightCycleState(currentSimulationTime) {
-  const duration = Math.max(1, dayNightCycleDuration);
-  const cycleTime = ((currentSimulationTime % duration) + duration) % duration;
-  const normalized = cycleTime / duration;
-  const sunAngle = normalized * 2 * Math.PI - Math.PI / 2;
-  const daylight = clamp01(Math.sin(sunAngle) * 0.5 + 0.5);
-  const intensity = 0.25 + daylight * 0.75;
-  const tint = mixColor(nightLightTint, dayLightTint, daylight);
-  const skyColor = mixColor(nightSkyColor, daySkyColor, daylight);
-  const lightColor = [
-    clamp01(tint[0] * intensity),
-    clamp01(tint[1] * intensity),
-    clamp01(tint[2] * intensity),
-  ];
-
-  dayNightCycleState.normalizedTime = normalized;
-  dayNightCycleState.daylight = daylight;
-  dayNightCycleState.intensity = intensity;
-  dayNightCycleState.skyColor = skyColor;
-  dayNightCycleState.lightColor = lightColor;
-  dayNightCycleState.sunAngle = sunAngle;
 }
 
 function pushVertex(buffer, offset, x, y, z, color) {
@@ -395,6 +324,311 @@ function updateGridBuffers(heightField) {
   gl.bindBuffer(gl.ARRAY_BUFFER, chunkGridBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, chunkVertices, gl.STATIC_DRAW);
   chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
+}
+
+function sampleTerrain(worldX, worldZ) {
+  if (!terrainHeightField) {
+    return null;
+  }
+
+  const blocksPerSide = terrainHeightField.length - 1;
+  const half = baseplateSize / 2;
+  const localX = worldX + half;
+  const localZ = worldZ + half;
+
+  if (localX < 0 || localX > baseplateSize || localZ < 0 || localZ > baseplateSize) {
+    return null;
+  }
+
+  const scaledX = clamp(localX / blockSize, 0, blocksPerSide);
+  const scaledZ = clamp(localZ / blockSize, 0, blocksPerSide);
+
+  const x0 = Math.max(0, Math.min(blocksPerSide - 1, Math.floor(scaledX)));
+  const z0 = Math.max(0, Math.min(blocksPerSide - 1, Math.floor(scaledZ)));
+  const x1 = Math.min(blocksPerSide, x0 + 1);
+  const z1 = Math.min(blocksPerSide, z0 + 1);
+
+  const tx = clamp(scaledX - x0, 0, 1);
+  const tz = clamp(scaledZ - z0, 0, 1);
+
+  const h00 = terrainHeightField[z0][x0];
+  const h10 = terrainHeightField[z0][x1];
+  const h01 = terrainHeightField[z1][x0];
+  const h11 = terrainHeightField[z1][x1];
+
+  const hx0 = lerp(h00, h10, tx);
+  const hx1 = lerp(h01, h11, tx);
+  const height = lerp(hx0, hx1, tz);
+
+  const blockX = x0;
+  const blockZ = z0;
+  const chunkX = Math.floor(blockX / blocksPerChunk);
+  const chunkZ = Math.floor(blockZ / blocksPerChunk);
+  const centerX = -half + (blockX + 0.5) * blockSize;
+  const centerZ = -half + (blockZ + 0.5) * blockSize;
+
+  return {
+    height,
+    blockX,
+    blockZ,
+    chunkX,
+    chunkZ,
+    centerX,
+    centerZ,
+    cornerHeights: { h00, h10, h01, h11 },
+  };
+}
+
+function updateSelectionHighlight(blockX, blockZ) {
+  if (!terrainHeightField) {
+    selectionHighlightVertexCount = 0;
+    return;
+  }
+
+  const blocksPerSide = terrainHeightField.length - 1;
+  if (blockX < 0 || blockZ < 0 || blockX >= blocksPerSide || blockZ >= blocksPerSide) {
+    selectionHighlightVertexCount = 0;
+    return;
+  }
+
+  const half = baseplateSize / 2;
+  const x0 = -half + blockX * blockSize;
+  const x1 = x0 + blockSize;
+  const z0 = -half + blockZ * blockSize;
+  const z1 = z0 + blockSize;
+
+  const h00 = terrainHeightField[blockZ][blockX];
+  const h10 = terrainHeightField[blockZ][blockX + 1];
+  const h01 = terrainHeightField[blockZ + 1][blockX];
+  const h11 = terrainHeightField[blockZ + 1][blockX + 1];
+
+  const lift = 0.35;
+  const vertexData = new Float32Array(8 * floatsPerVertex);
+  let offset = 0;
+
+  offset = pushVertex(vertexData, offset, x0, h00 + lift, z0, selectionHighlightColor);
+  offset = pushVertex(vertexData, offset, x1, h10 + lift, z0, selectionHighlightColor);
+
+  offset = pushVertex(vertexData, offset, x1, h10 + lift, z0, selectionHighlightColor);
+  offset = pushVertex(vertexData, offset, x1, h11 + lift, z1, selectionHighlightColor);
+
+  offset = pushVertex(vertexData, offset, x1, h11 + lift, z1, selectionHighlightColor);
+  offset = pushVertex(vertexData, offset, x0, h01 + lift, z1, selectionHighlightColor);
+
+  offset = pushVertex(vertexData, offset, x0, h01 + lift, z1, selectionHighlightColor);
+  offset = pushVertex(vertexData, offset, x0, h00 + lift, z0, selectionHighlightColor);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, selectionHighlightBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
+  selectionHighlightVertexCount = vertexData.length / floatsPerVertex;
+}
+
+function clearSelection() {
+  selectedBlock = null;
+  selectionHighlightVertexCount = 0;
+  if (typeof window !== 'undefined') {
+    window.__selectedSquare = null;
+  }
+  if (selectionInfoPanel) {
+    selectionInfoPanel.hidden = true;
+  }
+}
+
+function updateSelectionPanel(selection) {
+  if (!selectionInfoPanel) {
+    return;
+  }
+
+  selectionInfoPanel.hidden = false;
+
+  if (selectionBlockField) {
+    selectionBlockField.textContent = `${selection.blockX}, ${selection.blockZ}`;
+  }
+  if (selectionChunkField) {
+    selectionChunkField.textContent = `${selection.chunkX}, ${selection.chunkZ}`;
+  }
+  if (selectionWorldField) {
+    const [x, y, z] = selection.worldPosition;
+    selectionWorldField.textContent = `x=${x.toFixed(2)} y=${y.toFixed(2)} z=${z.toFixed(2)}`;
+  }
+  if (selectionHeightField) {
+    selectionHeightField.textContent = `${selection.height.toFixed(2)} m`;
+  }
+  if (selectionWaterField) {
+    selectionWaterField.textContent = `${selection.waterLevel.toFixed(2)} m`;
+  }
+  if (selectionDepthField) {
+    const depth = selection.waterDepth;
+    const status = depth > 0 ? `${depth.toFixed(2)} m (sumergido)` : '0.00 m (emergido)';
+    selectionDepthField.textContent = status;
+  }
+}
+
+function applySelection(selection) {
+  selectedBlock = selection;
+  updateSelectionHighlight(selection.blockX, selection.blockZ);
+  updateSelectionPanel(selection);
+  if (typeof window !== 'undefined') {
+    window.__selectedSquare = selection;
+  }
+}
+
+function refreshSelectionAfterTerrain() {
+  if (!selectedBlock) {
+    return;
+  }
+
+  const half = baseplateSize / 2;
+  const centerX = -half + (selectedBlock.blockX + 0.5) * blockSize;
+  const centerZ = -half + (selectedBlock.blockZ + 0.5) * blockSize;
+  const sample = sampleTerrain(centerX, centerZ);
+  if (!sample) {
+    clearSelection();
+    return;
+  }
+
+  const height = sample.height;
+  const waterDepth = Math.max(0, seaLevel - height);
+  applySelection({
+    blockX: sample.blockX,
+    blockZ: sample.blockZ,
+    chunkX: sample.chunkX,
+    chunkZ: sample.chunkZ,
+    worldPosition: [sample.centerX, height, sample.centerZ],
+    height,
+    waterLevel: seaLevel,
+    waterDepth,
+    underwater: waterDepth > 0,
+  });
+}
+
+function getPointerPosition(event) {
+  if (document.pointerLockElement === canvas) {
+    return {
+      x: canvas.width / 2,
+      y: canvas.height / 2,
+    };
+  }
+
+  const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+  const clientX = event?.clientX ?? 0;
+  const clientY = event?.clientY ?? 0;
+  return {
+    x: clientX - rect.left,
+    y: clientY - rect.top,
+  };
+}
+
+function castTerrainRay(origin, direction) {
+  if (!terrainHeightField) {
+    return null;
+  }
+
+  const maxDistance = 800;
+  const step = Math.max(0.5, blockSize * 0.75);
+  let t = 0;
+  let previousT = 0;
+  let previousDiff = null;
+
+  while (t <= maxDistance) {
+    const x = origin[0] + direction[0] * t;
+    const y = origin[1] + direction[1] * t;
+    const z = origin[2] + direction[2] * t;
+    const sample = sampleTerrain(x, z);
+
+    if (sample) {
+      const diff = y - sample.height;
+      if (diff <= 0) {
+        let minT = previousDiff !== null ? previousT : Math.max(0, t - step);
+        let maxT = t;
+        let finalSample = sample;
+
+        for (let i = 0; i < 6; i++) {
+          const midT = (minT + maxT) / 2;
+          const midX = origin[0] + direction[0] * midT;
+          const midY = origin[1] + direction[1] * midT;
+          const midZ = origin[2] + direction[2] * midT;
+          const midSample = sampleTerrain(midX, midZ);
+          if (!midSample) {
+            minT = midT;
+            continue;
+          }
+          const midDiff = midY - midSample.height;
+          if (midDiff > 0) {
+            minT = midT;
+          } else {
+            maxT = midT;
+            finalSample = midSample;
+          }
+        }
+
+        const centerSample = sampleTerrain(finalSample.centerX, finalSample.centerZ) || finalSample;
+        const height = centerSample.height;
+        const waterDepth = Math.max(0, seaLevel - height);
+
+        return {
+          blockX: centerSample.blockX,
+          blockZ: centerSample.blockZ,
+          chunkX: centerSample.chunkX,
+          chunkZ: centerSample.chunkZ,
+          worldPosition: [centerSample.centerX, height, centerSample.centerZ],
+          height,
+          waterLevel: seaLevel,
+          waterDepth,
+          underwater: waterDepth > 0,
+        };
+      }
+
+      previousDiff = diff;
+      previousT = t;
+    } else {
+      previousDiff = null;
+    }
+
+    t += step;
+  }
+
+  return null;
+}
+
+function pickSelectionAt(pointerX, pointerY) {
+  if (!inverseViewProjectionMatrix) {
+    return null;
+  }
+
+  const width = canvas.width || 1;
+  const height = canvas.height || 1;
+  const ndcX = (pointerX / width) * 2 - 1;
+  const ndcY = 1 - (pointerY / height) * 2;
+
+  const nearPoint = multiplyMatrixVector(inverseViewProjectionMatrix, [ndcX, ndcY, -1, 1]);
+  const farPoint = multiplyMatrixVector(inverseViewProjectionMatrix, [ndcX, ndcY, 1, 1]);
+
+  if (!nearPoint || !farPoint) {
+    return null;
+  }
+
+  const nearW = nearPoint[3] || 1;
+  const farW = farPoint[3] || 1;
+  const near = [nearPoint[0] / nearW, nearPoint[1] / nearW, nearPoint[2] / nearW];
+  const far = [farPoint[0] / farW, farPoint[1] / farW, farPoint[2] / farW];
+  const direction = normalize(subtract(far, near));
+
+  if (direction[0] === 0 && direction[1] === 0 && direction[2] === 0) {
+    return null;
+  }
+
+  return castTerrainRay([cameraPosition[0], cameraPosition[1], cameraPosition[2]], direction);
+}
+
+function selectBlockAtScreen(pointerX, pointerY) {
+  const selection = pickSelectionAt(pointerX, pointerY);
+  if (selection) {
+    applySelection(selection);
+  } else {
+    clearSelection();
+  }
+  return selection;
 }
 
 function generateTerrainVertices(seedString) {
@@ -585,6 +819,7 @@ function regenerateTerrain(seedString) {
   baseplateVertexCount = vertexData.length / floatsPerVertex;
   terrainHeightField = heightField;
   updateGridBuffers(heightField);
+  refreshSelectionAfterTerrain();
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
   terrainInfo.maxHeight = Math.min(maxTerrainHeight, maxHeight);
@@ -737,6 +972,76 @@ function createLookAtMatrix(eye, target, up) {
   ]);
 }
 
+function multiplyMatrixVector(matrix, vector) {
+  return [
+    matrix[0] * vector[0] + matrix[4] * vector[1] + matrix[8] * vector[2] + matrix[12] * vector[3],
+    matrix[1] * vector[0] + matrix[5] * vector[1] + matrix[9] * vector[2] + matrix[13] * vector[3],
+    matrix[2] * vector[0] + matrix[6] * vector[1] + matrix[10] * vector[2] + matrix[14] * vector[3],
+    matrix[3] * vector[0] + matrix[7] * vector[1] + matrix[11] * vector[2] + matrix[15] * vector[3],
+  ];
+}
+
+function invertMatrix(a) {
+  const a00 = a[0];
+  const a01 = a[1];
+  const a02 = a[2];
+  const a03 = a[3];
+  const a10 = a[4];
+  const a11 = a[5];
+  const a12 = a[6];
+  const a13 = a[7];
+  const a20 = a[8];
+  const a21 = a[9];
+  const a22 = a[10];
+  const a23 = a[11];
+  const a30 = a[12];
+  const a31 = a[13];
+  const a32 = a[14];
+  const a33 = a[15];
+
+  const b00 = a00 * a11 - a01 * a10;
+  const b01 = a00 * a12 - a02 * a10;
+  const b02 = a00 * a13 - a03 * a10;
+  const b03 = a01 * a12 - a02 * a11;
+  const b04 = a01 * a13 - a03 * a11;
+  const b05 = a02 * a13 - a03 * a12;
+  const b06 = a20 * a31 - a21 * a30;
+  const b07 = a20 * a32 - a22 * a30;
+  const b08 = a20 * a33 - a23 * a30;
+  const b09 = a21 * a32 - a22 * a31;
+  const b10 = a21 * a33 - a23 * a31;
+  const b11 = a22 * a33 - a23 * a32;
+
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+
+  if (!det) {
+    return null;
+  }
+
+  det = 1 / det;
+
+  const out = new Float32Array(16);
+
+  out[0] = (a11 * b11 - a12 * b10 + a13 * b09) * det;
+  out[1] = (-a01 * b11 + a02 * b10 - a03 * b09) * det;
+  out[2] = (a31 * b05 - a32 * b04 + a33 * b03) * det;
+  out[3] = (-a21 * b05 + a22 * b04 - a23 * b03) * det;
+  out[4] = (-a10 * b11 + a12 * b08 - a13 * b07) * det;
+  out[5] = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+  out[6] = (-a30 * b05 + a32 * b02 - a33 * b01) * det;
+  out[7] = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+  out[8] = (a10 * b10 - a11 * b08 + a13 * b06) * det;
+  out[9] = (-a00 * b10 + a01 * b08 - a03 * b06) * det;
+  out[10] = (a30 * b04 - a31 * b02 + a33 * b00) * det;
+  out[11] = (-a20 * b04 + a21 * b02 - a23 * b00) * det;
+  out[12] = (-a10 * b09 + a11 * b07 - a12 * b06) * det;
+  out[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+  out[14] = (-a30 * b03 + a31 * b01 - a32 * b00) * det;
+  out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+
+  return out;
+}
+
 function multiplyMatrices(a, b) {
   const result = new Float32Array(16);
   const a00 = a[0];
@@ -813,13 +1118,19 @@ function requestCameraControl(event) {
   if (event) {
     event.preventDefault();
   }
-  dismissTutorialOverlay();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
   }
 }
 
 canvas.addEventListener('click', requestCameraControl);
+canvas.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) {
+    return;
+  }
+  const pointer = getPointerPosition(event);
+  selectBlockAtScreen(pointer.x, pointer.y);
+});
 
 if (startButton) {
   startButton.addEventListener('click', requestCameraControl);
@@ -856,38 +1167,28 @@ if (randomSeedButton) {
   });
 }
 
-function handleSimulationSpeedChange(value) {
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
-    return;
-  }
-  setSimulationSpeed(parsed);
+if (seeThroughToggle) {
+  seeThroughToggle.checked = seeThroughTerrain;
+  seeThroughToggle.addEventListener('change', (event) => {
+    seeThroughTerrain = event.target.checked;
+  });
 }
 
-if (simulationSpeedSlider) {
-  simulationSpeedSlider.addEventListener('input', (event) => {
-    handleSimulationSpeedChange(event.target.value);
-  });
-  simulationSpeedSlider.addEventListener('change', (event) => {
-    handleSimulationSpeedChange(event.target.value);
+if (selectionCloseButton) {
+  selectionCloseButton.addEventListener('click', () => {
+    clearSelection();
   });
 }
 
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
-  showTutorialOverlay();
+  overlay.className = 'visible';
 });
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
-  if (locked) {
-    dismissTutorialOverlay();
-  } else if (!overlayDismissed) {
-    showTutorialOverlay();
-  } else {
-    applyTutorialState(false);
-  }
+  overlay.className = locked ? 'hidden' : 'visible';
 });
 
 document.addEventListener('mousemove', (event) => {
@@ -901,11 +1202,6 @@ document.addEventListener('mousemove', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (isEditableElement(event.target)) {
-    return;
-  }
-  if (event.code === 'Escape' && tutorialActive) {
-    event.preventDefault();
-    dismissTutorialOverlay();
     return;
   }
   switch (event.code) {
@@ -973,104 +1269,6 @@ let fpsSamples = 0;
 let displayedFps = 0;
 let lastGlError = 'ninguno';
 
-const baseTickRate = 20;
-const baseSimulationStep = 1 / baseTickRate;
-const MIN_SIMULATION_SPEED = 0.1;
-const MAX_SIMULATION_SPEED = 3;
-let simulationSpeed = 1;
-let targetTickRate = baseTickRate * simulationSpeed;
-let tickInterval = 1 / targetTickRate;
-let tickAccumulator = 0;
-let tickStatsAccumulator = 0;
-let tickSamples = 0;
-let displayedTps = 0;
-let totalTicks = 0;
-let simulationTime = 0;
-let ticksLastFrame = 0;
-
-updateDayNightCycleState(simulationTime);
-
-const simulationInfo = {
-  baseTickRate,
-  speed: simulationSpeed,
-  tickRate: targetTickRate,
-  tickInterval,
-  time: simulationTime,
-  totalTicks,
-  displayedTps,
-  ticksLastFrame,
-  dayNight: dayNightCycleState,
-};
-
-if (typeof window !== 'undefined') {
-  window.__simulationInfo = simulationInfo;
-}
-
-setSimulationSpeed(simulationSpeed);
-
-function normalizeSimulationSpeed(value) {
-  if (!Number.isFinite(value)) {
-    return simulationSpeed;
-  }
-  const clamped = Math.min(MAX_SIMULATION_SPEED, Math.max(MIN_SIMULATION_SPEED, value));
-  return Math.round(clamped * 10) / 10;
-}
-
-function setSimulationSpeed(multiplier) {
-  const normalized = normalizeSimulationSpeed(multiplier);
-  simulationSpeed = normalized;
-  targetTickRate = baseTickRate * simulationSpeed;
-  tickInterval = 1 / targetTickRate;
-  simulationInfo.speed = simulationSpeed;
-  simulationInfo.tickRate = targetTickRate;
-  simulationInfo.tickInterval = tickInterval;
-
-  if (simulationSpeedSlider && simulationSpeedSlider.value !== String(simulationSpeed)) {
-    simulationSpeedSlider.value = String(simulationSpeed);
-  }
-
-  const speedLabel = `${simulationSpeed.toFixed(1)}×`;
-  if (simulationSpeedIndicator) {
-    simulationSpeedIndicator.textContent = speedLabel;
-  }
-  if (simulationSpeedDisplay) {
-    simulationSpeedDisplay.textContent = speedLabel;
-  }
-  if (simulationSpeedSettingsDisplay) {
-    simulationSpeedSettingsDisplay.textContent = speedLabel;
-  }
-}
-
-function formatSimulationTime(timeInSeconds) {
-  const totalSeconds = Math.max(0, timeInSeconds);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.floor(totalSeconds % 60);
-  const tenths = Math.floor((totalSeconds % 1) * 10);
-  const paddedMinutes = String(minutes).padStart(2, '0');
-  const paddedSeconds = String(seconds).padStart(2, '0');
-  return `${paddedMinutes}:${paddedSeconds}.${tenths}`;
-}
-
-function updateSimulationHud() {
-  if (simulationClock) {
-    simulationClock.textContent = formatSimulationTime(simulationTime);
-  }
-  if (simulationSpeedIndicator) {
-    simulationSpeedIndicator.textContent = `${simulationSpeed.toFixed(1)}×`;
-  }
-  if (simulationSpeedDisplay) {
-    simulationSpeedDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
-  }
-  if (simulationSpeedSettingsDisplay) {
-    simulationSpeedSettingsDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
-  }
-}
-
-function tickSimulation(deltaTime) {
-  // Punto de extensión para futuros sistemas de simulación basados en ticks.
-  void deltaTime;
-}
-
 function update(deltaTime) {
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
@@ -1108,6 +1306,7 @@ function update(deltaTime) {
   const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 500);
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
   const viewProjection = multiplyMatrices(projection, view);
+  inverseViewProjectionMatrix = invertMatrix(viewProjection);
 
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
 }
@@ -1119,19 +1318,24 @@ function bindGeometry(buffer) {
 }
 
 function render() {
-  const skyColor = dayNightCycleState.skyColor;
-  if (skyColor) {
-    gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
+  if (typeof gl.enable === 'function') {
+    gl.enable(gl.DEPTH_TEST);
   }
 
-  if (globalLightColorUniform) {
-    const lightColor = dayNightCycleState.lightColor;
-    gl.uniform3f(
-      globalLightColorUniform,
-      lightColor[0],
-      lightColor[1],
-      lightColor[2],
-    );
+  if (opacityUniform && typeof gl.uniform1f === 'function') {
+    const opacity = seeThroughTerrain ? seeThroughTerrainOpacity : defaultTerrainOpacity;
+    gl.uniform1f(opacityUniform, opacity);
+  }
+
+  if (seeThroughTerrain) {
+    if (typeof gl.enable === 'function') {
+      gl.enable(gl.BLEND);
+    }
+    if (typeof gl.blendFunc === 'function') {
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
+  } else if (typeof gl.disable === 'function') {
+    gl.disable(gl.BLEND);
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -1159,6 +1363,17 @@ function render() {
     }
 
     if (forceGridVisible && typeof gl.enable === 'function') {
+      gl.enable(gl.DEPTH_TEST);
+    }
+  }
+
+  if (selectionHighlightVertexCount > 0) {
+    if (typeof gl.disable === 'function') {
+      gl.disable(gl.DEPTH_TEST);
+    }
+    bindGeometry(selectionHighlightBuffer);
+    gl.drawArrays(gl.LINES, 0, selectionHighlightVertexCount);
+    if (typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
   }
@@ -1192,20 +1407,20 @@ function updateDebugConsole(deltaTime) {
     ? terrainInfo.visibleVertexRatio * 100
     : 0;
 
+  const selectionStatus = selectedBlock
+    ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
+    : 'Ninguna';
+
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
-    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
-    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
-    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
-    `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
-    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Terreno seed: ${terrainInfo.seed}`,
     `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
+    `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
@@ -1222,39 +1437,9 @@ function loop(currentTime) {
   const deltaTime = (currentTime - previousTime) / 1000;
   previousTime = currentTime;
 
-  tickAccumulator += deltaTime;
-  ticksLastFrame = 0;
-
-  while (tickAccumulator >= tickInterval) {
-    tickSimulation(tickInterval);
-    tickAccumulator -= tickInterval;
-    simulationTime += baseSimulationStep;
-    updateDayNightCycleState(simulationTime);
-    totalTicks += 1;
-    ticksLastFrame += 1;
-    tickStatsAccumulator += tickInterval;
-    tickSamples += 1;
-  }
-
-  if (tickStatsAccumulator >= 0.5) {
-    displayedTps = tickSamples / tickStatsAccumulator;
-    tickStatsAccumulator = 0;
-    tickSamples = 0;
-  }
-
-  simulationInfo.speed = simulationSpeed;
-  simulationInfo.tickRate = targetTickRate;
-  simulationInfo.tickInterval = tickInterval;
-  simulationInfo.time = simulationTime;
-  simulationInfo.totalTicks = totalTicks;
-  simulationInfo.displayedTps = displayedTps;
-  simulationInfo.ticksLastFrame = ticksLastFrame;
-  simulationInfo.dayNight = dayNightCycleState;
-
   update(deltaTime);
   render();
   updateDebugConsole(deltaTime);
-  updateSimulationHud();
 
   requestAnimationFrame(loop);
 }
