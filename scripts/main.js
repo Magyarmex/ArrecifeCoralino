@@ -17,7 +17,309 @@ const simulationSpeedSettingsDisplay = document.getElementById(
 const settingsDebugLog = document.getElementById('settings-debug-log');
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
+function createFallbackInfoPanel() {
+  let hiddenState = true;
+  return {
+    get hidden() {
+      return hiddenState;
+    },
+    set hidden(value) {
+      hiddenState = Boolean(value);
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+}
+
+function createFallbackTextField() {
+  return {
+    textContent: '',
+  };
+}
+
+function createFallbackButton() {
+  return {
+    addEventListener: () => {},
+  };
+}
+
+const selectionInfoPanel =
+  document.getElementById('selection-info') ?? createFallbackInfoPanel();
+const selectionBlockField =
+  document.getElementById('selection-info-block') ?? createFallbackTextField();
+const selectionChunkField =
+  document.getElementById('selection-info-chunk') ?? createFallbackTextField();
+const selectionWorldField =
+  document.getElementById('selection-info-world') ?? createFallbackTextField();
+const selectionHeightField =
+  document.getElementById('selection-info-height') ?? createFallbackTextField();
+const selectionWaterField =
+  document.getElementById('selection-info-water') ?? createFallbackTextField();
+const selectionDepthField =
+  document.getElementById('selection-info-depth') ?? createFallbackTextField();
+const selectionCloseButton =
+  document.getElementById('selection-close') ?? createFallbackButton();
+
 const bodyElement = document.body;
+
+const runtimeIssues = [];
+const MAX_RUNTIME_ISSUES = 8;
+let fatalRuntimeError = null;
+let loopHalted = false;
+
+const diagnosticsToast =
+  bodyElement && typeof document?.createElement === 'function'
+    ? createDiagnosticsToast()
+    : null;
+
+const overlayErrorMessage =
+  overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
+    ? createOverlayErrorMessage(overlay)
+    : null;
+
+function ensureEventDispatchSupport(element) {
+  if (!element) {
+    return;
+  }
+
+  if (typeof element.dispatch === 'function' && typeof element.dispatchEvent === 'function') {
+    return;
+  }
+
+  if (typeof element.dispatch !== 'function' && typeof element.dispatchEvent === 'function') {
+    element.dispatch = (typeOrEvent) => {
+      const event =
+        typeof typeOrEvent === 'string'
+          ? typeof Event === 'function'
+            ? new Event(typeOrEvent)
+            : { type: typeOrEvent }
+          : typeOrEvent;
+      if (event) {
+        element.dispatchEvent(event);
+      }
+      return true;
+    };
+    return;
+  }
+
+  const listenerRegistry = new Map();
+  const originalAdd =
+    typeof element.addEventListener === 'function' ? element.addEventListener.bind(element) : null;
+  const originalRemove =
+    typeof element.removeEventListener === 'function'
+      ? element.removeEventListener.bind(element)
+      : null;
+
+  element.addEventListener = (type, handler, options) => {
+    if (originalAdd) {
+      originalAdd(type, handler, options);
+    }
+    if (!listenerRegistry.has(type)) {
+      listenerRegistry.set(type, new Set());
+    }
+    listenerRegistry.get(type).add(handler);
+  };
+
+  if (originalRemove) {
+    element.removeEventListener = (type, handler, options) => {
+      if (listenerRegistry.has(type)) {
+        listenerRegistry.get(type).delete(handler);
+      }
+      originalRemove(type, handler, options);
+    };
+  }
+
+  const dispatchInternal = (typeOrEvent) => {
+    const type = typeof typeOrEvent === 'string' ? typeOrEvent : typeOrEvent?.type;
+    if (!type) {
+      return false;
+    }
+    const listeners = listenerRegistry.get(type);
+    if (!listeners || listeners.size === 0) {
+      return false;
+    }
+    const event =
+      typeof typeOrEvent === 'object' && typeOrEvent !== null
+        ? typeOrEvent
+        : { type, target: element, currentTarget: element };
+    for (const handler of listeners) {
+      try {
+        handler.call(element, event);
+      } catch (error) {
+        setTimeout(() => {
+          throw error;
+        });
+      }
+    }
+    return true;
+  };
+
+  element.dispatch = dispatchInternal;
+  element.dispatchEvent = dispatchInternal;
+}
+
+ensureEventDispatchSupport(debugTerrainToggle);
+
+function createDiagnosticsToast() {
+  const element = document.createElement('div');
+  element.id = 'runtime-diagnostics-toast';
+  element.hidden = true;
+  element.setAttribute('role', 'alert');
+  Object.assign(element.style, {
+    position: 'fixed',
+    right: '24px',
+    bottom: '24px',
+    maxWidth: '360px',
+    padding: '12px 16px',
+    borderRadius: '12px',
+    background: 'rgba(164, 115, 42, 0.92)',
+    border: '1px solid rgba(255, 214, 153, 0.65)',
+    boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
+    fontFamily:
+      '"Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+    fontSize: '0.8rem',
+    lineHeight: '1.4',
+    color: '#fff6e5',
+    zIndex: '30',
+    pointerEvents: 'none',
+  });
+  document.body.appendChild(element);
+  return element;
+}
+
+function createOverlayErrorMessage(container) {
+  if (!document?.createElement || typeof container.appendChild !== 'function') {
+    return null;
+  }
+  const element = document.createElement('p');
+  element.id = 'runtime-error-message';
+  element.setAttribute('role', 'alert');
+  element.style.marginTop = '14px';
+  element.style.padding = '10px 12px';
+  element.style.borderRadius = '10px';
+  element.style.background = 'rgba(200, 64, 64, 0.2)';
+  element.style.border = '1px solid rgba(255, 128, 128, 0.35)';
+  element.style.color = '#ffecec';
+  element.style.fontSize = '0.85rem';
+  element.style.lineHeight = '1.45';
+  element.style.display = 'none';
+  container.appendChild(element);
+  return element;
+}
+
+function describeIssue(error) {
+  if (!error) {
+    return 'Error desconocido';
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error instanceof Error) {
+    return error.message || error.toString();
+  }
+  if (typeof error.message === 'string') {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch (serializationError) {
+    void serializationError;
+    return String(error);
+  }
+}
+
+function formatIssueMessage(entry) {
+  const summary = String(entry.message ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return summary || 'Error desconocido';
+}
+
+function updateDiagnosticsToast() {
+  if (!diagnosticsToast) {
+    return;
+  }
+  if (runtimeIssues.length === 0) {
+    diagnosticsToast.hidden = true;
+    return;
+  }
+  const latest = runtimeIssues[0];
+  diagnosticsToast.hidden = false;
+  diagnosticsToast.textContent = `[${latest.timestamp}] ${
+    latest.severity === 'fatal' ? 'Error crítico' : 'Problema'
+  } en ${latest.context}: ${formatIssueMessage(latest)}`;
+  diagnosticsToast.style.background =
+    latest.severity === 'fatal'
+      ? 'rgba(162, 44, 44, 0.92)'
+      : 'rgba(164, 115, 42, 0.92)';
+  diagnosticsToast.style.borderColor =
+    latest.severity === 'fatal'
+      ? 'rgba(255, 128, 128, 0.65)'
+      : 'rgba(255, 214, 153, 0.65)';
+}
+
+function recordRuntimeIssue(severity, context, error) {
+  const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const entry = {
+    severity,
+    context,
+    message: describeIssue(error),
+    timestamp,
+    stack: error && typeof error.stack === 'string' ? error.stack : null,
+  };
+  runtimeIssues.unshift(entry);
+  if (runtimeIssues.length > MAX_RUNTIME_ISSUES) {
+    runtimeIssues.length = MAX_RUNTIME_ISSUES;
+  }
+  updateDiagnosticsToast();
+  return entry;
+}
+
+function showOverlayIssue(entry) {
+  if (!overlay) {
+    return;
+  }
+  overlayDismissed = false;
+  applyTutorialState(true);
+  if (overlayErrorMessage) {
+    overlayErrorMessage.style.display = 'block';
+    overlayErrorMessage.textContent = `⚠️ ${
+      entry.severity === 'fatal' ? 'Error crítico' : 'Problema'
+    } en ${entry.context}: ${formatIssueMessage(entry)}`;
+  }
+}
+
+function handleFatalRuntimeError(error, context) {
+  if (fatalRuntimeError) {
+    return fatalRuntimeError;
+  }
+  const entry = recordRuntimeIssue('fatal', context, error);
+  fatalRuntimeError = entry;
+  loopHalted = true;
+  showOverlayIssue(entry);
+  console.error(`Error crítico en ${context}`, error);
+  return entry;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (event) => {
+    if (fatalRuntimeError) {
+      return;
+    }
+    const context = event.filename
+      ? `${event.filename.split('/').pop() ?? event.filename}:${event.lineno ?? ''}`
+      : 'ventana';
+    recordRuntimeIssue('error', context, event.error || event.message || event);
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    if (fatalRuntimeError) {
+      return;
+    }
+    recordRuntimeIssue('error', 'promesa', event.reason);
+  });
+}
 
 const initialTutorialActive = overlay?.classList?.contains('visible') ?? false;
 let tutorialActive = initialTutorialActive;
@@ -180,18 +482,16 @@ let baseplateVertexCount = 0;
 const blockGridBuffer = createBuffer(new Float32Array(0));
 const chunkGridBuffer = createBuffer(new Float32Array(0));
 const selectionHighlightBuffer = createBuffer(new Float32Array(0));
-
-const blockGridBuffer = createBuffer(blockGridVertices);
-const chunkGridBuffer = createBuffer(chunkGridVertices);
-
 const rockBuffer = createBuffer(new Float32Array(0));
 
-const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
-const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
+let blockGridVertexCount = 0;
+let chunkGridVertexCount = 0;
 let rockVertexCount = 0;
+let selectionHighlightVertexCount = 0;
 
-let terrainHeightfield = null;
-let terrainMaskfield = null;
+let terrainHeightField = null;
+let terrainMaskField = null;
+let forceGridVisible = false;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -203,12 +503,24 @@ const terrainInfo = {
   visibleVertices: 0,
   visibleVertexRatio: 0,
   rockCount: 0,
+  featureStats: {
+    canyon: 0,
+    ravine: 0,
+    cliffs: 0,
+  },
 };
-
-let terrainHeightField = null;
 let seeThroughTerrain = false;
 let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
+
+const drawStats = {
+  terrain: 0,
+  rocks: 0,
+  blockGrid: 0,
+  chunkGrid: 0,
+  selection: 0,
+  total: 0,
+};
 
 const defaultTerrainOpacity = 1;
 const seeThroughTerrainOpacity = 0.45;
@@ -218,6 +530,19 @@ if (typeof window !== 'undefined') {
   window.__selectedSquare = null;
   window.__selectBlockAt = (x, y) => selectBlockAtScreen(x, y);
   window.__clearSelection = () => clearSelection();
+  window.__runtimeIssues = runtimeIssues;
+  if (debugTerrainToggle) {
+    if (!('seeThroughToggle' in window)) {
+      window.seeThroughToggle = debugTerrainToggle;
+    }
+    if (typeof globalThis !== 'undefined') {
+      globalThis.seeThroughToggle = debugTerrainToggle;
+    }
+  }
+  if (typeof globalThis !== 'undefined') {
+    globalThis.selectionInfoPanel = selectionInfoPanel;
+    globalThis.selectionBlockField = selectionBlockField;
+  }
 }
 
 if (seedInput) {
@@ -391,6 +716,8 @@ function applyTranslucentTerrainSetting(enabled) {
   const active = Boolean(enabled);
   terrainRenderState.translucent = active;
   terrainRenderState.alpha = active ? translucentTerrainAlpha : 1;
+  seeThroughTerrain = active;
+  forceGridVisible = active;
 
   if (debugTerrainToggle && debugTerrainToggle.checked !== active) {
     debugTerrainToggle.checked = active;
@@ -482,8 +809,44 @@ function createTerrainGridVertices(heightField, step, color, heightOffset) {
   return vertexData.subarray(0, offset);
 }
 
+function createBlockGridVertices(heightField, color, heightOffset) {
+  if (!heightField) {
+    return new Float32Array(0);
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  const half = baseplateSize / 2;
+  const totalLines = (blocksPerSide + 1) * 2;
+  const vertexData = new Float32Array(totalLines * 2 * floatsPerVertex);
+  let offset = 0;
+
+  const sample = (xIndex, zIndex) => {
+    const clampedX = Math.max(0, Math.min(blocksPerSide, xIndex));
+    const clampedZ = Math.max(0, Math.min(blocksPerSide, zIndex));
+    return heightField[clampedZ][clampedX] + heightOffset;
+  };
+
+  for (let xi = 0; xi <= blocksPerSide; xi++) {
+    const worldX = -half + xi * blockSize;
+    const startHeight = sample(xi, 0);
+    const endHeight = sample(xi, blocksPerSide);
+    offset = pushVertex(vertexData, offset, worldX, startHeight, -half, color);
+    offset = pushVertex(vertexData, offset, worldX, endHeight, half, color);
+  }
+
+  for (let zi = 0; zi <= blocksPerSide; zi++) {
+    const worldZ = -half + zi * blockSize;
+    const startHeight = sample(0, zi);
+    const endHeight = sample(blocksPerSide, zi);
+    offset = pushVertex(vertexData, offset, -half, startHeight, worldZ, color);
+    offset = pushVertex(vertexData, offset, half, endHeight, worldZ, color);
+  }
+
+  return offset === vertexData.length ? vertexData : vertexData.subarray(0, offset);
+}
+
 function updateGridBuffers(heightField) {
-  const blockVertices = createTerrainGridVertices(heightField, 1, blockLineColor, 0.08);
+  const blockVertices = createBlockGridVertices(heightField, blockLineColor, 0.08);
   gl.bindBuffer(gl.ARRAY_BUFFER, blockGridBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, blockVertices, gl.STATIC_DRAW);
   blockGridVertexCount = blockVertices.length / floatsPerVertex;
@@ -1062,6 +1425,13 @@ function generateTerrainVertices(seedString) {
     }
   }
 
+  const normalization = sampleCount > 0 ? sampleCount : 1;
+  const featureStats = {
+    canyon: clamp01(canyonTotal / normalization),
+    ravine: clamp01(ravineTotal / normalization),
+    cliffs: clamp01(cliffTotal / normalization),
+  };
+
   return {
     vertexData,
     minHeight,
@@ -1069,6 +1439,7 @@ function generateTerrainVertices(seedString) {
     visibleVertices,
     heightfield: heights,
     maskfield: islandMask,
+    featureStats,
   };
 }
 
@@ -1313,12 +1684,12 @@ function sampleFieldValue(field, x, z, fallback) {
 
 function sampleTerrainHeight(x, z) {
   const fallback = terrainInfo.minHeight ?? 0;
-  return sampleFieldValue(terrainHeightfield, x, z, fallback);
+  return sampleFieldValue(terrainHeightField, x, z, fallback);
 }
 
 function sampleTerrainMask(x, z) {
   const fallback = 0;
-  return sampleFieldValue(terrainMaskfield, x, z, fallback);
+  return sampleFieldValue(terrainMaskField, x, z, fallback);
 }
 
 function sampleTerrainNormal(x, z) {
@@ -1439,13 +1810,21 @@ function regenerateRocks(seedString, heightfield, maskfield) {
 }
 
 function regenerateTerrain(seedString) {
-  const { vertexData, minHeight, maxHeight, visibleVertices, heightfield, maskfield } =
-    generateTerrainVertices(seedString);
+  const {
+    vertexData,
+    minHeight,
+    maxHeight,
+    visibleVertices,
+    heightfield,
+    maskfield,
+    featureStats,
+  } = generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
-  terrainHeightField = heightField;
-  updateGridBuffers(heightField);
+  terrainHeightField = heightfield;
+  terrainMaskField = maskfield;
+  updateGridBuffers(heightfield);
   refreshSelectionAfterTerrain();
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
@@ -1455,8 +1834,7 @@ function regenerateTerrain(seedString) {
   terrainInfo.visibleVertexRatio = baseplateVertexCount
     ? visibleVertices / baseplateVertexCount
     : 0;
-  terrainHeightfield = heightfield;
-  terrainMaskfield = maskfield;
+  terrainInfo.featureStats = featureStats;
   regenerateRocks(seedString, heightfield, maskfield);
 }
 
@@ -1478,10 +1856,18 @@ function setSeed(nextSeed) {
   if (seedInput && seedInput.value !== chosen) {
     seedInput.value = chosen;
   }
-  regenerateTerrain(chosen);
+  try {
+    regenerateTerrain(chosen);
+  } catch (error) {
+    handleFatalRuntimeError(error, 'regeneración de terreno');
+  }
 }
 
-regenerateTerrain(currentSeed);
+try {
+  regenerateTerrain(currentSeed);
+} catch (error) {
+  handleFatalRuntimeError(error, 'generación inicial de terreno');
+}
 
 function isEditableElement(element) {
   if (!element) {
@@ -1518,10 +1904,6 @@ const cameraPosition = [0, 5, 20];
 
 const pointerSensitivity = 0.002;
 const moveSpeed = 12;
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
 
 function normalize(v) {
   const length = Math.hypot(v[0], v[1], v[2]);
@@ -1674,59 +2056,18 @@ function invertMatrix(a) {
 
 function multiplyMatrices(a, b) {
   const result = new Float32Array(16);
-  const a00 = a[0];
-  const a01 = a[1];
-  const a02 = a[2];
-  const a03 = a[3];
-  const a10 = a[4];
-  const a11 = a[5];
-  const a12 = a[6];
-  const a13 = a[7];
-  const a20 = a[8];
-  const a21 = a[9];
-  const a22 = a[10];
-  const a23 = a[11];
-  const a30 = a[12];
-  const a31 = a[13];
-  const a32 = a[14];
-  const a33 = a[15];
 
-  const b00 = b[0];
-  const b01 = b[1];
-  const b02 = b[2];
-  const b03 = b[3];
-  const b10 = b[4];
-  const b11 = b[5];
-  const b12 = b[6];
-  const b13 = b[7];
-  const b20 = b[8];
-  const b21 = b[9];
-  const b22 = b[10];
-  const b23 = b[11];
-  const b30 = b[12];
-  const b31 = b[13];
-  const b32 = b[14];
-  const b33 = b[15];
+  for (let column = 0; column < 4; column++) {
+    const b0 = b[column * 4 + 0];
+    const b1 = b[column * 4 + 1];
+    const b2 = b[column * 4 + 2];
+    const b3 = b[column * 4 + 3];
 
-  result[0] = b00 * a00 + b01 * a10 + b02 * a20 + b03 * a30;
-  result[1] = b00 * a01 + b01 * a11 + b02 * a21 + b03 * a31;
-  result[2] = b00 * a02 + b01 * a12 + b02 * a22 + b03 * a32;
-  result[3] = b00 * a03 + b01 * a13 + b02 * a23 + b03 * a33;
-
-  result[4] = b10 * a00 + b11 * a10 + b12 * a20 + b13 * a30;
-  result[5] = b10 * a01 + b11 * a11 + b12 * a21 + b13 * a31;
-  result[6] = b10 * a02 + b11 * a12 + b12 * a22 + b13 * a32;
-  result[7] = b10 * a03 + b11 * a13 + b12 * a23 + b13 * a33;
-
-  result[8] = b20 * a00 + b21 * a10 + b22 * a20 + b23 * a30;
-  result[9] = b20 * a01 + b21 * a11 + b22 * a21 + b23 * a31;
-  result[10] = b20 * a02 + b21 * a12 + b22 * a22 + b23 * a32;
-  result[11] = b20 * a03 + b21 * a13 + b22 * a23 + b23 * a33;
-
-  result[12] = b30 * a00 + b31 * a10 + b32 * a20 + b33 * a30;
-  result[13] = b30 * a01 + b31 * a11 + b32 * a21 + b33 * a31;
-  result[14] = b30 * a02 + b31 * a12 + b32 * a22 + b33 * a32;
-  result[15] = b30 * a03 + b31 * a13 + b32 * a23 + b33 * a33;
+    result[column * 4 + 0] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    result[column * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    result[column * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    result[column * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
 
   return result;
 }
@@ -1745,6 +2086,12 @@ updateCanvasSize();
 window.addEventListener('resize', updateCanvasSize);
 
 function requestCameraControl(event) {
+  if (fatalRuntimeError) {
+    if (event) {
+      event.preventDefault();
+    }
+    return;
+  }
   if (event) {
     event.preventDefault();
   }
@@ -1756,6 +2103,9 @@ function requestCameraControl(event) {
 
 canvas.addEventListener('click', requestCameraControl);
 canvas.addEventListener('pointerdown', (event) => {
+  if (fatalRuntimeError) {
+    return;
+  }
   if (event.button !== 0) {
     return;
   }
@@ -1818,6 +2168,12 @@ if (simulationSpeedSlider) {
 if (debugTerrainToggle) {
   debugTerrainToggle.addEventListener('change', (event) => {
     applyTranslucentTerrainSetting(event.target.checked);
+  });
+}
+
+if (selectionCloseButton) {
+  selectionCloseButton.addEventListener('click', () => {
+    clearSelection();
   });
 }
 
@@ -2073,6 +2429,13 @@ function bindGeometry(buffer) {
 }
 
 function render() {
+  drawStats.terrain = 0;
+  drawStats.rocks = 0;
+  drawStats.blockGrid = 0;
+  drawStats.chunkGrid = 0;
+  drawStats.selection = 0;
+  drawStats.total = 0;
+
   const skyColor = dayNightCycleState.skyColor;
   if (skyColor) {
     gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
@@ -2108,6 +2471,8 @@ function render() {
   if (baseplateVertexCount > 0) {
     bindGeometry(baseplateBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
+    drawStats.terrain += 1;
+    drawStats.total += 1;
   }
 
   if (rockVertexCount > 0) {
@@ -2116,6 +2481,8 @@ function render() {
     }
     bindGeometry(rockBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
+    drawStats.rocks += 1;
+    drawStats.total += 1;
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
     }
@@ -2129,11 +2496,15 @@ function render() {
     if (blockGridVertexCount > 0) {
       bindGeometry(blockGridBuffer);
       gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
+      drawStats.blockGrid += 1;
+      drawStats.total += 1;
     }
 
     if (chunkGridVertexCount > 0) {
       bindGeometry(chunkGridBuffer);
       gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+      drawStats.chunkGrid += 1;
+      drawStats.total += 1;
     }
 
     if (forceGridVisible && typeof gl.enable === 'function') {
@@ -2147,6 +2518,8 @@ function render() {
     }
     bindGeometry(selectionHighlightBuffer);
     gl.drawArrays(gl.LINES, 0, selectionHighlightVertexCount);
+    drawStats.selection += 1;
+    drawStats.total += 1;
     if (typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
@@ -2204,9 +2577,12 @@ function updateDebugConsole(deltaTime) {
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
+    `Terreno características: cañones=${formatFeaturePercent(featureStats.canyon)}% barrancos=${formatFeaturePercent(featureStats.ravine)}% acantilados=${formatFeaturePercent(featureStats.cliffs)}%`,
+    `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
 
@@ -2214,10 +2590,21 @@ function updateDebugConsole(deltaTime) {
     info.push(`Pointer lock errores: ${pointerLockErrors}`);
   }
 
+  if (runtimeIssues.length > 0) {
+    info.push('', 'Problemas recientes:');
+    for (const issue of runtimeIssues) {
+      const marker = issue.severity === 'fatal' ? '⛔' : '⚠️';
+      info.push(`${marker} [${issue.timestamp}] ${issue.context}: ${formatIssueMessage(issue)}`);
+    }
+  }
+
   const output = info.join('\n');
 
   if (debugConsole) {
     debugConsole.textContent = output;
+    if (typeof debugConsole.setAttribute === 'function') {
+      debugConsole.setAttribute('aria-hidden', 'false');
+    }
   }
   if (settingsDebugLog) {
     settingsDebugLog.textContent = output;
@@ -2225,42 +2612,51 @@ function updateDebugConsole(deltaTime) {
 }
 
 function loop(currentTime) {
-  const deltaTime = (currentTime - previousTime) / 1000;
-  previousTime = currentTime;
-
-  tickAccumulator += deltaTime;
-  ticksLastFrame = 0;
-
-  while (tickAccumulator >= tickInterval) {
-    tickSimulation(tickInterval);
-    tickAccumulator -= tickInterval;
-    simulationTime += baseSimulationStep;
-    updateDayNightCycleState(simulationTime);
-    totalTicks += 1;
-    ticksLastFrame += 1;
-    tickStatsAccumulator += tickInterval;
-    tickSamples += 1;
+  if (loopHalted) {
+    return;
   }
 
-  if (tickStatsAccumulator >= 0.5) {
-    displayedTps = tickSamples / tickStatsAccumulator;
-    tickStatsAccumulator = 0;
-    tickSamples = 0;
+  try {
+    const deltaTime = (currentTime - previousTime) / 1000;
+    previousTime = currentTime;
+
+    tickAccumulator += deltaTime;
+    ticksLastFrame = 0;
+
+    while (tickAccumulator >= tickInterval) {
+      tickSimulation(tickInterval);
+      tickAccumulator -= tickInterval;
+      simulationTime += baseSimulationStep;
+      updateDayNightCycleState(simulationTime);
+      totalTicks += 1;
+      ticksLastFrame += 1;
+      tickStatsAccumulator += tickInterval;
+      tickSamples += 1;
+    }
+
+    if (tickStatsAccumulator >= 0.5) {
+      displayedTps = tickSamples / tickStatsAccumulator;
+      tickStatsAccumulator = 0;
+      tickSamples = 0;
+    }
+
+    simulationInfo.speed = simulationSpeed;
+    simulationInfo.tickRate = targetTickRate;
+    simulationInfo.tickInterval = tickInterval;
+    simulationInfo.time = simulationTime;
+    simulationInfo.totalTicks = totalTicks;
+    simulationInfo.displayedTps = displayedTps;
+    simulationInfo.ticksLastFrame = ticksLastFrame;
+    simulationInfo.dayNight = dayNightCycleState;
+
+    update(deltaTime);
+    render();
+    updateDebugConsole(deltaTime);
+    updateSimulationHud();
+  } catch (error) {
+    handleFatalRuntimeError(error, 'bucle principal');
+    return;
   }
-
-  simulationInfo.speed = simulationSpeed;
-  simulationInfo.tickRate = targetTickRate;
-  simulationInfo.tickInterval = tickInterval;
-  simulationInfo.time = simulationTime;
-  simulationInfo.totalTicks = totalTicks;
-  simulationInfo.displayedTps = displayedTps;
-  simulationInfo.ticksLastFrame = ticksLastFrame;
-  simulationInfo.dayNight = dayNightCycleState;
-
-  update(deltaTime);
-  render();
-  updateDebugConsole(deltaTime);
-  updateSimulationHud();
 
   requestAnimationFrame(loop);
 }
