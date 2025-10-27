@@ -226,6 +226,8 @@ function runTests() {
   const chunksPerSide = 16;
   const blocksPerSide = blocksPerChunk * chunksPerSide;
   const expectedTerrainVertices = blocksPerSide * blocksPerSide * 6;
+  const expectedBlockLineVertices = (blocksPerSide + 1) * blocksPerSide * 4;
+  const expectedChunkLineVertices = (blocksPerSide / blocksPerChunk + 1) * blocksPerSide * 4;
 
   assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
   assert(canvas.height === window.innerHeight, 'El canvas debe igualar el alto de la ventana');
@@ -245,11 +247,15 @@ function runTests() {
   );
   assert(triangleDraw, 'El terreno debe renderizar todos los vértices esperados');
 
-  const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 516);
-  assert(blockLines, 'La grid de bloques debe contener 516 vértices de línea');
+  const blockLines = glState.draws.find(
+    (draw) => draw.mode === 0x0001 && draw.count === expectedBlockLineVertices
+  );
+  assert(blockLines, 'La grid de bloques debe seguir el relieve del terreno completo');
 
-  const chunkLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 68);
-  assert(chunkLines, 'La grid de chunks debe contener 68 vértices de línea');
+  const chunkLines = glState.draws.find(
+    (draw) => draw.mode === 0x0001 && draw.count === expectedChunkLineVertices
+  );
+  assert(chunkLines, 'La grid de chunks debe trazar todos los límites sobre el terreno');
 
   assert(glState.draws.length >= 3, 'Se esperan múltiples draw calls por cuadro');
 

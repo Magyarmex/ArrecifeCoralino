@@ -1,5 +1,6 @@
 const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
+const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
 const settingsToggle = document.getElementById('settings-toggle');
@@ -110,22 +111,6 @@ const baseplateSize = chunkSize * chunksPerSide;
 const floatsPerVertex = 6;
 const vertexStride = floatsPerVertex * Float32Array.BYTES_PER_ELEMENT;
 
-function createLineGrid(size, step, color, yOffset) {
-  const half = size / 2;
-  const lineCount = Math.round(size / step);
-  const vertices = [];
-  for (let i = 0; i <= lineCount; i++) {
-    const position = -half + i * step;
-    // Líneas paralelas al eje Z
-    vertices.push(position, yOffset, -half, color[0], color[1], color[2]);
-    vertices.push(position, yOffset, half, color[0], color[1], color[2]);
-    // Líneas paralelas al eje X
-    vertices.push(-half, yOffset, position, color[0], color[1], color[2]);
-    vertices.push(half, yOffset, position, color[0], color[1], color[2]);
-  }
-  return new Float32Array(vertices);
-}
-
 function createBuffer(data) {
   const buffer = gl.createBuffer();
   if (!buffer) {
@@ -153,14 +138,11 @@ const lightDirection = (() => {
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
 
-const blockGridVertices = createLineGrid(baseplateSize, blockSize, blockLineColor, 0.02);
-const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColor, 0.04);
+const blockGridBuffer = createBuffer(new Float32Array(0));
+const chunkGridBuffer = createBuffer(new Float32Array(0));
 
-const blockGridBuffer = createBuffer(blockGridVertices);
-const chunkGridBuffer = createBuffer(chunkGridVertices);
-
-const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
-const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
+let blockGridVertexCount = 0;
+let chunkGridVertexCount = 0;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -172,6 +154,8 @@ const terrainInfo = {
   visibleVertices: 0,
   visibleVertexRatio: 0,
 };
+
+let terrainHeightField = null;
 
 if (typeof window !== 'undefined') {
   window.__terrainInfo = terrainInfo;
@@ -279,6 +263,83 @@ function pushVertex(buffer, offset, x, y, z, color) {
   buffer[offset + 4] = color[1];
   buffer[offset + 5] = color[2];
   return offset + floatsPerVertex;
+}
+
+function createTerrainGridVertices(heightField, step, color, heightOffset) {
+  if (!heightField) {
+    return new Float32Array(0);
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  const half = baseplateSize / 2;
+
+  const collectAxisIndices = () => {
+    const indices = [];
+    for (let index = 0; index <= blocksPerSide; index += step) {
+      indices.push(index);
+    }
+    if (indices[indices.length - 1] !== blocksPerSide) {
+      indices.push(blocksPerSide);
+    }
+    return indices;
+  };
+
+  const axisIndices = collectAxisIndices();
+  const totalVertices = axisIndices.length * blocksPerSide * 4;
+  const vertexData = new Float32Array(totalVertices * floatsPerVertex);
+  let offset = 0;
+
+  const sample = (x, z) => {
+    const clampedX = Math.max(0, Math.min(blocksPerSide, x));
+    const clampedZ = Math.max(0, Math.min(blocksPerSide, z));
+    return heightField[clampedZ][clampedX];
+  };
+
+  for (const xi of axisIndices) {
+    const worldX = -half + xi * blockSize;
+    for (let zi = 0; zi < blocksPerSide; zi++) {
+      const z0 = -half + zi * blockSize;
+      const z1 = z0 + blockSize;
+      const y0 = sample(xi, zi) + heightOffset;
+      const y1 = sample(xi, zi + 1) + heightOffset;
+      offset = pushVertex(vertexData, offset, worldX, y0, z0, color);
+      offset = pushVertex(vertexData, offset, worldX, y1, z1, color);
+    }
+  }
+
+  for (const zi of axisIndices) {
+    const worldZ = -half + zi * blockSize;
+    for (let xi = 0; xi < blocksPerSide; xi++) {
+      const x0 = -half + xi * blockSize;
+      const x1 = x0 + blockSize;
+      const y0 = sample(xi, zi) + heightOffset;
+      const y1 = sample(xi + 1, zi) + heightOffset;
+      offset = pushVertex(vertexData, offset, x0, y0, worldZ, color);
+      offset = pushVertex(vertexData, offset, x1, y1, worldZ, color);
+    }
+  }
+
+  if (offset === vertexData.length) {
+    return vertexData;
+  }
+  return vertexData.subarray(0, offset);
+}
+
+function updateGridBuffers(heightField) {
+  const blockVertices = createTerrainGridVertices(heightField, 1, blockLineColor, 0.08);
+  gl.bindBuffer(gl.ARRAY_BUFFER, blockGridBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, blockVertices, gl.STATIC_DRAW);
+  blockGridVertexCount = blockVertices.length / floatsPerVertex;
+
+  const chunkVertices = createTerrainGridVertices(
+    heightField,
+    blocksPerChunk,
+    chunkLineColor,
+    0.12
+  );
+  gl.bindBuffer(gl.ARRAY_BUFFER, chunkGridBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, chunkVertices, gl.STATIC_DRAW);
+  chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
 }
 
 function generateTerrainVertices(seedString) {
@@ -458,15 +519,17 @@ function generateTerrainVertices(seedString) {
     }
   }
 
-  return { vertexData, minHeight, maxHeight, visibleVertices };
+  return { vertexData, minHeight, maxHeight, visibleVertices, heightField: heights };
 }
 
 function regenerateTerrain(seedString) {
-  const { vertexData, minHeight, maxHeight, visibleVertices } =
+  const { vertexData, minHeight, maxHeight, visibleVertices, heightField } =
     generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
+  terrainHeightField = heightField;
+  updateGridBuffers(heightField);
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
   terrainInfo.maxHeight = Math.min(maxTerrainHeight, maxHeight);
@@ -828,6 +891,7 @@ function requestCameraControl(event) {
   if (event) {
     event.preventDefault();
   }
+  dismissTutorialOverlay();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
   }
@@ -870,15 +934,38 @@ if (randomSeedButton) {
   });
 }
 
+function handleSimulationSpeedChange(value) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return;
+  }
+  setSimulationSpeed(parsed);
+}
+
+if (simulationSpeedSlider) {
+  simulationSpeedSlider.addEventListener('input', (event) => {
+    handleSimulationSpeedChange(event.target.value);
+  });
+  simulationSpeedSlider.addEventListener('change', (event) => {
+    handleSimulationSpeedChange(event.target.value);
+  });
+}
+
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
-  overlay.className = 'visible';
+  showTutorialOverlay();
 });
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
-  overlay.className = locked ? 'hidden' : 'visible';
+  if (locked) {
+    dismissTutorialOverlay();
+  } else if (!overlayDismissed) {
+    showTutorialOverlay();
+  } else {
+    applyTutorialState(false);
+  }
 });
 
 document.addEventListener('mousemove', (event) => {
@@ -892,6 +979,11 @@ document.addEventListener('mousemove', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (isEditableElement(event.target)) {
+    return;
+  }
+  if (event.code === 'Escape' && tutorialActive) {
+    event.preventDefault();
+    dismissTutorialOverlay();
     return;
   }
   switch (event.code) {
@@ -959,6 +1051,100 @@ let fpsAccumulator = 0;
 let fpsSamples = 0;
 let displayedFps = 0;
 let lastGlError = 'ninguno';
+
+const baseTickRate = 20;
+const MIN_SIMULATION_SPEED = 0.1;
+const MAX_SIMULATION_SPEED = 3;
+let simulationSpeed = 1;
+let targetTickRate = baseTickRate * simulationSpeed;
+let tickInterval = 1 / targetTickRate;
+let tickAccumulator = 0;
+let tickStatsAccumulator = 0;
+let tickSamples = 0;
+let displayedTps = 0;
+let totalTicks = 0;
+let simulationTime = 0;
+let ticksLastFrame = 0;
+
+const simulationInfo = {
+  baseTickRate,
+  speed: simulationSpeed,
+  tickRate: targetTickRate,
+  tickInterval,
+  time: simulationTime,
+  totalTicks,
+  displayedTps,
+  ticksLastFrame,
+};
+
+if (typeof window !== 'undefined') {
+  window.__simulationInfo = simulationInfo;
+}
+
+setSimulationSpeed(simulationSpeed);
+
+function normalizeSimulationSpeed(value) {
+  if (!Number.isFinite(value)) {
+    return simulationSpeed;
+  }
+  const clamped = Math.min(MAX_SIMULATION_SPEED, Math.max(MIN_SIMULATION_SPEED, value));
+  return Math.round(clamped * 10) / 10;
+}
+
+function setSimulationSpeed(multiplier) {
+  const normalized = normalizeSimulationSpeed(multiplier);
+  simulationSpeed = normalized;
+  targetTickRate = baseTickRate * simulationSpeed;
+  tickInterval = 1 / targetTickRate;
+  simulationInfo.speed = simulationSpeed;
+  simulationInfo.tickRate = targetTickRate;
+  simulationInfo.tickInterval = tickInterval;
+
+  if (simulationSpeedSlider && simulationSpeedSlider.value !== String(simulationSpeed)) {
+    simulationSpeedSlider.value = String(simulationSpeed);
+  }
+
+  const speedLabel = `${simulationSpeed.toFixed(1)}×`;
+  if (simulationSpeedIndicator) {
+    simulationSpeedIndicator.textContent = speedLabel;
+  }
+  if (simulationSpeedDisplay) {
+    simulationSpeedDisplay.textContent = speedLabel;
+  }
+  if (simulationSpeedSettingsDisplay) {
+    simulationSpeedSettingsDisplay.textContent = speedLabel;
+  }
+}
+
+function formatSimulationTime(timeInSeconds) {
+  const totalSeconds = Math.max(0, timeInSeconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const tenths = Math.floor((totalSeconds % 1) * 10);
+  const paddedMinutes = String(minutes).padStart(2, '0');
+  const paddedSeconds = String(seconds).padStart(2, '0');
+  return `${paddedMinutes}:${paddedSeconds}.${tenths}`;
+}
+
+function updateSimulationHud() {
+  if (simulationClock) {
+    simulationClock.textContent = formatSimulationTime(simulationTime);
+  }
+  if (simulationSpeedIndicator) {
+    simulationSpeedIndicator.textContent = `${simulationSpeed.toFixed(1)}×`;
+  }
+  if (simulationSpeedDisplay) {
+    simulationSpeedDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
+  }
+  if (simulationSpeedSettingsDisplay) {
+    simulationSpeedSettingsDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
+  }
+}
+
+function tickSimulation(deltaTime) {
+  // Punto de extensión para futuros sistemas de simulación basados en ticks.
+  void deltaTime;
+}
 
 function update(deltaTime) {
   simulationTime = (simulationTime + deltaTime) % secondsPerDay;
@@ -1070,6 +1256,10 @@ function updateDebugConsole(deltaTime) {
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
+    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
+    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
+    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
+    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Terreno seed: ${terrainInfo.seed}`,
@@ -1091,9 +1281,37 @@ function loop(currentTime) {
   const deltaTime = (currentTime - previousTime) / 1000;
   previousTime = currentTime;
 
+  tickAccumulator += deltaTime;
+  ticksLastFrame = 0;
+
+  while (tickAccumulator >= tickInterval) {
+    tickSimulation(tickInterval);
+    tickAccumulator -= tickInterval;
+    simulationTime += tickInterval;
+    totalTicks += 1;
+    ticksLastFrame += 1;
+    tickStatsAccumulator += tickInterval;
+    tickSamples += 1;
+  }
+
+  if (tickStatsAccumulator >= 0.5) {
+    displayedTps = tickSamples / tickStatsAccumulator;
+    tickStatsAccumulator = 0;
+    tickSamples = 0;
+  }
+
+  simulationInfo.speed = simulationSpeed;
+  simulationInfo.tickRate = targetTickRate;
+  simulationInfo.tickInterval = tickInterval;
+  simulationInfo.time = simulationTime;
+  simulationInfo.totalTicks = totalTicks;
+  simulationInfo.displayedTps = displayedTps;
+  simulationInfo.ticksLastFrame = ticksLastFrame;
+
   update(deltaTime);
   render();
   updateDebugConsole(deltaTime);
+  updateSimulationHud();
 
   requestAnimationFrame(loop);
 }
