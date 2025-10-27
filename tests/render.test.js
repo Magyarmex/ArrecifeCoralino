@@ -54,6 +54,7 @@ function createWebGLStub() {
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
     uniformMatrix4fv: () => {},
+    uniform3f: () => {},
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
