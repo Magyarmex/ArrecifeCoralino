@@ -58,16 +58,8 @@ function createWebGLStub() {
     bufferData: () => {},
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
-    uniformMatrix4fv: (location, transpose, value) => {
-      if (value && typeof value.length === 'number') {
-        state.viewProjection = Array.from(value);
-      }
-    },
-    uniform1f: (location, value) => {
-      if (typeof value === 'number') {
-        state.opacity = value;
-      }
-    },
+    uniformMatrix4fv: () => {},
+    uniform3f: () => {},
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];

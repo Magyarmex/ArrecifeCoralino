@@ -1,12 +1,61 @@
 const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
+const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
 const randomSeedButton = document.getElementById('random-seed');
-const seeThroughToggle = document.getElementById('see-through-toggle');
+const simulationClock = document.getElementById('simulation-clock');
+const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
+const simulationSpeedSlider = document.getElementById('simulation-speed');
+const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
+const simulationSpeedSettingsDisplay = document.getElementById(
+  'simulation-speed-display-settings',
+);
+
+const bodyElement = document.body;
+
+const initialTutorialActive = overlay?.classList?.contains('visible') ?? false;
+let tutorialActive = initialTutorialActive;
+let overlayDismissed = !initialTutorialActive;
+
+function applyTutorialState(active) {
+  tutorialActive = active;
+  if (overlay) {
+    if (overlay.classList) {
+      overlay.classList.toggle('visible', active);
+      overlay.classList.toggle('hidden', !active);
+    } else {
+      overlay.className = active ? 'visible' : 'hidden';
+    }
+    if (typeof overlay.setAttribute === 'function') {
+      overlay.setAttribute('aria-hidden', String(!active));
+    }
+  }
+  if (simulationHud && typeof simulationHud.setAttribute === 'function') {
+    simulationHud.setAttribute('aria-hidden', String(active));
+  }
+  if (bodyElement?.classList) {
+    bodyElement.classList.toggle('tutorial-active', active);
+  }
+}
+
+function showTutorialOverlay() {
+  if (overlayDismissed) {
+    applyTutorialState(false);
+    return;
+  }
+  applyTutorialState(true);
+}
+
+function dismissTutorialOverlay() {
+  overlayDismissed = true;
+  applyTutorialState(false);
+}
+
+applyTutorialState(tutorialActive);
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -49,9 +98,9 @@ const vertexSource = `
 const fragmentSource = `
   precision mediump float;
   varying vec3 vColor;
-  uniform float opacity;
+  uniform vec3 globalLightColor;
   void main() {
-    gl_FragColor = vec4(vColor, opacity);
+    gl_FragColor = vec4(vColor * globalLightColor, 1.0);
   }
 `;
 
@@ -77,7 +126,7 @@ gl.useProgram(program);
 const positionAttribute = gl.getAttribLocation(program, 'position');
 const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
-const opacityUniform = gl.getUniformLocation(program, 'opacity');
+const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -220,6 +269,45 @@ function mixColor(a, b, t) {
     lerp(a[1], b[1], t),
     lerp(a[2], b[2], t),
   ];
+}
+
+const nightSkyColor = [0.02, 0.03, 0.08];
+const daySkyColor = [0.32, 0.56, 0.84];
+const nightLightTint = [0.55, 0.68, 0.95];
+const dayLightTint = [1, 0.97, 0.9];
+const dayNightCycleDuration = 240;
+
+const dayNightCycleState = {
+  length: dayNightCycleDuration,
+  normalizedTime: 0,
+  daylight: 0,
+  intensity: 1,
+  skyColor: nightSkyColor.slice(),
+  lightColor: [1, 1, 1],
+  sunAngle: -Math.PI / 2,
+};
+
+function updateDayNightCycleState(currentSimulationTime) {
+  const duration = Math.max(1, dayNightCycleDuration);
+  const cycleTime = ((currentSimulationTime % duration) + duration) % duration;
+  const normalized = cycleTime / duration;
+  const sunAngle = normalized * 2 * Math.PI - Math.PI / 2;
+  const daylight = clamp01(Math.sin(sunAngle) * 0.5 + 0.5);
+  const intensity = 0.25 + daylight * 0.75;
+  const tint = mixColor(nightLightTint, dayLightTint, daylight);
+  const skyColor = mixColor(nightSkyColor, daySkyColor, daylight);
+  const lightColor = [
+    clamp01(tint[0] * intensity),
+    clamp01(tint[1] * intensity),
+    clamp01(tint[2] * intensity),
+  ];
+
+  dayNightCycleState.normalizedTime = normalized;
+  dayNightCycleState.daylight = daylight;
+  dayNightCycleState.intensity = intensity;
+  dayNightCycleState.skyColor = skyColor;
+  dayNightCycleState.lightColor = lightColor;
+  dayNightCycleState.sunAngle = sunAngle;
 }
 
 function pushVertex(buffer, offset, x, y, z, color) {
@@ -725,6 +813,7 @@ function requestCameraControl(event) {
   if (event) {
     event.preventDefault();
   }
+  dismissTutorialOverlay();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
   }
@@ -767,22 +856,38 @@ if (randomSeedButton) {
   });
 }
 
-if (seeThroughToggle) {
-  seeThroughToggle.checked = seeThroughTerrain;
-  seeThroughToggle.addEventListener('change', (event) => {
-    seeThroughTerrain = event.target.checked;
+function handleSimulationSpeedChange(value) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return;
+  }
+  setSimulationSpeed(parsed);
+}
+
+if (simulationSpeedSlider) {
+  simulationSpeedSlider.addEventListener('input', (event) => {
+    handleSimulationSpeedChange(event.target.value);
+  });
+  simulationSpeedSlider.addEventListener('change', (event) => {
+    handleSimulationSpeedChange(event.target.value);
   });
 }
 
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
-  overlay.className = 'visible';
+  showTutorialOverlay();
 });
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
-  overlay.className = locked ? 'hidden' : 'visible';
+  if (locked) {
+    dismissTutorialOverlay();
+  } else if (!overlayDismissed) {
+    showTutorialOverlay();
+  } else {
+    applyTutorialState(false);
+  }
 });
 
 document.addEventListener('mousemove', (event) => {
@@ -796,6 +901,11 @@ document.addEventListener('mousemove', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (isEditableElement(event.target)) {
+    return;
+  }
+  if (event.code === 'Escape' && tutorialActive) {
+    event.preventDefault();
+    dismissTutorialOverlay();
     return;
   }
   switch (event.code) {
@@ -863,6 +973,104 @@ let fpsSamples = 0;
 let displayedFps = 0;
 let lastGlError = 'ninguno';
 
+const baseTickRate = 20;
+const baseSimulationStep = 1 / baseTickRate;
+const MIN_SIMULATION_SPEED = 0.1;
+const MAX_SIMULATION_SPEED = 3;
+let simulationSpeed = 1;
+let targetTickRate = baseTickRate * simulationSpeed;
+let tickInterval = 1 / targetTickRate;
+let tickAccumulator = 0;
+let tickStatsAccumulator = 0;
+let tickSamples = 0;
+let displayedTps = 0;
+let totalTicks = 0;
+let simulationTime = 0;
+let ticksLastFrame = 0;
+
+updateDayNightCycleState(simulationTime);
+
+const simulationInfo = {
+  baseTickRate,
+  speed: simulationSpeed,
+  tickRate: targetTickRate,
+  tickInterval,
+  time: simulationTime,
+  totalTicks,
+  displayedTps,
+  ticksLastFrame,
+  dayNight: dayNightCycleState,
+};
+
+if (typeof window !== 'undefined') {
+  window.__simulationInfo = simulationInfo;
+}
+
+setSimulationSpeed(simulationSpeed);
+
+function normalizeSimulationSpeed(value) {
+  if (!Number.isFinite(value)) {
+    return simulationSpeed;
+  }
+  const clamped = Math.min(MAX_SIMULATION_SPEED, Math.max(MIN_SIMULATION_SPEED, value));
+  return Math.round(clamped * 10) / 10;
+}
+
+function setSimulationSpeed(multiplier) {
+  const normalized = normalizeSimulationSpeed(multiplier);
+  simulationSpeed = normalized;
+  targetTickRate = baseTickRate * simulationSpeed;
+  tickInterval = 1 / targetTickRate;
+  simulationInfo.speed = simulationSpeed;
+  simulationInfo.tickRate = targetTickRate;
+  simulationInfo.tickInterval = tickInterval;
+
+  if (simulationSpeedSlider && simulationSpeedSlider.value !== String(simulationSpeed)) {
+    simulationSpeedSlider.value = String(simulationSpeed);
+  }
+
+  const speedLabel = `${simulationSpeed.toFixed(1)}×`;
+  if (simulationSpeedIndicator) {
+    simulationSpeedIndicator.textContent = speedLabel;
+  }
+  if (simulationSpeedDisplay) {
+    simulationSpeedDisplay.textContent = speedLabel;
+  }
+  if (simulationSpeedSettingsDisplay) {
+    simulationSpeedSettingsDisplay.textContent = speedLabel;
+  }
+}
+
+function formatSimulationTime(timeInSeconds) {
+  const totalSeconds = Math.max(0, timeInSeconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const tenths = Math.floor((totalSeconds % 1) * 10);
+  const paddedMinutes = String(minutes).padStart(2, '0');
+  const paddedSeconds = String(seconds).padStart(2, '0');
+  return `${paddedMinutes}:${paddedSeconds}.${tenths}`;
+}
+
+function updateSimulationHud() {
+  if (simulationClock) {
+    simulationClock.textContent = formatSimulationTime(simulationTime);
+  }
+  if (simulationSpeedIndicator) {
+    simulationSpeedIndicator.textContent = `${simulationSpeed.toFixed(1)}×`;
+  }
+  if (simulationSpeedDisplay) {
+    simulationSpeedDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
+  }
+  if (simulationSpeedSettingsDisplay) {
+    simulationSpeedSettingsDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
+  }
+}
+
+function tickSimulation(deltaTime) {
+  // Punto de extensión para futuros sistemas de simulación basados en ticks.
+  void deltaTime;
+}
+
 function update(deltaTime) {
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
@@ -911,24 +1119,19 @@ function bindGeometry(buffer) {
 }
 
 function render() {
-  if (typeof gl.enable === 'function') {
-    gl.enable(gl.DEPTH_TEST);
+  const skyColor = dayNightCycleState.skyColor;
+  if (skyColor) {
+    gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
   }
 
-  if (opacityUniform && typeof gl.uniform1f === 'function') {
-    const opacity = seeThroughTerrain ? seeThroughTerrainOpacity : defaultTerrainOpacity;
-    gl.uniform1f(opacityUniform, opacity);
-  }
-
-  if (seeThroughTerrain) {
-    if (typeof gl.enable === 'function') {
-      gl.enable(gl.BLEND);
-    }
-    if (typeof gl.blendFunc === 'function') {
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    }
-  } else if (typeof gl.disable === 'function') {
-    gl.disable(gl.BLEND);
+  if (globalLightColorUniform) {
+    const lightColor = dayNightCycleState.lightColor;
+    gl.uniform3f(
+      globalLightColorUniform,
+      lightColor[0],
+      lightColor[1],
+      lightColor[2],
+    );
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -992,6 +1195,11 @@ function updateDebugConsole(deltaTime) {
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
+    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
+    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
+    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
+    `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
+    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Terreno seed: ${terrainInfo.seed}`,
@@ -1014,9 +1222,39 @@ function loop(currentTime) {
   const deltaTime = (currentTime - previousTime) / 1000;
   previousTime = currentTime;
 
+  tickAccumulator += deltaTime;
+  ticksLastFrame = 0;
+
+  while (tickAccumulator >= tickInterval) {
+    tickSimulation(tickInterval);
+    tickAccumulator -= tickInterval;
+    simulationTime += baseSimulationStep;
+    updateDayNightCycleState(simulationTime);
+    totalTicks += 1;
+    ticksLastFrame += 1;
+    tickStatsAccumulator += tickInterval;
+    tickSamples += 1;
+  }
+
+  if (tickStatsAccumulator >= 0.5) {
+    displayedTps = tickSamples / tickStatsAccumulator;
+    tickStatsAccumulator = 0;
+    tickSamples = 0;
+  }
+
+  simulationInfo.speed = simulationSpeed;
+  simulationInfo.tickRate = targetTickRate;
+  simulationInfo.tickInterval = tickInterval;
+  simulationInfo.time = simulationTime;
+  simulationInfo.totalTicks = totalTicks;
+  simulationInfo.displayedTps = displayedTps;
+  simulationInfo.ticksLastFrame = ticksLastFrame;
+  simulationInfo.dayNight = dayNightCycleState;
+
   update(deltaTime);
   render();
   updateDebugConsole(deltaTime);
+  updateSimulationHud();
 
   requestAnimationFrame(loop);
 }
