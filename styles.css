@@ -43,23 +43,6 @@ body {
   font-size: 0.95rem;
 }
 
-#overlay button {
-  appearance: none;
-  border: none;
-  background: rgba(255, 255, 255, 0.12);
-  color: inherit;
-  font: inherit;
-  padding: 6px 12px;
-  border-radius: 8px;
-  margin-top: 10px;
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-#overlay button:hover {
-  background: rgba(255, 255, 255, 0.22);
-}
-
 #overlay.visible {
   opacity: 1;
   pointer-events: auto;
@@ -67,26 +50,5 @@ body {
 
 #overlay.hidden {
   opacity: 0;
-  pointer-events: none;
-}
-
-#debug-console {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  width: 260px;
-  max-height: calc(100vh - 40px);
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.5);
-  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
-    monospace;
-  font-size: 0.8rem;
-  color: #d3f2ff;
-  line-height: 1.45;
-  overflow: auto;
-  white-space: pre-wrap;
   pointer-events: none;
 }
