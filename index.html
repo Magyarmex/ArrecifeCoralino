@@ -55,6 +55,26 @@
       </form>
     </div>
     <pre id="debug-console" aria-live="polite"></pre>
+    <section
+      id="water-panel"
+      class="water-panel"
+      aria-live="polite"
+      aria-hidden="true"
+      hidden
+    >
+      <div class="water-panel-header">
+        <h2>Celda de agua</h2>
+        <button type="button" id="water-panel-close" aria-label="Cerrar menú">
+          ✕
+        </button>
+      </div>
+      <p id="water-panel-coordinates" class="water-panel-subtitle"></p>
+      <p id="water-panel-volume" class="water-panel-data"></p>
+      <p id="water-panel-depth" class="water-panel-data"></p>
+      <div id="water-panel-body" class="water-panel-body">
+        <p>Aún no hay información interna para esta celda.</p>
+      </div>
+    </section>
     <script src="scripts/main.js" type="module"></script>
   </body>
 </html>
