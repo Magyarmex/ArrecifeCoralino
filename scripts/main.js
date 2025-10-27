@@ -6,11 +6,6 @@ const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
 const randomSeedButton = document.getElementById('random-seed');
-const waterInfoPanel = document.getElementById('water-panel');
-const waterInfoClose = document.getElementById('water-panel-close');
-const waterInfoCoordinates = document.getElementById('water-panel-coordinates');
-const waterInfoVolume = document.getElementById('water-panel-volume');
-const waterInfoDepth = document.getElementById('water-panel-depth');
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -86,32 +81,9 @@ const blocksPerChunk = 8;
 const chunksPerSide = 16;
 const chunkSize = blockSize * blocksPerChunk;
 const baseplateSize = chunkSize * chunksPerSide;
-const blocksPerSide = chunksPerSide * blocksPerChunk;
-const baseplateHalfSize = baseplateSize / 2;
-
-const waterCellSize = 0.1; // 10 cm x 10 cm por celda
-const waterCellsPerSide = Math.round(baseplateSize / waterCellSize);
-const waterCellArea = waterCellSize * waterCellSize;
-const waterSurfaceLevel = 12; // altura del agua sobre el terreno
 
 const floatsPerVertex = 6;
 const vertexStride = floatsPerVertex * Float32Array.BYTES_PER_ELEMENT;
-
-function createLineGrid(size, step, color, yOffset) {
-  const half = size / 2;
-  const lineCount = Math.round(size / step);
-  const vertices = [];
-  for (let i = 0; i <= lineCount; i++) {
-    const position = -half + i * step;
-    // Líneas paralelas al eje Z
-    vertices.push(position, yOffset, -half, color[0], color[1], color[2]);
-    vertices.push(position, yOffset, half, color[0], color[1], color[2]);
-    // Líneas paralelas al eje X
-    vertices.push(-half, yOffset, position, color[0], color[1], color[2]);
-    vertices.push(half, yOffset, position, color[0], color[1], color[2]);
-  }
-  return new Float32Array(vertices);
-}
 
 function createBuffer(data) {
   const buffer = gl.createBuffer();
@@ -140,18 +112,11 @@ const lightDirection = (() => {
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
 
-const blockGridVertices = createLineGrid(baseplateSize, blockSize, blockLineColor, 0.02);
-const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColor, 0.04);
+const blockGridBuffer = createBuffer(new Float32Array(0));
+const chunkGridBuffer = createBuffer(new Float32Array(0));
 
-const blockGridBuffer = createBuffer(blockGridVertices);
-const chunkGridBuffer = createBuffer(chunkGridVertices);
-
-const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
-const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
-
-let terrainHeightField = null;
-let waterVolumeData = null;
-let suppressOverlay = false;
+let blockGridVertexCount = 0;
+let chunkGridVertexCount = 0;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -162,11 +127,9 @@ const terrainInfo = {
   vertexCount: 0,
   visibleVertices: 0,
   visibleVertexRatio: 0,
-  waterSurfaceLevel,
-  waterCellSize,
-  waterCellsPerSide,
-  lastSelectedWaterCell: null,
 };
+
+let terrainHeightField = null;
 
 if (typeof window !== 'undefined') {
   window.__terrainInfo = terrainInfo;
@@ -262,8 +225,86 @@ function pushVertex(buffer, offset, x, y, z, color) {
   return offset + floatsPerVertex;
 }
 
+function createTerrainGridVertices(heightField, step, color, heightOffset) {
+  if (!heightField) {
+    return new Float32Array(0);
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  const half = baseplateSize / 2;
+
+  const collectAxisIndices = () => {
+    const indices = [];
+    for (let index = 0; index <= blocksPerSide; index += step) {
+      indices.push(index);
+    }
+    if (indices[indices.length - 1] !== blocksPerSide) {
+      indices.push(blocksPerSide);
+    }
+    return indices;
+  };
+
+  const axisIndices = collectAxisIndices();
+  const totalVertices = axisIndices.length * blocksPerSide * 4;
+  const vertexData = new Float32Array(totalVertices * floatsPerVertex);
+  let offset = 0;
+
+  const sample = (x, z) => {
+    const clampedX = Math.max(0, Math.min(blocksPerSide, x));
+    const clampedZ = Math.max(0, Math.min(blocksPerSide, z));
+    return heightField[clampedZ][clampedX];
+  };
+
+  for (const xi of axisIndices) {
+    const worldX = -half + xi * blockSize;
+    for (let zi = 0; zi < blocksPerSide; zi++) {
+      const z0 = -half + zi * blockSize;
+      const z1 = z0 + blockSize;
+      const y0 = sample(xi, zi) + heightOffset;
+      const y1 = sample(xi, zi + 1) + heightOffset;
+      offset = pushVertex(vertexData, offset, worldX, y0, z0, color);
+      offset = pushVertex(vertexData, offset, worldX, y1, z1, color);
+    }
+  }
+
+  for (const zi of axisIndices) {
+    const worldZ = -half + zi * blockSize;
+    for (let xi = 0; xi < blocksPerSide; xi++) {
+      const x0 = -half + xi * blockSize;
+      const x1 = x0 + blockSize;
+      const y0 = sample(xi, zi) + heightOffset;
+      const y1 = sample(xi + 1, zi) + heightOffset;
+      offset = pushVertex(vertexData, offset, x0, y0, worldZ, color);
+      offset = pushVertex(vertexData, offset, x1, y1, worldZ, color);
+    }
+  }
+
+  if (offset === vertexData.length) {
+    return vertexData;
+  }
+  return vertexData.subarray(0, offset);
+}
+
+function updateGridBuffers(heightField) {
+  const blockVertices = createTerrainGridVertices(heightField, 1, blockLineColor, 0.08);
+  gl.bindBuffer(gl.ARRAY_BUFFER, blockGridBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, blockVertices, gl.STATIC_DRAW);
+  blockGridVertexCount = blockVertices.length / floatsPerVertex;
+
+  const chunkVertices = createTerrainGridVertices(
+    heightField,
+    blocksPerChunk,
+    chunkLineColor,
+    0.12
+  );
+  gl.bindBuffer(gl.ARRAY_BUFFER, chunkGridBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, chunkVertices, gl.STATIC_DRAW);
+  chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
+}
+
 function generateTerrainVertices(seedString) {
   const numericSeed = stringToSeed(seedString);
+  const blocksPerSide = chunksPerSide * blocksPerChunk;
   const vertexFloatCount = blocksPerSide * blocksPerSide * 6 * floatsPerVertex;
   const vertexData = new Float32Array(vertexFloatCount);
   let heights = new Array(blocksPerSide + 1);
@@ -402,7 +443,7 @@ function generateTerrainVertices(seedString) {
   }
 
   let offset = 0;
-  const half = baseplateHalfSize;
+  const half = baseplateSize / 2;
   let visibleVertices = 0;
   for (let z = 0; z < blocksPerSide; z++) {
     for (let x = 0; x < blocksPerSide; x++) {
@@ -441,207 +482,6 @@ function generateTerrainVertices(seedString) {
   return { vertexData, minHeight, maxHeight, visibleVertices, heightField: heights };
 }
 
-function sampleTerrainHeight(heightField, worldX, worldZ) {
-  if (!heightField) {
-    return 0;
-  }
-
-  const normalizedX = clamp01((worldX + baseplateHalfSize) / baseplateSize);
-  const normalizedZ = clamp01((worldZ + baseplateHalfSize) / baseplateSize);
-
-  const gridX = normalizedX * blocksPerSide;
-  const gridZ = normalizedZ * blocksPerSide;
-
-  const x0 = Math.floor(gridX);
-  const z0 = Math.floor(gridZ);
-  const x1 = Math.min(blocksPerSide, x0 + 1);
-  const z1 = Math.min(blocksPerSide, z0 + 1);
-
-  const tx = gridX - x0;
-  const tz = gridZ - z0;
-
-  const h00 = heightField[z0]?.[x0] ?? 0;
-  const h10 = heightField[z0]?.[x1] ?? h00;
-  const h01 = heightField[z1]?.[x0] ?? h00;
-  const h11 = heightField[z1]?.[x1] ?? h00;
-
-  const hx0 = lerp(h00, h10, tx);
-  const hx1 = lerp(h01, h11, tx);
-  return lerp(hx0, hx1, tz);
-}
-
-function generateWaterVolumeData(heightField) {
-  if (!heightField) {
-    return null;
-  }
-
-  const volumes = new Float32Array(waterCellsPerSide * waterCellsPerSide);
-
-  for (let z = 0; z < waterCellsPerSide; z++) {
-    const worldZ = -baseplateHalfSize + (z + 0.5) * waterCellSize;
-    for (let x = 0; x < waterCellsPerSide; x++) {
-      const worldX = -baseplateHalfSize + (x + 0.5) * waterCellSize;
-      const terrainHeight = sampleTerrainHeight(heightField, worldX, worldZ);
-      const depth = Math.max(0, waterSurfaceLevel - terrainHeight);
-      volumes[z * waterCellsPerSide + x] = depth * waterCellArea;
-    }
-  }
-
-  return {
-    cellSize: waterCellSize,
-    cellsPerSide: waterCellsPerSide,
-    surfaceLevel: waterSurfaceLevel,
-    volumes,
-  };
-}
-
-function worldToWaterCell(worldX, worldZ) {
-  const offsetX = worldX + baseplateHalfSize;
-  const offsetZ = worldZ + baseplateHalfSize;
-
-  if (offsetX < 0 || offsetZ < 0 || offsetX >= baseplateSize || offsetZ >= baseplateSize) {
-    return null;
-  }
-
-  const cellX = Math.floor(offsetX / waterCellSize);
-  const cellZ = Math.floor(offsetZ / waterCellSize);
-  if (
-    cellX < 0 ||
-    cellZ < 0 ||
-    cellX >= waterCellsPerSide ||
-    cellZ >= waterCellsPerSide
-  ) {
-    return null;
-  }
-
-  return { cellX, cellZ };
-}
-
-function updateOverlayVisibility(forceVisible = false) {
-  if (!overlay) {
-    return;
-  }
-
-  if (forceVisible) {
-    overlay.className = 'visible';
-    return;
-  }
-
-  if (suppressOverlay) {
-    overlay.className = 'hidden';
-    return;
-  }
-
-  const locked = document.pointerLockElement === canvas;
-  overlay.className = locked ? 'hidden' : 'visible';
-}
-
-function closeWaterInfoPanel({ skipOverlayReset = false } = {}) {
-  if (waterInfoPanel && !waterInfoPanel.hidden) {
-    waterInfoPanel.hidden = true;
-    waterInfoPanel.setAttribute('aria-hidden', 'true');
-  }
-
-  suppressOverlay = false;
-
-  if (!skipOverlayReset) {
-    updateOverlayVisibility();
-  }
-}
-
-function openWaterInfoPanel(cellX, cellZ, volume) {
-  const depth = waterCellArea > 0 ? volume / waterCellArea : 0;
-  terrainInfo.lastSelectedWaterCell = { x: cellX, z: cellZ, volume, depth };
-
-  if (waterInfoCoordinates) {
-    waterInfoCoordinates.textContent = `Coordenadas celda: x=${cellX} · z=${cellZ}`;
-  }
-
-  if (waterInfoVolume) {
-    const liters = volume * 1000;
-    waterInfoVolume.textContent = `Volumen estimado: ${volume.toFixed(3)} m³ (${liters.toFixed(1)} L)`;
-  }
-
-  if (waterInfoDepth) {
-    waterInfoDepth.textContent = `Profundidad estimada: ${depth.toFixed(2)} m`;
-  }
-
-  suppressOverlay = true;
-  updateOverlayVisibility();
-
-  if (waterInfoPanel) {
-    waterInfoPanel.hidden = false;
-    waterInfoPanel.setAttribute('aria-hidden', 'false');
-  }
-
-  if (document.pointerLockElement === canvas) {
-    document.exitPointerLock();
-  }
-
-  if (waterInfoClose) {
-    waterInfoClose.focus({ preventScroll: true });
-  }
-}
-
-function resetMovementState() {
-  movementState.forward = false;
-  movementState.backward = false;
-  movementState.left = false;
-  movementState.right = false;
-  movementState.up = false;
-  movementState.down = false;
-}
-
-function intersectRayWithHorizontalPlane(origin, direction, planeY) {
-  const epsilon = 1e-6;
-  if (Math.abs(direction[1]) < epsilon) {
-    return null;
-  }
-
-  const t = (planeY - origin[1]) / direction[1];
-  if (t <= 0) {
-    return null;
-  }
-
-  return add(origin, scale(direction, t));
-}
-
-function handleCanvasMouseDown(event) {
-  if (event.button !== 0) {
-    return;
-  }
-
-  if (document.pointerLockElement !== canvas) {
-    return;
-  }
-
-  if (!waterVolumeData || !waterVolumeData.volumes) {
-    return;
-  }
-
-  const rayOrigin = [...cameraPosition];
-  const rayDirection = normalize(getForwardDirection());
-
-  let hitPoint = intersectRayWithHorizontalPlane(rayOrigin, rayDirection, waterSurfaceLevel);
-  if (!hitPoint) {
-    hitPoint = intersectRayWithHorizontalPlane(rayOrigin, rayDirection, 0);
-  }
-
-  if (!hitPoint) {
-    return;
-  }
-
-  const cell = worldToWaterCell(hitPoint[0], hitPoint[2]);
-  if (!cell) {
-    return;
-  }
-
-  const index = cell.cellZ * waterVolumeData.cellsPerSide + cell.cellX;
-  const volume = waterVolumeData.volumes[index] ?? 0;
-  openWaterInfoPanel(cell.cellX, cell.cellZ, volume);
-  event.preventDefault();
-}
-
 function regenerateTerrain(seedString) {
   const { vertexData, minHeight, maxHeight, visibleVertices, heightField } =
     generateTerrainVertices(seedString);
@@ -649,11 +489,7 @@ function regenerateTerrain(seedString) {
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
   terrainHeightField = heightField;
-  waterVolumeData = generateWaterVolumeData(heightField);
-  terrainInfo.lastSelectedWaterCell = null;
-  if (waterInfoPanel && !waterInfoPanel.hidden) {
-    closeWaterInfoPanel({ skipOverlayReset: true });
-  }
+  updateGridBuffers(heightField);
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
   terrainInfo.maxHeight = Math.min(maxTerrainHeight, maxHeight);
@@ -725,14 +561,6 @@ const moveSpeed = 12;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
-}
-
-function getForwardDirection() {
-  return [
-    Math.sin(yaw) * Math.cos(pitch),
-    Math.sin(pitch),
-    -Math.cos(yaw) * Math.cos(pitch),
-  ];
 }
 
 function normalize(v) {
@@ -890,18 +718,12 @@ function requestCameraControl(event) {
   if (event) {
     event.preventDefault();
   }
-  if (waterInfoPanel && !waterInfoPanel.hidden) {
-    closeWaterInfoPanel();
-  }
-  suppressOverlay = false;
-  updateOverlayVisibility();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
   }
 }
 
 canvas.addEventListener('click', requestCameraControl);
-canvas.addEventListener('mousedown', handleCanvasMouseDown);
 
 if (startButton) {
   startButton.addEventListener('click', requestCameraControl);
@@ -938,27 +760,15 @@ if (randomSeedButton) {
   });
 }
 
-if (waterInfoClose) {
-  waterInfoClose.addEventListener('click', () => {
-    closeWaterInfoPanel();
-  });
-}
-
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
-  suppressOverlay = false;
-  updateOverlayVisibility(true);
+  overlay.className = 'visible';
 });
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
-  if (locked) {
-    suppressOverlay = false;
-  } else {
-    resetMovementState();
-  }
-  updateOverlayVisibility();
+  overlay.className = locked ? 'hidden' : 'visible';
 });
 
 document.addEventListener('mousemove', (event) => {
@@ -972,18 +782,6 @@ document.addEventListener('mousemove', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (isEditableElement(event.target)) {
-    return;
-  }
-  if (event.code === 'Escape' && waterInfoPanel && !waterInfoPanel.hidden) {
-    closeWaterInfoPanel();
-    event.preventDefault();
-    return;
-  }
-  const pointerLocked = document.pointerLockElement === canvas;
-  if (!pointerLocked) {
-    if (event.code === 'Enter') {
-      requestCameraControl(event);
-    }
     return;
   }
   switch (event.code) {
@@ -1005,6 +803,11 @@ document.addEventListener('keydown', (event) => {
     case 'KeyE':
       movementState.up = true;
       break;
+    case 'Enter':
+      if (document.pointerLockElement !== canvas) {
+        requestCameraControl(event);
+      }
+      return;
     default:
       return;
   }
@@ -1013,9 +816,6 @@ document.addEventListener('keydown', (event) => {
 
 document.addEventListener('keyup', (event) => {
   if (isEditableElement(event.target)) {
-    return;
-  }
-  if (document.pointerLockElement !== canvas) {
     return;
   }
   switch (event.code) {
@@ -1050,7 +850,11 @@ let displayedFps = 0;
 let lastGlError = 'ninguno';
 
 function update(deltaTime) {
-  const forwardDirection = getForwardDirection();
+  const forwardDirection = [
+    Math.sin(yaw) * Math.cos(pitch),
+    Math.sin(pitch),
+    -Math.cos(yaw) * Math.cos(pitch),
+  ];
 
   const flatForward = normalize([forwardDirection[0], 0, forwardDirection[2]]);
   const rightDirection = normalize(cross(flatForward, worldUp));
@@ -1161,15 +965,6 @@ function updateDebugConsole(deltaTime) {
     `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
-
-  if (terrainInfo.lastSelectedWaterCell) {
-    const { x, z, volume, depth } = terrainInfo.lastSelectedWaterCell;
-    info.push(
-      `Celda agua: x=${x} z=${z} volumen=${volume.toFixed(3)}m³ profundidad=${depth.toFixed(2)}m`
-    );
-  } else {
-    info.push('Celda agua: ninguna seleccionada');
-  }
 
   if (pointerLockErrors > 0) {
     info.push(`Pointer lock errores: ${pointerLockErrors}`);
