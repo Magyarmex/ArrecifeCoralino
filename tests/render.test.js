@@ -27,6 +27,9 @@ function createWebGLStub() {
     SRC_ALPHA: 0x0302,
     ONE_MINUS_SRC_ALPHA: 0x0303,
     NO_ERROR: 0x0000,
+    BLEND: 0x0be2,
+    SRC_ALPHA: 0x0302,
+    ONE_MINUS_SRC_ALPHA: 0x0303,
     CURRENT_PROGRAM: Symbol('CURRENT_PROGRAM'),
     ARRAY_BUFFER_BINDING: Symbol('ARRAY_BUFFER_BINDING'),
     VIEWPORT: Symbol('VIEWPORT'),
@@ -58,16 +61,10 @@ function createWebGLStub() {
     bufferData: () => {},
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
-    uniformMatrix4fv: (location, transpose, value) => {
-      if (value && typeof value.length === 'number') {
-        state.viewProjection = Array.from(value);
-      }
-    },
-    uniform1f: (location, value) => {
-      if (typeof value === 'number') {
-        state.opacity = value;
-      }
-    },
+    uniformMatrix4fv: () => {},
+    uniform3f: () => {},
+    uniform1f: () => {},
+    blendFunc: () => {},
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
@@ -160,36 +157,14 @@ function runGameScript() {
     addEventListener: () => {},
   };
 
-  const seeThroughToggle = {
+  const settingsDebugLog = {
+    textContent: '',
+  };
+
+  const debugTerrainToggle = {
     checked: false,
-    _listeners: {},
-    addEventListener(event, handler) {
-      this._listeners[event] = handler;
-    },
-    dispatch(eventType) {
-      const handler = this._listeners[eventType];
-      if (handler) {
-        handler({ target: this });
-      }
-    },
-  };
-
-  const selectionInfoPanel = {
-    hidden: true,
-  };
-
-  const selectionCloseButton = {
     addEventListener: () => {},
   };
-
-  const createField = () => ({ textContent: '—' });
-
-  const selectionBlockField = createField();
-  const selectionChunkField = createField();
-  const selectionWorldField = createField();
-  const selectionHeightField = createField();
-  const selectionWaterField = createField();
-  const selectionDepthField = createField();
 
   const listeners = {
     document: {},
@@ -222,15 +197,8 @@ function runGameScript() {
       if (id === 'settings-panel') return settingsPanel;
       if (id === 'seed-input') return seedInput;
       if (id === 'random-seed') return randomSeedButton;
-      if (id === 'see-through-toggle') return seeThroughToggle;
-      if (id === 'selection-info') return selectionInfoPanel;
-      if (id === 'selection-close') return selectionCloseButton;
-      if (id === 'selection-info-block') return selectionBlockField;
-      if (id === 'selection-info-chunk') return selectionChunkField;
-      if (id === 'selection-info-world') return selectionWorldField;
-      if (id === 'selection-info-height') return selectionHeightField;
-      if (id === 'selection-info-water') return selectionWaterField;
-      if (id === 'selection-info-depth') return selectionDepthField;
+      if (id === 'settings-debug-log') return settingsDebugLog;
+      if (id === 'debug-terrain-translucent') return debugTerrainToggle;
       return null;
     },
   };
@@ -321,17 +289,22 @@ function runTests() {
   );
   assert(triangleDraw, 'El terreno debe renderizar todos los vértices esperados');
 
-  const blockLines = glState.draws.find(
-    (draw) => draw.mode === 0x0001 && draw.count === expectedBlockLineVertices
-  );
-  assert(blockLines, 'La grid de bloques debe seguir el relieve del terreno completo');
+  const triangleDraws = glState.draws.filter((draw) => draw.mode === 0x0004);
+  assert(triangleDraws.length >= 2, 'Debe haber draw calls de triángulos para terreno y rocas');
+
+  const rockDraw = triangleDraws.find((draw) => draw.count !== expectedTerrainVertices);
+  assert(rockDraw, 'Las rocas deben renderizarse en draw calls adicionales');
+  assert(rockDraw.count % 3 === 0, 'La geometría de rocas debe estar compuesta por triángulos completos');
+
+  const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 516);
+  assert(blockLines, 'La grid de bloques debe contener 516 vértices de línea');
 
   const chunkLines = glState.draws.find(
     (draw) => draw.mode === 0x0001 && draw.count === expectedChunkLineVertices
   );
   assert(chunkLines, 'La grid de chunks debe trazar todos los límites sobre el terreno');
 
-  assert(glState.draws.length >= 3, 'Se esperan múltiples draw calls por cuadro');
+  assert(glState.draws.length >= 4, 'Se esperan múltiples draw calls por cuadro incluyendo rocas');
 
   assert(
     debugConsole.textContent.includes('Draw calls'),
@@ -393,6 +366,14 @@ function runTests() {
   assert(
     terrainInfo.maxHeight <= 20.0001,
     'La altura máxima del terreno debe estar acotada por el límite de 20 metros'
+  );
+  assert(
+    debugConsole.textContent.includes('Rocas generadas'),
+    'La consola de depuración debe reportar el número de rocas generadas'
+  );
+  assert(
+    terrainInfo.rockCount > 0,
+    'La generación de rocas debe producir al menos una formación'
   );
 
   seeThroughToggle.checked = true;
