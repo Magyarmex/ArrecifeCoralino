@@ -62,6 +62,21 @@ const selectionCloseButton =
 
 const bodyElement = document.body;
 
+const runtimeIssues = [];
+const MAX_RUNTIME_ISSUES = 8;
+let fatalRuntimeError = null;
+let loopHalted = false;
+
+const diagnosticsToast =
+  bodyElement && typeof document?.createElement === 'function'
+    ? createDiagnosticsToast()
+    : null;
+
+const overlayErrorMessage =
+  overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
+    ? createOverlayErrorMessage(overlay)
+    : null;
+
 function ensureEventDispatchSupport(element) {
   if (!element) {
     return;
@@ -144,6 +159,167 @@ function ensureEventDispatchSupport(element) {
 }
 
 ensureEventDispatchSupport(debugTerrainToggle);
+
+function createDiagnosticsToast() {
+  const element = document.createElement('div');
+  element.id = 'runtime-diagnostics-toast';
+  element.hidden = true;
+  element.setAttribute('role', 'alert');
+  Object.assign(element.style, {
+    position: 'fixed',
+    right: '24px',
+    bottom: '24px',
+    maxWidth: '360px',
+    padding: '12px 16px',
+    borderRadius: '12px',
+    background: 'rgba(164, 115, 42, 0.92)',
+    border: '1px solid rgba(255, 214, 153, 0.65)',
+    boxShadow: '0 10px 30px rgba(0, 0, 0, 0.35)',
+    fontFamily:
+      '"Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+    fontSize: '0.8rem',
+    lineHeight: '1.4',
+    color: '#fff6e5',
+    zIndex: '30',
+    pointerEvents: 'none',
+  });
+  document.body.appendChild(element);
+  return element;
+}
+
+function createOverlayErrorMessage(container) {
+  if (!document?.createElement || typeof container.appendChild !== 'function') {
+    return null;
+  }
+  const element = document.createElement('p');
+  element.id = 'runtime-error-message';
+  element.setAttribute('role', 'alert');
+  element.style.marginTop = '14px';
+  element.style.padding = '10px 12px';
+  element.style.borderRadius = '10px';
+  element.style.background = 'rgba(200, 64, 64, 0.2)';
+  element.style.border = '1px solid rgba(255, 128, 128, 0.35)';
+  element.style.color = '#ffecec';
+  element.style.fontSize = '0.85rem';
+  element.style.lineHeight = '1.45';
+  element.style.display = 'none';
+  container.appendChild(element);
+  return element;
+}
+
+function describeIssue(error) {
+  if (!error) {
+    return 'Error desconocido';
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error instanceof Error) {
+    return error.message || error.toString();
+  }
+  if (typeof error.message === 'string') {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch (serializationError) {
+    void serializationError;
+    return String(error);
+  }
+}
+
+function formatIssueMessage(entry) {
+  const summary = String(entry.message ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return summary || 'Error desconocido';
+}
+
+function updateDiagnosticsToast() {
+  if (!diagnosticsToast) {
+    return;
+  }
+  if (runtimeIssues.length === 0) {
+    diagnosticsToast.hidden = true;
+    return;
+  }
+  const latest = runtimeIssues[0];
+  diagnosticsToast.hidden = false;
+  diagnosticsToast.textContent = `[${latest.timestamp}] ${
+    latest.severity === 'fatal' ? 'Error crítico' : 'Problema'
+  } en ${latest.context}: ${formatIssueMessage(latest)}`;
+  diagnosticsToast.style.background =
+    latest.severity === 'fatal'
+      ? 'rgba(162, 44, 44, 0.92)'
+      : 'rgba(164, 115, 42, 0.92)';
+  diagnosticsToast.style.borderColor =
+    latest.severity === 'fatal'
+      ? 'rgba(255, 128, 128, 0.65)'
+      : 'rgba(255, 214, 153, 0.65)';
+}
+
+function recordRuntimeIssue(severity, context, error) {
+  const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const entry = {
+    severity,
+    context,
+    message: describeIssue(error),
+    timestamp,
+    stack: error && typeof error.stack === 'string' ? error.stack : null,
+  };
+  runtimeIssues.unshift(entry);
+  if (runtimeIssues.length > MAX_RUNTIME_ISSUES) {
+    runtimeIssues.length = MAX_RUNTIME_ISSUES;
+  }
+  updateDiagnosticsToast();
+  return entry;
+}
+
+function showOverlayIssue(entry) {
+  if (!overlay) {
+    return;
+  }
+  overlayDismissed = false;
+  applyTutorialState(true);
+  if (overlayErrorMessage) {
+    overlayErrorMessage.style.display = 'block';
+    overlayErrorMessage.textContent = `⚠️ ${
+      entry.severity === 'fatal' ? 'Error crítico' : 'Problema'
+    } en ${entry.context}: ${formatIssueMessage(entry)}`;
+  }
+}
+
+function handleFatalRuntimeError(error, context) {
+  if (fatalRuntimeError) {
+    return fatalRuntimeError;
+  }
+  const entry = recordRuntimeIssue('fatal', context, error);
+  fatalRuntimeError = entry;
+  loopHalted = true;
+  showOverlayIssue(entry);
+  console.error(`Error crítico en ${context}`, error);
+  return entry;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (event) => {
+    if (fatalRuntimeError) {
+      return;
+    }
+    const context = event.filename
+      ? `${event.filename.split('/').pop() ?? event.filename}:${event.lineno ?? ''}`
+      : 'ventana';
+    recordRuntimeIssue('error', context, event.error || event.message || event);
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    if (fatalRuntimeError) {
+      return;
+    }
+    recordRuntimeIssue('error', 'promesa', event.reason);
+  });
+}
 
 const initialTutorialActive = overlay?.classList?.contains('visible') ?? false;
 let tutorialActive = initialTutorialActive;
@@ -340,6 +516,7 @@ if (typeof window !== 'undefined') {
   window.__selectedSquare = null;
   window.__selectBlockAt = (x, y) => selectBlockAtScreen(x, y);
   window.__clearSelection = () => clearSelection();
+  window.__runtimeIssues = runtimeIssues;
   if (debugTerrainToggle) {
     if (!('seeThroughToggle' in window)) {
       window.seeThroughToggle = debugTerrainToggle;
@@ -1649,10 +1826,18 @@ function setSeed(nextSeed) {
   if (seedInput && seedInput.value !== chosen) {
     seedInput.value = chosen;
   }
-  regenerateTerrain(chosen);
+  try {
+    regenerateTerrain(chosen);
+  } catch (error) {
+    handleFatalRuntimeError(error, 'regeneración de terreno');
+  }
 }
 
-regenerateTerrain(currentSeed);
+try {
+  regenerateTerrain(currentSeed);
+} catch (error) {
+  handleFatalRuntimeError(error, 'generación inicial de terreno');
+}
 
 function isEditableElement(element) {
   if (!element) {
@@ -1689,10 +1874,6 @@ const cameraPosition = [0, 5, 20];
 
 const pointerSensitivity = 0.002;
 const moveSpeed = 12;
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
 
 function normalize(v) {
   const length = Math.hypot(v[0], v[1], v[2]);
@@ -1916,6 +2097,12 @@ updateCanvasSize();
 window.addEventListener('resize', updateCanvasSize);
 
 function requestCameraControl(event) {
+  if (fatalRuntimeError) {
+    if (event) {
+      event.preventDefault();
+    }
+    return;
+  }
   if (event) {
     event.preventDefault();
   }
@@ -1927,6 +2114,9 @@ function requestCameraControl(event) {
 
 canvas.addEventListener('click', requestCameraControl);
 canvas.addEventListener('pointerdown', (event) => {
+  if (fatalRuntimeError) {
+    return;
+  }
   if (event.button !== 0) {
     return;
   }
@@ -2392,6 +2582,14 @@ function updateDebugConsole(deltaTime) {
     info.push(`Pointer lock errores: ${pointerLockErrors}`);
   }
 
+  if (runtimeIssues.length > 0) {
+    info.push('', 'Problemas recientes:');
+    for (const issue of runtimeIssues) {
+      const marker = issue.severity === 'fatal' ? '⛔' : '⚠️';
+      info.push(`${marker} [${issue.timestamp}] ${issue.context}: ${formatIssueMessage(issue)}`);
+    }
+  }
+
   const output = info.join('\n');
 
   if (debugConsole) {
@@ -2403,42 +2601,51 @@ function updateDebugConsole(deltaTime) {
 }
 
 function loop(currentTime) {
-  const deltaTime = (currentTime - previousTime) / 1000;
-  previousTime = currentTime;
-
-  tickAccumulator += deltaTime;
-  ticksLastFrame = 0;
-
-  while (tickAccumulator >= tickInterval) {
-    tickSimulation(tickInterval);
-    tickAccumulator -= tickInterval;
-    simulationTime += baseSimulationStep;
-    updateDayNightCycleState(simulationTime);
-    totalTicks += 1;
-    ticksLastFrame += 1;
-    tickStatsAccumulator += tickInterval;
-    tickSamples += 1;
+  if (loopHalted) {
+    return;
   }
 
-  if (tickStatsAccumulator >= 0.5) {
-    displayedTps = tickSamples / tickStatsAccumulator;
-    tickStatsAccumulator = 0;
-    tickSamples = 0;
+  try {
+    const deltaTime = (currentTime - previousTime) / 1000;
+    previousTime = currentTime;
+
+    tickAccumulator += deltaTime;
+    ticksLastFrame = 0;
+
+    while (tickAccumulator >= tickInterval) {
+      tickSimulation(tickInterval);
+      tickAccumulator -= tickInterval;
+      simulationTime += baseSimulationStep;
+      updateDayNightCycleState(simulationTime);
+      totalTicks += 1;
+      ticksLastFrame += 1;
+      tickStatsAccumulator += tickInterval;
+      tickSamples += 1;
+    }
+
+    if (tickStatsAccumulator >= 0.5) {
+      displayedTps = tickSamples / tickStatsAccumulator;
+      tickStatsAccumulator = 0;
+      tickSamples = 0;
+    }
+
+    simulationInfo.speed = simulationSpeed;
+    simulationInfo.tickRate = targetTickRate;
+    simulationInfo.tickInterval = tickInterval;
+    simulationInfo.time = simulationTime;
+    simulationInfo.totalTicks = totalTicks;
+    simulationInfo.displayedTps = displayedTps;
+    simulationInfo.ticksLastFrame = ticksLastFrame;
+    simulationInfo.dayNight = dayNightCycleState;
+
+    update(deltaTime);
+    render();
+    updateDebugConsole(deltaTime);
+    updateSimulationHud();
+  } catch (error) {
+    handleFatalRuntimeError(error, 'bucle principal');
+    return;
   }
-
-  simulationInfo.speed = simulationSpeed;
-  simulationInfo.tickRate = targetTickRate;
-  simulationInfo.tickInterval = tickInterval;
-  simulationInfo.time = simulationTime;
-  simulationInfo.totalTicks = totalTicks;
-  simulationInfo.displayedTps = displayedTps;
-  simulationInfo.ticksLastFrame = ticksLastFrame;
-  simulationInfo.dayNight = dayNightCycleState;
-
-  update(deltaTime);
-  render();
-  updateDebugConsole(deltaTime);
-  updateSimulationHud();
 
   requestAnimationFrame(loop);
 }
