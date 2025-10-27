@@ -11,10 +11,42 @@ body {
 }
 
 #scene {
+  position: fixed;
+  top: 0;
+  left: 0;
   width: 100vw;
   height: 100vh;
   display: block;
   background: radial-gradient(circle at center, #1f2a3a 0%, #0b0c10 70%);
+  transition: background 1.2s ease;
+}
+
+#skybox-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.celestial-body {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  filter: blur(0.2px) drop-shadow(0 0 22px rgba(255, 255, 255, 0.35));
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: background 1s ease;
+}
+
+.celestial-body.sun {
+  background: radial-gradient(circle at 30% 30%, #fff6bf 0%, #ffdf73 55%, #ffb347 100%);
+  box-shadow: 0 0 45px rgba(255, 215, 110, 0.8);
+}
+
+.celestial-body.moon {
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #dfe7ff 55%, #a8b5ff 100%);
+  box-shadow: 0 0 32px rgba(180, 190, 255, 0.7);
 }
 
 #overlay {
@@ -29,6 +61,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
   transition: opacity 0.3s ease;
+  z-index: 10;
 }
 
 #overlay h1 {
@@ -89,6 +122,7 @@ body {
   overflow: auto;
   white-space: pre-wrap;
   pointer-events: none;
+  z-index: 10;
 }
 
 #settings-container {
