@@ -8,6 +8,7 @@ function createWebGLStub() {
     boundArrayBuffer: null,
     viewport: [0, 0, 0, 0],
     draws: [],
+    viewProjection: null,
   };
 
   const gl = {
@@ -53,7 +54,11 @@ function createWebGLStub() {
     bufferData: () => {},
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
-    uniformMatrix4fv: () => {},
+    uniformMatrix4fv: (location, transpose, value) => {
+      if (value && typeof value.length === 'number') {
+        state.viewProjection = Array.from(value);
+      }
+    },
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
@@ -227,6 +232,13 @@ function runTests() {
 
   assert(glState.viewport[2] === window.innerWidth, 'Viewport debe usar el ancho completo');
   assert(glState.viewport[3] === window.innerHeight, 'Viewport debe usar el alto completo');
+
+  assert(Array.isArray(glState.viewProjection), 'La matriz viewProjection debe enviarse al shader');
+  const viewProjectionW = glState.viewProjection[15];
+  assert(
+    Number.isFinite(viewProjectionW) && Math.abs(viewProjectionW) > 1e-5,
+    'La matriz viewProjection debe preservar un componente w distinto de cero'
+  );
 
   const triangleDraw = glState.draws.find(
     (draw) => draw.mode === 0x0004 && draw.count === expectedTerrainVertices
