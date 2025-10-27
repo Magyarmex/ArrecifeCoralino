@@ -456,3 +456,103 @@ body.tutorial-active #simulation-hud {
   line-height: 1.35;
   color: rgba(244, 236, 216, 0.85);
 }
+
+.water-info {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(7, 15, 25, 0.62);
+  backdrop-filter: blur(6px);
+  z-index: 48;
+}
+
+.water-info[hidden] {
+  display: none !important;
+}
+
+.water-info__content {
+  width: min(360px, 90vw);
+  padding: 24px 28px;
+  border-radius: 16px;
+  background: rgba(16, 24, 32, 0.92);
+  border: 1px solid rgba(109, 190, 255, 0.38);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: #d9f0ff;
+}
+
+.water-info__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.water-info__header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: 0.04em;
+}
+
+.water-info__close {
+  appearance: none;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 1.45rem;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.12);
+  color: #e9f7ff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.water-info__close:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.water-info__description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(217, 240, 255, 0.82);
+}
+
+.water-info__stats {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.92rem;
+}
+
+.water-info__stats dt {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.7;
+}
+
+.water-info__stats dd {
+  margin: 2px 0 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.water-info__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(217, 240, 255, 0.62);
+}
