@@ -10,6 +10,7 @@ function createWebGLStub() {
     draws: [],
     viewProjection: null,
     opacity: 1,
+    depthMask: true,
   };
 
   const gl = {
@@ -74,6 +75,9 @@ function createWebGLStub() {
       state.opacity = value;
     },
     blendFunc: () => {},
+    depthMask: (flag) => {
+      state.depthMask = flag;
+    },
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
@@ -214,10 +218,6 @@ function runGameScript() {
     addEventListener: () => {},
   };
 
-  const settingsDebugLog = {
-    textContent: '',
-  };
-
   const debugTerrainToggle = {
     checked: false,
     addEventListener: () => {},
@@ -260,7 +260,6 @@ function runGameScript() {
       if (id === 'settings-panel') return settingsPanel;
       if (id === 'seed-input') return seedInput;
       if (id === 'random-seed') return randomSeedButton;
-      if (id === 'settings-debug-log') return settingsDebugLog;
       if (id === 'debug-terrain-translucent') return debugTerrainToggle;
       if (id === 'day-cycle-progress-track') return dayCycleProgressTrack;
       if (id === 'day-cycle-progress-fill') return dayCycleProgressFill;
@@ -345,7 +344,7 @@ function runTests() {
   const chunksPerSide = 16;
   const blocksPerSide = blocksPerChunk * chunksPerSide;
   const expectedTerrainVertices = blocksPerSide * blocksPerSide * 6;
-  const expectedBlockLineVertices = (blocksPerSide + 1) * 4;
+  const expectedBlockLineVertices = blocksPerSide * (blocksPerSide + 1) * 4;
   const expectedChunkLineVertices = (blocksPerSide / blocksPerChunk + 1) * blocksPerSide * 4;
 
   assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
@@ -378,7 +377,7 @@ function runTests() {
   );
   assert(
     blockLines,
-    `La grid de bloques debe contener ${expectedBlockLineVertices} vértices de línea`,
+    `La grid de bloques debe seguir la topografía con ${expectedBlockLineVertices} vértices`,
   );
 
   const chunkLines = glState.draws.find(
@@ -387,6 +386,8 @@ function runTests() {
   assert(chunkLines, 'La grid de chunks debe trazar todos los límites sobre el terreno');
 
   assert(glState.draws.length >= 4, 'Se esperan múltiples draw calls por cuadro incluyendo rocas');
+
+  assert(glState.depthMask === true, 'El render debe restaurar la escritura en el depth buffer tras los grids');
 
   assert(
     debugConsole.textContent.includes('Draw calls'),

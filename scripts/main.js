@@ -24,7 +24,6 @@ const dayCyclePhaseIconMap = new Map(
     .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
     .filter(([phase, element]) => phase && element),
 );
-const settingsDebugLog = document.getElementById('settings-debug-log');
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
 function createFallbackInfoPanel() {
@@ -531,9 +530,6 @@ const drawStats = {
   total: 0,
 };
 
-const defaultTerrainOpacity = 1;
-const seeThroughTerrainOpacity = 0.45;
-
 if (typeof window !== 'undefined') {
   window.__terrainInfo = terrainInfo;
   window.__selectedSquare = null;
@@ -842,39 +838,7 @@ function createTerrainGridVertices(heightField, step, color, heightOffset) {
 }
 
 function createBlockGridVertices(heightField, color, heightOffset) {
-  if (!heightField) {
-    return new Float32Array(0);
-  }
-
-  const blocksPerSide = heightField.length - 1;
-  const half = baseplateSize / 2;
-  const totalLines = (blocksPerSide + 1) * 2;
-  const vertexData = new Float32Array(totalLines * 2 * floatsPerVertex);
-  let offset = 0;
-
-  const sample = (xIndex, zIndex) => {
-    const clampedX = Math.max(0, Math.min(blocksPerSide, xIndex));
-    const clampedZ = Math.max(0, Math.min(blocksPerSide, zIndex));
-    return heightField[clampedZ][clampedX] + heightOffset;
-  };
-
-  for (let xi = 0; xi <= blocksPerSide; xi++) {
-    const worldX = -half + xi * blockSize;
-    const startHeight = sample(xi, 0);
-    const endHeight = sample(xi, blocksPerSide);
-    offset = pushVertex(vertexData, offset, worldX, startHeight, -half, color);
-    offset = pushVertex(vertexData, offset, worldX, endHeight, half, color);
-  }
-
-  for (let zi = 0; zi <= blocksPerSide; zi++) {
-    const worldZ = -half + zi * blockSize;
-    const startHeight = sample(0, zi);
-    const endHeight = sample(blocksPerSide, zi);
-    offset = pushVertex(vertexData, offset, -half, startHeight, worldZ, color);
-    offset = pushVertex(vertexData, offset, half, endHeight, worldZ, color);
-  }
-
-  return offset === vertexData.length ? vertexData : vertexData.subarray(0, offset);
+  return createTerrainGridVertices(heightField, 1, color, heightOffset);
 }
 
 function updateGridBuffers(heightField) {
@@ -2578,8 +2542,12 @@ function render() {
 
   const hasGridGeometry = blockGridVertexCount > 0 || chunkGridVertexCount > 0;
   if (hasGridGeometry) {
-    if (typeof gl.disable === 'function') {
-      gl.disable(gl.DEPTH_TEST);
+    if (typeof gl.enable === 'function') {
+      gl.enable(gl.DEPTH_TEST);
+    }
+
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
     }
 
     if (blockGridVertexCount > 0) {
@@ -2596,8 +2564,8 @@ function render() {
       drawStats.total += 1;
     }
 
-    if (typeof gl.enable === 'function') {
-      gl.enable(gl.DEPTH_TEST);
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(true);
     }
   }
 
@@ -2621,7 +2589,7 @@ function render() {
 }
 
 function updateDebugConsole(deltaTime) {
-  if (!debugConsole && !settingsDebugLog) {
+  if (!debugConsole) {
     return;
   }
 
@@ -2689,14 +2657,9 @@ function updateDebugConsole(deltaTime) {
 
   const output = info.join('\n');
 
-  if (debugConsole) {
-    debugConsole.textContent = output;
-    if (typeof debugConsole.setAttribute === 'function') {
-      debugConsole.setAttribute('aria-hidden', 'false');
-    }
-  }
-  if (settingsDebugLog) {
-    settingsDebugLog.textContent = output;
+  debugConsole.textContent = output;
+  if (typeof debugConsole.setAttribute === 'function') {
+    debugConsole.setAttribute('aria-hidden', 'false');
   }
 }
 
