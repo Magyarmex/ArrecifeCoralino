@@ -1,0 +1,255 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: #0b0c10;
+  color: #f7f7f7;
+  overflow: hidden;
+}
+
+#scene {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  background: radial-gradient(circle at center, #1f2a3a 0%, #0b0c10 70%);
+}
+
+#overlay {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  max-width: 360px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: rgba(12, 18, 28, 0.85);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  transition: opacity 0.3s ease;
+}
+
+#overlay h1 {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+#overlay p {
+  margin: 6px 0;
+  line-height: 1.4;
+  font-size: 0.95rem;
+}
+
+#overlay button {
+  appearance: none;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 8px;
+  margin-top: 10px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+#overlay button:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+#overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#settings-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  z-index: 20;
+}
+
+.settings-toggle {
+  appearance: none;
+  border: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #f4f1e5;
+  font-size: 1.35rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.settings-toggle:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.settings-panel {
+  width: 240px;
+  padding: 16px 18px 18px;
+  border-radius: 14px;
+  background: rgba(22, 19, 15, 0.92);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #f2e8d5;
+}
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.settings-panel label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.78;
+}
+
+.settings-panel input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(17, 15, 12, 0.85);
+  color: #f7f0de;
+  font: inherit;
+  transition: border 0.2s ease, background 0.2s ease;
+}
+
+.settings-panel input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(27, 24, 20, 0.9);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-panel button {
+  flex: 1;
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.16);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.settings-panel button:hover {
+  background: rgba(255, 255, 255, 0.26);
+  transform: translateY(-1px);
+}
+
+.settings-section {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(13, 11, 8, 0.68);
+  overflow: hidden;
+}
+
+.settings-section + .settings-section {
+  margin-top: 10px;
+}
+
+.settings-section[open] {
+  background: rgba(18, 15, 12, 0.78);
+}
+
+.settings-section summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: #f3e7cb;
+  list-style: none;
+}
+
+.settings-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-section[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.settings-section > *:not(summary) {
+  padding: 10px 12px 12px;
+}
+
+.settings-section label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.debug-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #f0e3c3;
+}
+
+.toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+#debug-console {
+  max-height: 220px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(5, 9, 14, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.78rem;
+  color: #d9f1ff;
+  line-height: 1.4;
+  overflow: auto;
+  white-space: pre-wrap;
+}

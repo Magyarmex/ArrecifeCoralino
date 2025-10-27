@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Explorador Freecam - Arrecife Coralino</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="overlay" class="visible">
+      <h1>Exploración Libre</h1>
+      <p>Haz clic para capturar el cursor y usa el ratón para mirar.</p>
+      <p>
+        Movimiento: <strong>W</strong>/<strong>A</strong>/<strong>S</strong>/<strong>D</strong>
+        &bull; Altura: <strong>Q</strong> (bajar), <strong>E</strong> (subir)
+      </p>
+      <p>
+        Explora la isla submarina arenosa segmentada en 16&times;16 chunks y su
+        grid de bloques.
+      </p>
+      <p>
+        Ajusta la semilla del terreno desde el menú de configuración con el
+        ícono de engrane en la esquina superior derecha.
+      </p>
+      <p>Presiona <strong>Esc</strong> para liberar el cursor.</p>
+      <button type="button" id="start-button">Iniciar exploración</button>
+    </div>
+    <div id="settings-container">
+      <button
+        id="settings-toggle"
+        class="settings-toggle"
+        type="button"
+        aria-haspopup="true"
+        aria-expanded="false"
+        aria-controls="settings-panel"
+        title="Configuración"
+      >
+        ⚙️
+      </button>
+      <form id="settings-panel" class="settings-panel" hidden>
+        <h2>Configuración</h2>
+        <details class="settings-section" open>
+          <summary>Terreno</summary>
+          <label for="seed-input">Semilla del terreno</label>
+          <input
+            id="seed-input"
+            name="seed"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="settings-actions">
+            <button type="submit" id="apply-seed">Aplicar</button>
+            <button type="button" id="random-seed">Aleatoria</button>
+          </div>
+        </details>
+        <details class="settings-section" id="debug-section">
+          <summary>Debug</summary>
+          <div class="debug-controls">
+            <label class="toggle">
+              <input type="checkbox" id="see-through-toggle" />
+              See-through terrain
+            </label>
+            <pre id="debug-console" aria-live="polite"></pre>
+          </div>
+        </details>
+      </form>
+    </div>
+    <script src="scripts/main.js" type="module"></script>
+  </body>
+</html>
