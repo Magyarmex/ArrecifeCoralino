@@ -1,5 +1,7 @@
 const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
+const startButton = document.getElementById('start-button');
+const debugConsole = document.getElementById('debug-console');
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -8,7 +10,9 @@ if (!gl) {
   throw new Error('WebGL no soportado');
 }
 
-gl.clearColor(0.04, 0.06, 0.09, 1);
+const GL_NO_ERROR = gl.NO_ERROR ?? 0;
+
+gl.clearColor(0.05, 0.08, 0.12, 1);
 gl.enable(gl.DEPTH_TEST);
 
 function createShader(type, source) {
@@ -28,21 +32,20 @@ function createShader(type, source) {
 
 const vertexSource = `
   attribute vec3 position;
+  attribute vec3 color;
   uniform mat4 viewProjection;
-  varying float vDepth;
+  varying vec3 vColor;
   void main() {
-    vec4 worldPosition = vec4(position, 1.0);
-    gl_Position = viewProjection * worldPosition;
-    vDepth = position.y;
+    gl_Position = viewProjection * vec4(position, 1.0);
+    vColor = color;
   }
 `;
 
 const fragmentSource = `
   precision mediump float;
-  varying float vDepth;
+  varying vec3 vColor;
   void main() {
-    vec3 baseColor = mix(vec3(0.18, 0.4, 0.6), vec3(0.08, 0.16, 0.24), clamp(-vDepth * 0.02, 0.0, 1.0));
-    gl_FragColor = vec4(baseColor, 1.0);
+    gl_FragColor = vec4(vColor, 1.0);
   }
 `;
 
@@ -66,31 +69,74 @@ if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
 gl.useProgram(program);
 
 const positionAttribute = gl.getAttribLocation(program, 'position');
+const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 
-const gridSize = 200;
-const gridDivisions = 50;
+const blockSize = 0.5; // metros virtuales
+const blocksPerChunk = 8;
+const chunksPerSide = 16;
+const chunkSize = blockSize * blocksPerChunk;
+const baseplateSize = chunkSize * chunksPerSide;
 
-function createGridBuffer(size, divisions) {
+const floatsPerVertex = 6;
+const vertexStride = floatsPerVertex * Float32Array.BYTES_PER_ELEMENT;
+
+function createBaseplate(size, color, yOffset) {
   const half = size / 2;
-  const step = size / divisions;
+  return new Float32Array([
+    -half, yOffset, -half, color[0], color[1], color[2],
+    half, yOffset, -half, color[0], color[1], color[2],
+    half, yOffset, half, color[0], color[1], color[2],
+    -half, yOffset, -half, color[0], color[1], color[2],
+    half, yOffset, half, color[0], color[1], color[2],
+    -half, yOffset, half, color[0], color[1], color[2],
+  ]);
+}
+
+function createLineGrid(size, step, color, yOffset) {
+  const half = size / 2;
+  const lineCount = Math.round(size / step);
   const vertices = [];
-  for (let i = 0; i <= divisions; i++) {
+  for (let i = 0; i <= lineCount; i++) {
     const position = -half + i * step;
-    // Línea paralela al eje Z
-    vertices.push(position, 0, -half);
-    vertices.push(position, 0, half);
-    // Línea paralela al eje X
-    vertices.push(-half, 0, position);
-    vertices.push(half, 0, position);
+    // Líneas paralelas al eje Z
+    vertices.push(position, yOffset, -half, color[0], color[1], color[2]);
+    vertices.push(position, yOffset, half, color[0], color[1], color[2]);
+    // Líneas paralelas al eje X
+    vertices.push(-half, yOffset, position, color[0], color[1], color[2]);
+    vertices.push(half, yOffset, position, color[0], color[1], color[2]);
   }
   return new Float32Array(vertices);
 }
 
-const gridVertices = createGridBuffer(gridSize, gridDivisions);
-const gridBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, gridBuffer);
-gl.bufferData(gl.ARRAY_BUFFER, gridVertices, gl.STATIC_DRAW);
+function createBuffer(data) {
+  const buffer = gl.createBuffer();
+  if (!buffer) {
+    throw new Error('No se pudo crear el buffer');
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+  return buffer;
+}
+
+const baseplateColor = [0.14, 0.22, 0.27];
+const blockLineColor = [0.28, 0.38, 0.45];
+const chunkLineColor = [0.42, 0.55, 0.62];
+
+const baseplateVertices = createBaseplate(baseplateSize, baseplateColor, -0.01);
+const blockGridVertices = createLineGrid(baseplateSize, blockSize, blockLineColor, 0);
+const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColor, 0.002);
+
+const baseplateBuffer = createBuffer(baseplateVertices);
+const blockGridBuffer = createBuffer(blockGridVertices);
+const chunkGridBuffer = createBuffer(chunkGridVertices);
+
+const baseplateVertexCount = baseplateVertices.length / floatsPerVertex;
+const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
+const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
+
+gl.enableVertexAttribArray(positionAttribute);
+gl.enableVertexAttribArray(colorAttribute);
 
 const worldUp = [0, 1, 0];
 const movementState = {
@@ -103,7 +149,7 @@ const movementState = {
 };
 
 let yaw = 0; // Comienza mirando hacia -Z
-let pitch = 0;
+let pitch = -0.35; // Inclina ligeramente la cámara hacia abajo para mostrar la baseplate inicial
 const cameraPosition = [0, 5, 20];
 
 const pointerSensitivity = 0.002;
@@ -219,10 +265,25 @@ function updateCanvasSize() {
 updateCanvasSize();
 window.addEventListener('resize', updateCanvasSize);
 
-canvas.addEventListener('click', () => {
+function requestCameraControl(event) {
+  if (event) {
+    event.preventDefault();
+  }
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
   }
+}
+
+canvas.addEventListener('click', requestCameraControl);
+
+if (startButton) {
+  startButton.addEventListener('click', requestCameraControl);
+}
+
+let pointerLockErrors = 0;
+document.addEventListener('pointerlockerror', () => {
+  pointerLockErrors += 1;
+  overlay.className = 'visible';
 });
 
 document.addEventListener('pointerlockchange', () => {
@@ -259,6 +320,11 @@ document.addEventListener('keydown', (event) => {
     case 'KeyE':
       movementState.up = true;
       break;
+    case 'Enter':
+      if (document.pointerLockElement !== canvas) {
+        requestCameraControl(event);
+      }
+      return;
     default:
       return;
   }
@@ -292,6 +358,10 @@ document.addEventListener('keyup', (event) => {
 });
 
 let previousTime = performance.now();
+let fpsAccumulator = 0;
+let fpsSamples = 0;
+let displayedFps = 0;
+let lastGlError = 'ninguno';
 
 function update(deltaTime) {
   const forwardDirection = [
@@ -334,15 +404,64 @@ function update(deltaTime) {
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
 }
 
+function bindGeometry(buffer) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.vertexAttribPointer(positionAttribute, 3, gl.FLOAT, false, vertexStride, 0);
+  gl.vertexAttribPointer(colorAttribute, 3, gl.FLOAT, false, vertexStride, 12);
+}
+
 function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  gl.bindBuffer(gl.ARRAY_BUFFER, gridBuffer);
-  gl.enableVertexAttribArray(positionAttribute);
-  gl.vertexAttribPointer(positionAttribute, 3, gl.FLOAT, false, 0, 0);
+  bindGeometry(baseplateBuffer);
+  gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
 
-  const vertexCount = gridVertices.length / 3;
-  gl.drawArrays(gl.LINES, 0, vertexCount);
+  bindGeometry(blockGridBuffer);
+  gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
+
+  bindGeometry(chunkGridBuffer);
+  gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+
+  if (typeof gl.getError === 'function') {
+    const error = gl.getError();
+    lastGlError = error === GL_NO_ERROR ? 'ninguno' : `0x${error.toString(16)}`;
+  }
+}
+
+function updateDebugConsole(deltaTime) {
+  if (!debugConsole) {
+    return;
+  }
+
+  fpsAccumulator += deltaTime;
+  fpsSamples += 1;
+  if (fpsAccumulator >= 0.5) {
+    displayedFps = fpsSamples / fpsAccumulator;
+    fpsAccumulator = 0;
+    fpsSamples = 0;
+  }
+
+  const pointerLocked = document.pointerLockElement === canvas;
+  const activeMovement = Object.entries(movementState)
+    .filter(([, active]) => active)
+    .map(([key]) => key)
+    .join(', ');
+
+  const info = [
+    `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
+    `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
+    `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
+    `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
+    `Movimiento activo: ${activeMovement || 'Ninguno'}`,
+    `Draw calls: base=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+    `GL error: ${lastGlError}`,
+  ];
+
+  if (pointerLockErrors > 0) {
+    info.push(`Pointer lock errores: ${pointerLockErrors}`);
+  }
+
+  debugConsole.textContent = info.join('\n');
 }
 
 function loop(currentTime) {
@@ -351,6 +470,7 @@ function loop(currentTime) {
 
   update(deltaTime);
   render();
+  updateDebugConsole(deltaTime);
 
   requestAnimationFrame(loop);
 }

@@ -21,6 +21,7 @@ function createWebGLStub() {
     DEPTH_BUFFER_BIT: 0x0100,
     VERTEX_SHADER: 0x8b31,
     FRAGMENT_SHADER: 0x8b30,
+    NO_ERROR: 0x0000,
     CURRENT_PROGRAM: Symbol('CURRENT_PROGRAM'),
     ARRAY_BUFFER_BINDING: Symbol('ARRAY_BUFFER_BINDING'),
     VIEWPORT: Symbol('VIEWPORT'),
@@ -59,6 +60,7 @@ function createWebGLStub() {
     drawArrays: (mode, first, count) => {
       state.draws.push({ mode, first, count });
     },
+    getError: () => gl.NO_ERROR,
     getParameter: (param) => {
       if (param === gl.CURRENT_PROGRAM) {
         return state.currentProgram;
@@ -102,6 +104,15 @@ function runGameScript() {
   const overlay = {
     className: 'visible',
     innerHTML: '',
+    addEventListener: () => {},
+  };
+
+  const startButton = {
+    addEventListener: () => {},
+  };
+
+  const debugConsole = {
+    textContent: '',
   };
 
   const listeners = {
@@ -129,6 +140,8 @@ function runGameScript() {
     getElementById: (id) => {
       if (id === 'scene') return canvas;
       if (id === 'overlay') return overlay;
+      if (id === 'start-button') return startButton;
+      if (id === 'debug-console') return debugConsole;
       return null;
     },
   };
@@ -159,7 +172,7 @@ function runGameScript() {
     callback(performance._now);
   }
 
-  return { canvas, overlay, glState: state };
+  return { canvas, overlay, debugConsole, glState: state };
 }
 
 function assert(condition, message) {
@@ -169,7 +182,7 @@ function assert(condition, message) {
 }
 
 function runTests() {
-  const { canvas, overlay, glState } = runGameScript();
+  const { canvas, overlay, debugConsole, glState } = runGameScript();
 
   assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
   assert(canvas.height === window.innerHeight, 'El canvas debe igualar el alto de la ventana');
@@ -188,8 +201,18 @@ function runTests() {
 
   assert(glState.draws.length >= 3, 'Se esperan múltiples draw calls por cuadro');
 
+  assert(
+    debugConsole.textContent.includes('Draw calls'),
+    'La consola de depuración debe reportar los draw calls'
+  );
+
+  assert(
+    debugConsole.textContent.includes('GL error'),
+    'La consola de depuración debe mostrar el estado de WebGL'
+  );
+
   console.log('✅ Todas las pruebas pasaron');
-  return { canvas, overlay, glState };
+  return { canvas, overlay, debugConsole, glState };
 }
 
 runTests();
