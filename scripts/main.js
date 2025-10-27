@@ -3,6 +3,8 @@ const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
+const debugPanel = document.getElementById('debug-panel');
+const debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -84,6 +86,7 @@ let activeWaterSelection = null;
 let ignoreNextWaterPointerDown = false;
 let waterInfoPointerHandler = null;
 let waterInfoKeyHandler = null;
+let debugPanelExpanded = false;
 
 const diagnosticsToast =
   bodyElement && typeof document?.createElement === 'function'
@@ -94,6 +97,8 @@ const overlayErrorMessage =
   overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
     ? createOverlayErrorMessage(overlay)
     : null;
+
+setDebugPanelExpanded(false);
 
 function ensureEventDispatchSupport(element) {
   if (!element) {
@@ -1007,6 +1012,25 @@ function updateSelectionPanel(selection) {
   }
 }
 
+function setDebugPanelExpanded(expanded) {
+  debugPanelExpanded = Boolean(expanded);
+
+  if (debugPanel && typeof debugPanel.classList?.toggle === 'function') {
+    debugPanel.classList.toggle('debug-panel--expanded', debugPanelExpanded);
+  }
+
+  if (debugToggleButton) {
+    debugToggleButton.setAttribute('aria-expanded', String(debugPanelExpanded));
+  }
+
+  if (debugConsole) {
+    debugConsole.hidden = !debugPanelExpanded;
+    if (typeof debugConsole.setAttribute === 'function') {
+      debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
+    }
+  }
+}
+
 function computeWaterTileVolume(selection) {
   if (!selection) {
     return 0;
@@ -1049,6 +1073,9 @@ function closeWaterInfo(options = {}) {
 
   if (waterInfoPanel) {
     waterInfoPanel.hidden = true;
+    if (typeof waterInfoPanel.setAttribute === 'function') {
+      waterInfoPanel.setAttribute('aria-hidden', 'true');
+    }
   }
 
   if (
@@ -1076,9 +1103,17 @@ function openWaterInfo(selection, event) {
     return;
   }
 
+  if (!selection || !selection.underwater) {
+    closeWaterInfo();
+    return;
+  }
+
   activeWaterSelection = selection;
   updateWaterInfoPanel(selection);
   waterInfoPanel.hidden = false;
+  if (typeof waterInfoPanel.setAttribute === 'function') {
+    waterInfoPanel.setAttribute('aria-hidden', 'false');
+  }
   ignoreNextWaterPointerDown = event?.type === 'pointerdown';
 
   if (!waterInfoPointerHandler) {
@@ -1285,13 +1320,14 @@ function exitFreeCameraMode() {
 }
 
 function activateInteractable(selection, event) {
-  exitFreeCameraMode();
-  if (!selection) {
+  const targetSelection = selection ?? selectedBlock;
+  if (!targetSelection || !targetSelection.underwater) {
     closeWaterInfo();
     return;
   }
-  updateSelectionPanel(selection);
-  openWaterInfo(selection, event);
+  exitFreeCameraMode();
+  updateSelectionPanel(targetSelection);
+  openWaterInfo(targetSelection, event);
 }
 
 function generateTerrainVertices(seedString) {
@@ -2290,6 +2326,15 @@ if (randomSeedButton) {
   });
 }
 
+if (debugToggleButton) {
+  debugToggleButton.addEventListener('click', () => {
+    setDebugPanelExpanded(!debugPanelExpanded);
+    if (debugPanelExpanded && debugConsole) {
+      debugConsole.scrollTop = debugConsole.scrollHeight;
+    }
+  });
+}
+
 function handleSimulationSpeedChange(value) {
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed)) {
@@ -2783,7 +2828,7 @@ function updateDebugConsole(deltaTime) {
 
   debugConsole.textContent = output;
   if (typeof debugConsole.setAttribute === 'function') {
-    debugConsole.setAttribute('aria-hidden', 'false');
+    debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
   }
 }
 
