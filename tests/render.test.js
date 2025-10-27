@@ -249,9 +249,9 @@ function runGameScript() {
     debugConsole,
     glState: state,
     stepFrame: stepFrames,
-    seeThroughToggle,
-    selectionInfoPanel,
-    selectionBlockField,
+    seeThroughToggle: globalThis.seeThroughToggle,
+    selectionInfoPanel: globalThis.selectionInfoPanel,
+    selectionBlockField: globalThis.selectionBlockField,
   };
 }
 
@@ -277,7 +277,7 @@ function runTests() {
   const chunksPerSide = 16;
   const blocksPerSide = blocksPerChunk * chunksPerSide;
   const expectedTerrainVertices = blocksPerSide * blocksPerSide * 6;
-  const expectedBlockLineVertices = (blocksPerSide + 1) * blocksPerSide * 4;
+  const expectedBlockLineVertices = (blocksPerSide + 1) * 4;
   const expectedChunkLineVertices = (blocksPerSide / blocksPerChunk + 1) * blocksPerSide * 4;
 
   assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
@@ -305,8 +305,13 @@ function runTests() {
   assert(rockDraw, 'Las rocas deben renderizarse en draw calls adicionales');
   assert(rockDraw.count % 3 === 0, 'La geometría de rocas debe estar compuesta por triángulos completos');
 
-  const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 516);
-  assert(blockLines, 'La grid de bloques debe contener 516 vértices de línea');
+  const blockLines = glState.draws.find(
+    (draw) => draw.mode === 0x0001 && draw.count === expectedBlockLineVertices,
+  );
+  assert(
+    blockLines,
+    `La grid de bloques debe contener ${expectedBlockLineVertices} vértices de línea`,
+  );
 
   const chunkLines = glState.draws.find(
     (draw) => draw.mode === 0x0001 && draw.count === expectedChunkLineVertices
@@ -318,6 +323,11 @@ function runTests() {
   assert(
     debugConsole.textContent.includes('Draw calls'),
     'La consola de depuración debe reportar los draw calls'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Geometría:'),
+    'La consola de depuración debe informar los vértices de la geometría',
   );
 
   assert(
@@ -338,6 +348,11 @@ function runTests() {
   assert(
     debugConsole.textContent.includes('Terreno visible'),
     'La consola de depuración debe reportar el porcentaje de terreno visible'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Terreno características:'),
+    'La consola de depuración debe mostrar las métricas de rasgos del terreno',
   );
 
   assert(
@@ -383,6 +398,10 @@ function runTests() {
   assert(
     terrainInfo.rockCount > 0,
     'La generación de rocas debe producir al menos una formación'
+  );
+  assert(
+    terrainInfo.featureStats && typeof terrainInfo.featureStats.canyon === 'number',
+    'Las métricas de rasgos del terreno deben almacenarse en terrainInfo.featureStats',
   );
 
   seeThroughToggle.checked = true;
