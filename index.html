@@ -71,21 +71,65 @@
       </button>
       <form id="settings-panel" class="settings-panel" hidden>
         <h2>Configuración</h2>
-        <label for="seed-input">Semilla del terreno</label>
-        <input
-          id="seed-input"
-          name="seed"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <div class="settings-actions">
-          <button type="submit" id="apply-seed">Aplicar</button>
-          <button type="button" id="random-seed">Aleatoria</button>
-        </div>
+        <details class="settings-section" open>
+          <summary>Terreno</summary>
+          <label for="seed-input">Semilla del terreno</label>
+          <input
+            id="seed-input"
+            name="seed"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="settings-actions">
+            <button type="submit" id="apply-seed">Aplicar</button>
+            <button type="button" id="random-seed">Aleatoria</button>
+          </div>
+        </details>
+        <details class="settings-section" id="debug-section">
+          <summary>Debug</summary>
+          <div class="debug-controls">
+            <label class="toggle">
+              <input type="checkbox" id="see-through-toggle" />
+              See-through terrain
+            </label>
+            <pre id="debug-console" aria-live="polite"></pre>
+          </div>
+        </details>
       </form>
     </div>
-    <pre id="debug-console" aria-live="polite"></pre>
+    <aside id="selection-info" class="selection-info" hidden>
+      <header class="selection-info__header">
+        <h2>Cuadro seleccionado</h2>
+        <button type="button" id="selection-close" aria-label="Cerrar información">×</button>
+      </header>
+      <dl class="selection-info__grid">
+        <div>
+          <dt>Bloque</dt>
+          <dd id="selection-info-block">—</dd>
+        </div>
+        <div>
+          <dt>Chunk</dt>
+          <dd id="selection-info-chunk">—</dd>
+        </div>
+        <div>
+          <dt>Coordenadas mundo</dt>
+          <dd id="selection-info-world">—</dd>
+        </div>
+        <div>
+          <dt>Altura terreno</dt>
+          <dd id="selection-info-height">—</dd>
+        </div>
+        <div>
+          <dt>Nivel del agua</dt>
+          <dd id="selection-info-water">—</dd>
+        </div>
+        <div>
+          <dt>Profundidad</dt>
+          <dd id="selection-info-depth">—</dd>
+        </div>
+      </dl>
+    </aside>
     <script src="scripts/main.js" type="module"></script>
   </body>
 </html>
