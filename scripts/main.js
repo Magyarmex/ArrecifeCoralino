@@ -503,10 +503,24 @@ const terrainInfo = {
   visibleVertices: 0,
   visibleVertexRatio: 0,
   rockCount: 0,
+  featureStats: {
+    canyon: 0,
+    ravine: 0,
+    cliffs: 0,
+  },
 };
 let seeThroughTerrain = false;
 let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
+
+const drawStats = {
+  terrain: 0,
+  rocks: 0,
+  blockGrid: 0,
+  chunkGrid: 0,
+  selection: 0,
+  total: 0,
+};
 
 const defaultTerrainOpacity = 1;
 const seeThroughTerrainOpacity = 0.45;
@@ -1411,6 +1425,13 @@ function generateTerrainVertices(seedString) {
     }
   }
 
+  const normalization = sampleCount > 0 ? sampleCount : 1;
+  const featureStats = {
+    canyon: clamp01(canyonTotal / normalization),
+    ravine: clamp01(ravineTotal / normalization),
+    cliffs: clamp01(cliffTotal / normalization),
+  };
+
   return {
     vertexData,
     minHeight,
@@ -1418,6 +1439,7 @@ function generateTerrainVertices(seedString) {
     visibleVertices,
     heightfield: heights,
     maskfield: islandMask,
+    featureStats,
   };
 }
 
@@ -1788,8 +1810,15 @@ function regenerateRocks(seedString, heightfield, maskfield) {
 }
 
 function regenerateTerrain(seedString) {
-  const { vertexData, minHeight, maxHeight, visibleVertices, heightfield, maskfield } =
-    generateTerrainVertices(seedString);
+  const {
+    vertexData,
+    minHeight,
+    maxHeight,
+    visibleVertices,
+    heightfield,
+    maskfield,
+    featureStats,
+  } = generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
@@ -1805,6 +1834,7 @@ function regenerateTerrain(seedString) {
   terrainInfo.visibleVertexRatio = baseplateVertexCount
     ? visibleVertices / baseplateVertexCount
     : 0;
+  terrainInfo.featureStats = featureStats;
   regenerateRocks(seedString, heightfield, maskfield);
 }
 
@@ -2026,59 +2056,18 @@ function invertMatrix(a) {
 
 function multiplyMatrices(a, b) {
   const result = new Float32Array(16);
-  const a00 = a[0];
-  const a01 = a[1];
-  const a02 = a[2];
-  const a03 = a[3];
-  const a10 = a[4];
-  const a11 = a[5];
-  const a12 = a[6];
-  const a13 = a[7];
-  const a20 = a[8];
-  const a21 = a[9];
-  const a22 = a[10];
-  const a23 = a[11];
-  const a30 = a[12];
-  const a31 = a[13];
-  const a32 = a[14];
-  const a33 = a[15];
 
-  const b00 = b[0];
-  const b01 = b[1];
-  const b02 = b[2];
-  const b03 = b[3];
-  const b10 = b[4];
-  const b11 = b[5];
-  const b12 = b[6];
-  const b13 = b[7];
-  const b20 = b[8];
-  const b21 = b[9];
-  const b22 = b[10];
-  const b23 = b[11];
-  const b30 = b[12];
-  const b31 = b[13];
-  const b32 = b[14];
-  const b33 = b[15];
+  for (let column = 0; column < 4; column++) {
+    const b0 = b[column * 4 + 0];
+    const b1 = b[column * 4 + 1];
+    const b2 = b[column * 4 + 2];
+    const b3 = b[column * 4 + 3];
 
-  result[0] = b00 * a00 + b01 * a10 + b02 * a20 + b03 * a30;
-  result[1] = b00 * a01 + b01 * a11 + b02 * a21 + b03 * a31;
-  result[2] = b00 * a02 + b01 * a12 + b02 * a22 + b03 * a32;
-  result[3] = b00 * a03 + b01 * a13 + b02 * a23 + b03 * a33;
-
-  result[4] = b10 * a00 + b11 * a10 + b12 * a20 + b13 * a30;
-  result[5] = b10 * a01 + b11 * a11 + b12 * a21 + b13 * a31;
-  result[6] = b10 * a02 + b11 * a12 + b12 * a22 + b13 * a32;
-  result[7] = b10 * a03 + b11 * a13 + b12 * a23 + b13 * a33;
-
-  result[8] = b20 * a00 + b21 * a10 + b22 * a20 + b23 * a30;
-  result[9] = b20 * a01 + b21 * a11 + b22 * a21 + b23 * a31;
-  result[10] = b20 * a02 + b21 * a12 + b22 * a22 + b23 * a32;
-  result[11] = b20 * a03 + b21 * a13 + b22 * a23 + b23 * a33;
-
-  result[12] = b30 * a00 + b31 * a10 + b32 * a20 + b33 * a30;
-  result[13] = b30 * a01 + b31 * a11 + b32 * a21 + b33 * a31;
-  result[14] = b30 * a02 + b31 * a12 + b32 * a22 + b33 * a32;
-  result[15] = b30 * a03 + b31 * a13 + b32 * a23 + b33 * a33;
+    result[column * 4 + 0] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    result[column * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    result[column * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    result[column * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
 
   return result;
 }
@@ -2440,6 +2429,13 @@ function bindGeometry(buffer) {
 }
 
 function render() {
+  drawStats.terrain = 0;
+  drawStats.rocks = 0;
+  drawStats.blockGrid = 0;
+  drawStats.chunkGrid = 0;
+  drawStats.selection = 0;
+  drawStats.total = 0;
+
   const skyColor = dayNightCycleState.skyColor;
   if (skyColor) {
     gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
@@ -2475,6 +2471,8 @@ function render() {
   if (baseplateVertexCount > 0) {
     bindGeometry(baseplateBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
+    drawStats.terrain += 1;
+    drawStats.total += 1;
   }
 
   if (rockVertexCount > 0) {
@@ -2483,6 +2481,8 @@ function render() {
     }
     bindGeometry(rockBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
+    drawStats.rocks += 1;
+    drawStats.total += 1;
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
     }
@@ -2496,11 +2496,15 @@ function render() {
     if (blockGridVertexCount > 0) {
       bindGeometry(blockGridBuffer);
       gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
+      drawStats.blockGrid += 1;
+      drawStats.total += 1;
     }
 
     if (chunkGridVertexCount > 0) {
       bindGeometry(chunkGridBuffer);
       gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+      drawStats.chunkGrid += 1;
+      drawStats.total += 1;
     }
 
     if (forceGridVisible && typeof gl.enable === 'function') {
@@ -2514,6 +2518,8 @@ function render() {
     }
     bindGeometry(selectionHighlightBuffer);
     gl.drawArrays(gl.LINES, 0, selectionHighlightVertexCount);
+    drawStats.selection += 1;
+    drawStats.total += 1;
     if (typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
@@ -2571,10 +2577,12 @@ function updateDebugConsole(deltaTime) {
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
+    `Terreno características: cañones=${formatFeaturePercent(featureStats.canyon)}% barrancos=${formatFeaturePercent(featureStats.ravine)}% acantilados=${formatFeaturePercent(featureStats.cliffs)}%`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
 
@@ -2594,6 +2602,9 @@ function updateDebugConsole(deltaTime) {
 
   if (debugConsole) {
     debugConsole.textContent = output;
+    if (typeof debugConsole.setAttribute === 'function') {
+      debugConsole.setAttribute('aria-hidden', 'false');
+    }
   }
   if (settingsDebugLog) {
     settingsDebugLog.textContent = output;
