@@ -7,8 +7,55 @@ const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
 const randomSeedButton = document.getElementById('random-seed');
-const sunElement = document.getElementById('sun');
-const moonElement = document.getElementById('moon');
+const simulationClock = document.getElementById('simulation-clock');
+const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
+const simulationSpeedSlider = document.getElementById('simulation-speed');
+const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
+const simulationSpeedSettingsDisplay = document.getElementById(
+  'simulation-speed-display-settings',
+);
+
+const bodyElement = document.body;
+
+const initialTutorialActive = overlay?.classList?.contains('visible') ?? false;
+let tutorialActive = initialTutorialActive;
+let overlayDismissed = !initialTutorialActive;
+
+function applyTutorialState(active) {
+  tutorialActive = active;
+  if (overlay) {
+    if (overlay.classList) {
+      overlay.classList.toggle('visible', active);
+      overlay.classList.toggle('hidden', !active);
+    } else {
+      overlay.className = active ? 'visible' : 'hidden';
+    }
+    if (typeof overlay.setAttribute === 'function') {
+      overlay.setAttribute('aria-hidden', String(!active));
+    }
+  }
+  if (simulationHud && typeof simulationHud.setAttribute === 'function') {
+    simulationHud.setAttribute('aria-hidden', String(active));
+  }
+  if (bodyElement?.classList) {
+    bodyElement.classList.toggle('tutorial-active', active);
+  }
+}
+
+function showTutorialOverlay() {
+  if (overlayDismissed) {
+    applyTutorialState(false);
+    return;
+  }
+  applyTutorialState(true);
+}
+
+function dismissTutorialOverlay() {
+  overlayDismissed = true;
+  applyTutorialState(false);
+}
+
+applyTutorialState(tutorialActive);
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -1053,6 +1100,7 @@ let displayedFps = 0;
 let lastGlError = 'ninguno';
 
 const baseTickRate = 20;
+const baseSimulationStep = 1 / baseTickRate;
 const MIN_SIMULATION_SPEED = 0.1;
 const MAX_SIMULATION_SPEED = 3;
 let simulationSpeed = 1;
@@ -1287,7 +1335,7 @@ function loop(currentTime) {
   while (tickAccumulator >= tickInterval) {
     tickSimulation(tickInterval);
     tickAccumulator -= tickInterval;
-    simulationTime += tickInterval;
+    simulationTime += baseSimulationStep;
     totalTicks += 1;
     ticksLastFrame += 1;
     tickStatsAccumulator += tickInterval;
