@@ -138,6 +138,54 @@ function runGameScript() {
     textContent: '',
   };
 
+  const dayCycleProgressTrack = {
+    style: {},
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    },
+    getAttribute(name) {
+      return this.attributes[name];
+    },
+  };
+
+  const dayCycleProgressFill = {
+    style: { width: '0%' },
+  };
+
+  function createDayCycleIcon(phase) {
+    const icon = {
+      phase,
+      active: false,
+      classList: {
+        add(className) {
+          if (className === 'hud-daycycle__icon--active') {
+            icon.active = true;
+          }
+        },
+        remove(className) {
+          if (className === 'hud-daycycle__icon--active') {
+            icon.active = false;
+          }
+        },
+      },
+      getAttribute(name) {
+        if (name === 'data-day-cycle-phase') {
+          return phase;
+        }
+        return null;
+      },
+    };
+    return icon;
+  }
+
+  const dayCycleIcons = [
+    createDayCycleIcon('dawn'),
+    createDayCycleIcon('midday'),
+    createDayCycleIcon('dusk'),
+    createDayCycleIcon('midnight'),
+  ];
+
   const settingsToggle = {
     _attributes: { 'aria-expanded': 'false' },
     addEventListener: () => {},
@@ -197,6 +245,12 @@ function runGameScript() {
       }
       listeners.document[event] = handler;
     },
+    exitPointerLock: () => {
+      document.pointerLockElement = null;
+      if (document._pointerLockChange) {
+        document._pointerLockChange();
+      }
+    },
     getElementById: (id) => {
       if (id === 'scene') return canvas;
       if (id === 'overlay') return overlay;
@@ -208,7 +262,15 @@ function runGameScript() {
       if (id === 'random-seed') return randomSeedButton;
       if (id === 'settings-debug-log') return settingsDebugLog;
       if (id === 'debug-terrain-translucent') return debugTerrainToggle;
+      if (id === 'day-cycle-progress-track') return dayCycleProgressTrack;
+      if (id === 'day-cycle-progress-fill') return dayCycleProgressFill;
       return null;
+    },
+    querySelectorAll: (selector) => {
+      if (selector === '[data-day-cycle-phase]') {
+        return dayCycleIcons;
+      }
+      return [];
     },
   };
 
@@ -252,6 +314,9 @@ function runGameScript() {
     seeThroughToggle: globalThis.seeThroughToggle,
     selectionInfoPanel: globalThis.selectionInfoPanel,
     selectionBlockField: globalThis.selectionBlockField,
+    dayCycleProgressTrack,
+    dayCycleProgressFill,
+    dayCycleIcons,
   };
 }
 
@@ -271,6 +336,9 @@ function runTests() {
     seeThroughToggle,
     selectionInfoPanel,
     selectionBlockField,
+    dayCycleProgressTrack,
+    dayCycleProgressFill,
+    dayCycleIcons,
   } = runGameScript();
 
   const blocksPerChunk = 8;
@@ -402,6 +470,23 @@ function runTests() {
   assert(
     terrainInfo.featureStats && typeof terrainInfo.featureStats.canyon === 'number',
     'Las métricas de rasgos del terreno deben almacenarse en terrainInfo.featureStats',
+  );
+
+  stepFrame(8);
+  const progressNow = Number.parseFloat(dayCycleProgressTrack.attributes['aria-valuenow']);
+  assert(
+    Number.isFinite(progressNow),
+    'El progreso del ciclo día/noche debe actualizar su valor numérico',
+  );
+  const progressWidth = Number.parseFloat(dayCycleProgressFill.style.width);
+  assert(
+    progressWidth >= 0 && progressWidth <= 100,
+    'La barra del ciclo día/noche debe reflejar el avance en porcentaje',
+  );
+  const activeIcons = dayCycleIcons.filter((icon) => icon.active);
+  assert(
+    activeIcons.length === 1,
+    'Debe resaltarse exactamente un icono del ciclo día/noche a la vez',
   );
 
   seeThroughToggle.checked = true;

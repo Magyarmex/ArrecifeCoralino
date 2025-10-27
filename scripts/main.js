@@ -14,11 +14,18 @@ const simulationSpeedDisplay = document.getElementById('simulation-speed-display
 const simulationSpeedSettingsDisplay = document.getElementById(
   'simulation-speed-display-settings',
 );
+const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
+const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
+const dayCyclePhaseIcons = Array.from(
+  document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
+);
+const dayCyclePhaseIconMap = new Map(
+  dayCyclePhaseIcons
+    .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
+    .filter(([phase, element]) => phase && element),
+);
 const settingsDebugLog = document.getElementById('settings-debug-log');
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
-
-const modelLibrary =
-  typeof window !== 'undefined' && Array.isArray(window.modelLibrary) ? window.modelLibrary : [];
 
 function createFallbackInfoPanel() {
   let hiddenState = true;
@@ -494,7 +501,6 @@ let selectionHighlightVertexCount = 0;
 
 let terrainHeightField = null;
 let terrainMaskField = null;
-let forceGridVisible = false;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -685,6 +691,30 @@ const dayNightCycleState = {
   sunAngle: -Math.PI / 2,
 };
 
+const dayCyclePhaseLabels = {
+  midnight: 'Medianoche',
+  dawn: 'Amanecer',
+  midday: 'Mediodía',
+  dusk: 'Atardecer',
+};
+
+function getDayCyclePhase(normalizedTime) {
+  const normalized = ((normalizedTime % 1) + 1) % 1;
+  if (normalized >= 0.875 || normalized < 0.125) {
+    return 'midnight';
+  }
+  if (normalized < 0.375) {
+    return 'dawn';
+  }
+  if (normalized < 0.625) {
+    return 'midday';
+  }
+  if (normalized < 0.875) {
+    return 'dusk';
+  }
+  return 'midnight';
+}
+
 function updateDayNightCycleState(currentSimulationTime) {
   const duration = Math.max(1, dayNightCycleDuration);
   const cycleTime = ((currentSimulationTime % duration) + duration) % duration;
@@ -720,7 +750,6 @@ function applyTranslucentTerrainSetting(enabled) {
   terrainRenderState.translucent = active;
   terrainRenderState.alpha = active ? translucentTerrainAlpha : 1;
   seeThroughTerrain = active;
-  forceGridVisible = active;
 
   if (debugTerrainToggle && debugTerrainToggle.checked !== active) {
     debugTerrainToggle.checked = active;
@@ -1168,6 +1197,19 @@ function selectBlockAtScreen(pointerX, pointerY) {
     clearSelection();
   }
   return selection;
+}
+
+function exitFreeCameraMode() {
+  if (document?.pointerLockElement === canvas && document?.exitPointerLock) {
+    document.exitPointerLock();
+  }
+}
+
+function activateInteractable(selection) {
+  exitFreeCameraMode();
+  if (selection) {
+    updateSelectionPanel(selection);
+  }
 }
 
 function generateTerrainVertices(seedString) {
@@ -2095,6 +2137,9 @@ function requestCameraControl(event) {
     }
     return;
   }
+  if (event?.detail >= 2) {
+    return;
+  }
   if (event) {
     event.preventDefault();
   }
@@ -2113,7 +2158,19 @@ canvas.addEventListener('pointerdown', (event) => {
     return;
   }
   const pointer = getPointerPosition(event);
-  selectBlockAtScreen(pointer.x, pointer.y);
+  const selection = selectBlockAtScreen(pointer.x, pointer.y);
+  if (event.detail >= 2) {
+    activateInteractable(selection);
+  }
+});
+
+canvas.addEventListener('dblclick', (event) => {
+  if (fatalRuntimeError) {
+    return;
+  }
+  const pointer = getPointerPosition(event);
+  const selection = selectBlockAtScreen(pointer.x, pointer.y);
+  activateInteractable(selection);
 });
 
 if (startButton) {
@@ -2376,6 +2433,34 @@ function updateSimulationHud() {
   if (simulationSpeedSettingsDisplay) {
     simulationSpeedSettingsDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
   }
+  updateDayCycleHud();
+}
+
+function updateDayCycleHud() {
+  const normalized = dayNightCycleState.normalizedTime ?? 0;
+  const hours = normalized * 24;
+  if (dayCycleProgressFill && dayCycleProgressFill.style) {
+    dayCycleProgressFill.style.width = `${Math.min(100, Math.max(0, normalized * 100))}%`;
+  }
+  if (dayCycleProgressTrack && typeof dayCycleProgressTrack.setAttribute === 'function') {
+    dayCycleProgressTrack.setAttribute('aria-valuenow', hours.toFixed(1));
+    const phase = getDayCyclePhase(normalized);
+    const label = dayCyclePhaseLabels[phase] ?? `${hours.toFixed(1)}h`;
+    dayCycleProgressTrack.setAttribute('aria-valuetext', label);
+  }
+  if (dayCyclePhaseIconMap.size > 0) {
+    const activePhase = getDayCyclePhase(normalized);
+    for (const [phase, element] of dayCyclePhaseIconMap) {
+      if (!element?.classList) {
+        continue;
+      }
+      if (phase === activePhase) {
+        element.classList.add('hud-daycycle__icon--active');
+      } else {
+        element.classList.remove('hud-daycycle__icon--active');
+      }
+    }
+  }
 }
 
 function tickSimulation(deltaTime) {
@@ -2491,8 +2576,9 @@ function render() {
     }
   }
 
-  if (blockGridVertexCount > 0 || chunkGridVertexCount > 0) {
-    if (forceGridVisible && typeof gl.disable === 'function') {
+  const hasGridGeometry = blockGridVertexCount > 0 || chunkGridVertexCount > 0;
+  if (hasGridGeometry) {
+    if (typeof gl.disable === 'function') {
       gl.disable(gl.DEPTH_TEST);
     }
 
@@ -2510,7 +2596,7 @@ function render() {
       drawStats.total += 1;
     }
 
-    if (forceGridVisible && typeof gl.enable === 'function') {
+    if (typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
   }
@@ -2580,7 +2666,7 @@ function updateDebugConsole(deltaTime) {
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
-    `Modelos disponibles: ${modelLibrary.length}`,
+    `Terreno características: cañones=${formatFeaturePercent(featureStats.canyon)}% barrancos=${formatFeaturePercent(featureStats.ravine)}% acantilados=${formatFeaturePercent(featureStats.cliffs)}%`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
