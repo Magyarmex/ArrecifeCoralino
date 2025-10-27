@@ -76,7 +76,7 @@ const positionAttribute = gl.getAttribLocation(program, 'position');
 const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 
-const blockSize = 0.5; // metros virtuales
+const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
 const chunksPerSide = 16;
 const chunkSize = blockSize * blocksPerChunk;
@@ -115,10 +115,10 @@ const blockLineColor = [0.92, 0.88, 0.78];
 const chunkLineColor = [0.7, 0.64, 0.52];
 const sandDarkColor = [0.73, 0.64, 0.48];
 const sandLightColor = [0.97, 0.91, 0.74];
-const terrainNoiseScale = 5.2;
+const terrainNoiseScale = 4.8;
 const maxTerrainHeight = 20;
 const minVisibleHeight = 0.001;
-const falloffRadius = 1.05;
+const falloffRadius = 0.9;
 const falloffExponent = 3.1;
 const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
@@ -247,10 +247,8 @@ function generateTerrainVertices(seedString) {
   const blocksPerSide = chunksPerSide * blocksPerChunk;
   const vertexFloatCount = blocksPerSide * blocksPerSide * 6 * floatsPerVertex;
   const vertexData = new Float32Array(vertexFloatCount);
-  const heights = new Array(blocksPerSide + 1);
-  const islandMask = new Array(blocksPerSide + 1);
-  let minHeight = Infinity;
-  let maxHeight = -Infinity;
+  let heights = new Array(blocksPerSide + 1);
+  let islandMask = new Array(blocksPerSide + 1);
 
   for (let z = 0; z <= blocksPerSide; z++) {
     heights[z] = new Array(blocksPerSide + 1);
@@ -259,27 +257,98 @@ function generateTerrainVertices(seedString) {
       const sampleX = (x / blocksPerSide) * terrainNoiseScale;
       const sampleZ = (z / blocksPerSide) * terrainNoiseScale;
       const baseNoise = fbm(sampleX, sampleZ, numericSeed);
-      const duneNoise = fbm(sampleX * 2.3, sampleZ * 2.3, numericSeed ^ 0x27d4eb2d);
+      const duneNoise = fbm(sampleX * 1.6, sampleZ * 1.6, numericSeed ^ 0x27d4eb2d);
 
-      const shapedBase = clamp01(baseNoise * 1.18 - 0.18);
-      const dunePeaks = Math.pow(1 - Math.abs(duneNoise * 2 - 1), 2.4);
+      const shapedBase = clamp01(baseNoise * 1.12 - 0.12);
+      const dunePeaks = Math.pow(1 - Math.abs(duneNoise * 2 - 1), 1.8);
 
       const nx = x / blocksPerSide;
       const nz = z / blocksPerSide;
       const centeredX = nx * 2 - 1;
       const centeredZ = nz * 2 - 1;
-      const radialDistance = Math.hypot(centeredX, centeredZ);
-      const normalizedDistance = Math.min(1, radialDistance / falloffRadius);
+      const squareDistance = Math.max(Math.abs(centeredX), Math.abs(centeredZ));
+      const normalizedDistance = Math.min(1, squareDistance / falloffRadius);
       const falloff = Math.pow(normalizedDistance, falloffExponent);
       const mask = clamp01(1 - falloff);
 
-      const combined = clamp01((shapedBase + dunePeaks * 0.45) * mask + mask * 0.08);
-      const height = clamp01(combined) * maxTerrainHeight;
+      const combined = clamp01((shapedBase + dunePeaks * 0.35) * mask + mask * 0.1);
+      const height = clamp(combined * maxTerrainHeight, 0, maxTerrainHeight);
 
       heights[z][x] = height;
       islandMask[z][x] = mask;
-      if (height < minHeight) minHeight = height;
-      if (height > maxHeight) maxHeight = height;
+    }
+  }
+
+  const smoothField = (field, passes, clampFn) => {
+    let current = field;
+    const kernel = [
+      [1, 2, 1],
+      [2, 4, 2],
+      [1, 2, 1],
+    ];
+    for (let pass = 0; pass < passes; pass++) {
+      const next = new Array(blocksPerSide + 1);
+      for (let z = 0; z <= blocksPerSide; z++) {
+        next[z] = new Array(blocksPerSide + 1);
+        for (let x = 0; x <= blocksPerSide; x++) {
+          let sum = 0;
+          let weightSum = 0;
+          for (let dz = -1; dz <= 1; dz++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const weight = kernel[dz + 1][dx + 1];
+              const sampleX = Math.max(0, Math.min(blocksPerSide, x + dx));
+              const sampleZ = Math.max(0, Math.min(blocksPerSide, z + dz));
+              sum += current[sampleZ][sampleX] * weight;
+              weightSum += weight;
+            }
+          }
+          const smoothed = sum / (weightSum || 1);
+          next[z][x] = clampFn ? clampFn(smoothed) : smoothed;
+        }
+      }
+      current = next;
+    }
+    return current;
+  };
+
+  heights = smoothField(heights, 2, (value) => clamp(value, 0, maxTerrainHeight));
+  islandMask = smoothField(islandMask, 1, clamp01);
+
+  const finalHeights = new Array(blocksPerSide + 1);
+  let minPre = Infinity;
+  let maxPre = -Infinity;
+  for (let z = 0; z <= blocksPerSide; z++) {
+    finalHeights[z] = new Array(blocksPerSide + 1);
+    for (let x = 0; x <= blocksPerSide; x++) {
+      const mask = clamp01(islandMask[z][x]);
+      const normalizedHeight = maxTerrainHeight > 0 ? heights[z][x] / maxTerrainHeight : 0;
+      const blended = clamp01(normalizedHeight * 0.85 + mask * 0.15);
+      const height = clamp(blended * maxTerrainHeight, 0, maxTerrainHeight);
+      finalHeights[z][x] = height;
+      if (height < minPre) minPre = height;
+      if (height > maxPre) maxPre = height;
+    }
+  }
+
+  if (maxPre > minPre) {
+    const scale = maxTerrainHeight / (maxPre - minPre);
+    for (let z = 0; z <= blocksPerSide; z++) {
+      for (let x = 0; x <= blocksPerSide; x++) {
+        const shifted = finalHeights[z][x] - minPre;
+        finalHeights[z][x] = clamp(shifted * scale, 0, maxTerrainHeight);
+      }
+    }
+  }
+
+  heights = finalHeights;
+
+  let minHeight = Infinity;
+  let maxHeight = -Infinity;
+  for (let z = 0; z <= blocksPerSide; z++) {
+    for (let x = 0; x <= blocksPerSide; x++) {
+      const value = heights[z][x];
+      if (value < minHeight) minHeight = value;
+      if (value > maxHeight) maxHeight = value;
     }
   }
 
@@ -642,7 +711,7 @@ document.addEventListener('pointerlockchange', () => {
 
 document.addEventListener('mousemove', (event) => {
   if (document.pointerLockElement === canvas) {
-    yaw -= event.movementX * pointerSensitivity;
+    yaw += event.movementX * pointerSensitivity;
     pitch -= event.movementY * pointerSensitivity;
     const limit = Math.PI / 2 - 0.01;
     pitch = clamp(pitch, -limit, limit);
