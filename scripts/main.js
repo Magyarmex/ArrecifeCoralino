@@ -1,61 +1,12 @@
 const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
-const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
 const randomSeedButton = document.getElementById('random-seed');
-const simulationClock = document.getElementById('simulation-clock');
-const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
-const simulationSpeedSlider = document.getElementById('simulation-speed');
-const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
-const simulationSpeedSettingsDisplay = document.getElementById(
-  'simulation-speed-display-settings',
-);
-
-const bodyElement = document.body;
-
-const initialTutorialActive = overlay?.classList?.contains('visible') ?? false;
-let tutorialActive = initialTutorialActive;
-let overlayDismissed = !initialTutorialActive;
-
-function applyTutorialState(active) {
-  tutorialActive = active;
-  if (overlay) {
-    if (overlay.classList) {
-      overlay.classList.toggle('visible', active);
-      overlay.classList.toggle('hidden', !active);
-    } else {
-      overlay.className = active ? 'visible' : 'hidden';
-    }
-    if (typeof overlay.setAttribute === 'function') {
-      overlay.setAttribute('aria-hidden', String(!active));
-    }
-  }
-  if (simulationHud && typeof simulationHud.setAttribute === 'function') {
-    simulationHud.setAttribute('aria-hidden', String(active));
-  }
-  if (bodyElement?.classList) {
-    bodyElement.classList.toggle('tutorial-active', active);
-  }
-}
-
-function showTutorialOverlay() {
-  if (overlayDismissed) {
-    applyTutorialState(false);
-    return;
-  }
-  applyTutorialState(true);
-}
-
-function dismissTutorialOverlay() {
-  overlayDismissed = true;
-  applyTutorialState(false);
-}
-
-applyTutorialState(tutorialActive);
+const seeThroughToggle = document.getElementById('see-through-toggle');
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -68,29 +19,6 @@ const GL_NO_ERROR = gl.NO_ERROR ?? 0;
 
 gl.clearColor(0.05, 0.08, 0.12, 1);
 gl.enable(gl.DEPTH_TEST);
-
-const secondsPerDay = 24 * 60;
-const dawnDuration = 2 * 60;
-const dayDuration = 8 * 60;
-const duskDuration = 2 * 60;
-const sunCycleDuration = dawnDuration + dayDuration + duskDuration;
-const moonCycleDuration = secondsPerDay - sunCycleDuration;
-const dawnEnd = dawnDuration;
-const dayEnd = dawnEnd + dayDuration;
-const duskEnd = dayEnd + duskDuration;
-
-const nightSkyTop = [0.09, 0.13, 0.2];
-const nightSkyBottom = [0.02, 0.03, 0.05];
-const dawnSkyTop = [0.98, 0.6, 0.45];
-const dawnSkyBottom = [0.55, 0.23, 0.36];
-const daySkyTop = [0.36, 0.62, 0.95];
-const daySkyBottom = [0.64, 0.82, 0.98];
-const duskSkyTop = [0.88, 0.45, 0.6];
-const duskSkyBottom = [0.32, 0.12, 0.28];
-
-const sunDayColor = [1, 0.88, 0.45];
-const sunWarmColor = [1, 0.6, 0.3];
-const moonSoftColor = [0.83, 0.86, 1];
 
 function createShader(type, source) {
   const shader = gl.createShader(type);
@@ -121,8 +49,9 @@ const vertexSource = `
 const fragmentSource = `
   precision mediump float;
   varying vec3 vColor;
+  uniform float opacity;
   void main() {
-    gl_FragColor = vec4(vColor, 1.0);
+    gl_FragColor = vec4(vColor, opacity);
   }
 `;
 
@@ -148,6 +77,7 @@ gl.useProgram(program);
 const positionAttribute = gl.getAttribLocation(program, 'position');
 const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
+const opacityUniform = gl.getUniformLocation(program, 'opacity');
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -168,8 +98,8 @@ function createBuffer(data) {
   return buffer;
 }
 
-const blockLineColor = [0.92, 0.88, 0.78];
-const chunkLineColor = [0.7, 0.64, 0.52];
+const blockLineColor = [0.93, 0.9, 0.8];
+const chunkLineColor = [0.74, 0.68, 0.55];
 const sandDarkColor = [0.73, 0.64, 0.48];
 const sandLightColor = [0.97, 0.91, 0.74];
 const terrainNoiseScale = 4.8;
@@ -203,6 +133,10 @@ const terrainInfo = {
 };
 
 let terrainHeightField = null;
+let seeThroughTerrain = false;
+
+const defaultTerrainOpacity = 1;
+const seeThroughTerrainOpacity = 0.45;
 
 if (typeof window !== 'undefined') {
   window.__terrainInfo = terrainInfo;
@@ -286,20 +220,6 @@ function mixColor(a, b, t) {
     lerp(a[1], b[1], t),
     lerp(a[2], b[2], t),
   ];
-}
-
-function colorToCss(color) {
-  const r = Math.round(clamp(color[0], 0, 1) * 255);
-  const g = Math.round(clamp(color[1], 0, 1) * 255);
-  const b = Math.round(clamp(color[2], 0, 1) * 255);
-  return `rgb(${r}, ${g}, ${b})`;
-}
-
-function colorToRgba(color, alpha) {
-  const r = Math.round(clamp(color[0], 0, 1) * 255);
-  const g = Math.round(clamp(color[1], 0, 1) * 255);
-  const b = Math.round(clamp(color[2], 0, 1) * 255);
-  return `rgba(${r}, ${g}, ${b}, ${clamp(alpha, 0, 1)})`;
 }
 
 function pushVertex(buffer, offset, x, y, z, color) {
@@ -788,139 +708,6 @@ function multiplyMatrices(a, b) {
   return result;
 }
 
-function smoothStep(t) {
-  return t * t * (3 - 2 * t);
-}
-
-function computeCelestialPosition(progress) {
-  const clamped = clamp(progress, 0, 1);
-  const angle = clamped * Math.PI - Math.PI / 2;
-  const horizontal = Math.cos(angle);
-  const vertical = Math.sin(angle);
-  const x = 50 + horizontal * 45;
-  const y = 68 - vertical * 55;
-  return { x, y };
-}
-
-function applyCelestialAppearance(element, baseColor, accentColor, glowRadius) {
-  if (!element) {
-    return;
-  }
-  const highlight = mixColor([1, 1, 1], baseColor, 0.35);
-  const rim = mixColor(baseColor, accentColor, 0.55);
-  element.style.background = `radial-gradient(circle at 30% 30%, ${colorToCss(highlight)} 0%, ${colorToCss(
-    baseColor
-  )} 55%, ${colorToCss(rim)} 100%)`;
-  element.style.boxShadow = `0 0 ${glowRadius}px ${colorToRgba(baseColor, 0.85)}`;
-}
-
-function updateCelestialBody(element, visibility, progress, baseColor, accentColor, glowRadius) {
-  if (!element) {
-    return;
-  }
-  const position = computeCelestialPosition(progress);
-  element.style.opacity = visibility.toFixed(3);
-  element.style.left = `${position.x}%`;
-  element.style.top = `${position.y}%`;
-  applyCelestialAppearance(element, baseColor, accentColor, glowRadius);
-}
-
-function calculateMoonState(cycleSeconds) {
-  const timeSinceMoonRise = (cycleSeconds - duskEnd + secondsPerDay + secondsPerDay) % secondsPerDay;
-  const visibleWindow = moonCycleDuration + dawnDuration;
-  let visibility = 0;
-  let progress = 0;
-
-  if (timeSinceMoonRise <= visibleWindow) {
-    progress = clamp(timeSinceMoonRise / moonCycleDuration, 0, 1);
-    const fadeIn = timeSinceMoonRise < duskDuration ? fade(timeSinceMoonRise / duskDuration) : 1;
-    const fadeOutStart = Math.max(0, timeSinceMoonRise - moonCycleDuration);
-    const fadeOut =
-      timeSinceMoonRise > moonCycleDuration
-        ? 1 - fade(Math.min(1, fadeOutStart / Math.max(dawnDuration, 1)))
-        : 1;
-    visibility = clamp(fadeIn * fadeOut, 0, 1);
-  }
-
-  return { visibility, progress };
-}
-
-function calculateSunState(cycleSeconds) {
-  const clampedCycle = Math.min(cycleSeconds, sunCycleDuration);
-  const progress = clamp(clampedCycle / sunCycleDuration, 0, 1);
-  let visibility = 0;
-
-  if (cycleSeconds <= sunCycleDuration) {
-    const fadeIn = cycleSeconds < dawnDuration ? fade(cycleSeconds / Math.max(dawnDuration, 1)) : 1;
-    const fadeOutStart = Math.max(0, cycleSeconds - dayEnd);
-    const fadeOut =
-      cycleSeconds > dayEnd
-        ? 1 - fade(Math.min(1, fadeOutStart / Math.max(duskDuration, 1)))
-        : 1;
-    visibility = clamp(fadeIn * fadeOut, 0, 1);
-  }
-
-  return { visibility, progress };
-}
-
-function updateSkyCycle(cycleSeconds) {
-  const cycle = cycleSeconds % secondsPerDay;
-  let topColor = nightSkyTop;
-  let bottomColor = nightSkyBottom;
-
-  const sunState = calculateSunState(cycle);
-  const moonState = calculateMoonState(cycle);
-
-  let sunColor = sunDayColor;
-  let sunAccent = sunWarmColor;
-
-  if (cycle < dawnEnd) {
-    const normalized = cycle / Math.max(dawnDuration, 1);
-    const warmBlend = fade(normalized);
-    const warmTop = mixColor(nightSkyTop, dawnSkyTop, warmBlend);
-    const warmBottom = mixColor(nightSkyBottom, dawnSkyBottom, warmBlend);
-    const toDay = fade(Math.max(0, (cycle - dawnDuration * 0.5) / Math.max(dawnDuration * 0.5, 1)));
-    topColor = mixColor(warmTop, daySkyTop, toDay);
-    bottomColor = mixColor(warmBottom, daySkyBottom, toDay);
-
-    const warmFactor = 1 - smoothStep(Math.min(1, normalized));
-    sunColor = mixColor(sunDayColor, sunWarmColor, warmFactor);
-    sunAccent = mixColor(sunWarmColor, sunDayColor, smoothStep(normalized));
-  } else if (cycle < dayEnd) {
-    const dayProgress = (cycle - dawnEnd) / Math.max(dayDuration, 1);
-    const middayLift = 0.2 * Math.sin(dayProgress * Math.PI);
-    topColor = mixColor(daySkyTop, mixColor(daySkyTop, [0.75, 0.85, 1], 0.65), clamp01(middayLift));
-    bottomColor = mixColor(daySkyBottom, mixColor(daySkyBottom, [0.85, 0.94, 1], 0.6), clamp01(middayLift));
-    sunColor = sunDayColor;
-    sunAccent = mixColor(sunDayColor, [1, 0.95, 0.7], 0.4);
-  } else if (cycle < duskEnd) {
-    const duskProgress = (cycle - dayEnd) / Math.max(duskDuration, 1);
-    const warmBlend = fade(duskProgress);
-    const warmTop = mixColor(daySkyTop, duskSkyTop, warmBlend);
-    const warmBottom = mixColor(daySkyBottom, duskSkyBottom, warmBlend);
-    const toNight = fade(Math.max(0, (cycle - dayEnd - duskDuration * 0.5) / Math.max(duskDuration * 0.5, 1)));
-    topColor = mixColor(warmTop, nightSkyTop, toNight);
-    bottomColor = mixColor(warmBottom, nightSkyBottom, toNight);
-
-    const warmFactor = smoothStep(Math.min(1, duskProgress));
-    sunColor = mixColor(sunDayColor, sunWarmColor, warmFactor);
-    sunAccent = mixColor(sunWarmColor, sunDayColor, 0.25);
-  } else {
-    const nightProgress = (cycle - duskEnd) / Math.max(moonCycleDuration, 1);
-    const moonGlow = 0.25 + 0.25 * Math.sin(nightProgress * Math.PI);
-    topColor = mixColor(nightSkyTop, [0.14, 0.19, 0.3], clamp01(moonGlow));
-    bottomColor = mixColor(nightSkyBottom, [0.05, 0.07, 0.12], clamp01(moonGlow * 0.8));
-  }
-
-  const topCss = colorToCss(topColor);
-  const bottomCss = colorToCss(bottomColor);
-  canvas.style.background = `linear-gradient(180deg, ${topCss} 0%, ${bottomCss} 100%)`;
-  gl.clearColor(bottomColor[0], bottomColor[1], bottomColor[2], 1);
-
-  updateCelestialBody(sunElement, sunState.visibility, sunState.progress, sunColor, sunAccent, 45);
-  updateCelestialBody(moonElement, moonState.visibility, moonState.progress, moonSoftColor, [0.6, 0.64, 0.9], 36);
-}
-
 function updateCanvasSize() {
   const width = window.innerWidth;
   const height = window.innerHeight;
@@ -938,7 +725,6 @@ function requestCameraControl(event) {
   if (event) {
     event.preventDefault();
   }
-  dismissTutorialOverlay();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
   }
@@ -981,38 +767,22 @@ if (randomSeedButton) {
   });
 }
 
-function handleSimulationSpeedChange(value) {
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
-    return;
-  }
-  setSimulationSpeed(parsed);
-}
-
-if (simulationSpeedSlider) {
-  simulationSpeedSlider.addEventListener('input', (event) => {
-    handleSimulationSpeedChange(event.target.value);
-  });
-  simulationSpeedSlider.addEventListener('change', (event) => {
-    handleSimulationSpeedChange(event.target.value);
+if (seeThroughToggle) {
+  seeThroughToggle.checked = seeThroughTerrain;
+  seeThroughToggle.addEventListener('change', (event) => {
+    seeThroughTerrain = event.target.checked;
   });
 }
 
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
-  showTutorialOverlay();
+  overlay.className = 'visible';
 });
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
-  if (locked) {
-    dismissTutorialOverlay();
-  } else if (!overlayDismissed) {
-    showTutorialOverlay();
-  } else {
-    applyTutorialState(false);
-  }
+  overlay.className = locked ? 'hidden' : 'visible';
 });
 
 document.addEventListener('mousemove', (event) => {
@@ -1026,11 +796,6 @@ document.addEventListener('mousemove', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (isEditableElement(event.target)) {
-    return;
-  }
-  if (event.code === 'Escape' && tutorialActive) {
-    event.preventDefault();
-    dismissTutorialOverlay();
     return;
   }
   switch (event.code) {
@@ -1093,111 +858,12 @@ document.addEventListener('keyup', (event) => {
 });
 
 let previousTime = performance.now();
-let simulationTime = 0;
 let fpsAccumulator = 0;
 let fpsSamples = 0;
 let displayedFps = 0;
 let lastGlError = 'ninguno';
 
-const baseTickRate = 20;
-const baseSimulationStep = 1 / baseTickRate;
-const MIN_SIMULATION_SPEED = 0.1;
-const MAX_SIMULATION_SPEED = 3;
-let simulationSpeed = 1;
-let targetTickRate = baseTickRate * simulationSpeed;
-let tickInterval = 1 / targetTickRate;
-let tickAccumulator = 0;
-let tickStatsAccumulator = 0;
-let tickSamples = 0;
-let displayedTps = 0;
-let totalTicks = 0;
-let simulationTime = 0;
-let ticksLastFrame = 0;
-
-const simulationInfo = {
-  baseTickRate,
-  speed: simulationSpeed,
-  tickRate: targetTickRate,
-  tickInterval,
-  time: simulationTime,
-  totalTicks,
-  displayedTps,
-  ticksLastFrame,
-};
-
-if (typeof window !== 'undefined') {
-  window.__simulationInfo = simulationInfo;
-}
-
-setSimulationSpeed(simulationSpeed);
-
-function normalizeSimulationSpeed(value) {
-  if (!Number.isFinite(value)) {
-    return simulationSpeed;
-  }
-  const clamped = Math.min(MAX_SIMULATION_SPEED, Math.max(MIN_SIMULATION_SPEED, value));
-  return Math.round(clamped * 10) / 10;
-}
-
-function setSimulationSpeed(multiplier) {
-  const normalized = normalizeSimulationSpeed(multiplier);
-  simulationSpeed = normalized;
-  targetTickRate = baseTickRate * simulationSpeed;
-  tickInterval = 1 / targetTickRate;
-  simulationInfo.speed = simulationSpeed;
-  simulationInfo.tickRate = targetTickRate;
-  simulationInfo.tickInterval = tickInterval;
-
-  if (simulationSpeedSlider && simulationSpeedSlider.value !== String(simulationSpeed)) {
-    simulationSpeedSlider.value = String(simulationSpeed);
-  }
-
-  const speedLabel = `${simulationSpeed.toFixed(1)}×`;
-  if (simulationSpeedIndicator) {
-    simulationSpeedIndicator.textContent = speedLabel;
-  }
-  if (simulationSpeedDisplay) {
-    simulationSpeedDisplay.textContent = speedLabel;
-  }
-  if (simulationSpeedSettingsDisplay) {
-    simulationSpeedSettingsDisplay.textContent = speedLabel;
-  }
-}
-
-function formatSimulationTime(timeInSeconds) {
-  const totalSeconds = Math.max(0, timeInSeconds);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.floor(totalSeconds % 60);
-  const tenths = Math.floor((totalSeconds % 1) * 10);
-  const paddedMinutes = String(minutes).padStart(2, '0');
-  const paddedSeconds = String(seconds).padStart(2, '0');
-  return `${paddedMinutes}:${paddedSeconds}.${tenths}`;
-}
-
-function updateSimulationHud() {
-  if (simulationClock) {
-    simulationClock.textContent = formatSimulationTime(simulationTime);
-  }
-  if (simulationSpeedIndicator) {
-    simulationSpeedIndicator.textContent = `${simulationSpeed.toFixed(1)}×`;
-  }
-  if (simulationSpeedDisplay) {
-    simulationSpeedDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
-  }
-  if (simulationSpeedSettingsDisplay) {
-    simulationSpeedSettingsDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
-  }
-}
-
-function tickSimulation(deltaTime) {
-  // Punto de extensión para futuros sistemas de simulación basados en ticks.
-  void deltaTime;
-}
-
 function update(deltaTime) {
-  simulationTime = (simulationTime + deltaTime) % secondsPerDay;
-  updateSkyCycle(simulationTime);
-
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),
@@ -1245,6 +911,26 @@ function bindGeometry(buffer) {
 }
 
 function render() {
+  if (typeof gl.enable === 'function') {
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  if (opacityUniform && typeof gl.uniform1f === 'function') {
+    const opacity = seeThroughTerrain ? seeThroughTerrainOpacity : defaultTerrainOpacity;
+    gl.uniform1f(opacityUniform, opacity);
+  }
+
+  if (seeThroughTerrain) {
+    if (typeof gl.enable === 'function') {
+      gl.enable(gl.BLEND);
+    }
+    if (typeof gl.blendFunc === 'function') {
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
+  } else if (typeof gl.disable === 'function') {
+    gl.disable(gl.BLEND);
+  }
+
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   if (baseplateVertexCount > 0) {
@@ -1252,8 +938,10 @@ function render() {
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
   }
 
+  const forceGridVisible = seeThroughTerrain;
+
   if (blockGridVertexCount > 0 || chunkGridVertexCount > 0) {
-    if (typeof gl.disable === 'function') {
+    if (forceGridVisible && typeof gl.disable === 'function') {
       gl.disable(gl.DEPTH_TEST);
     }
 
@@ -1267,7 +955,7 @@ function render() {
       gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
     }
 
-    if (typeof gl.enable === 'function') {
+    if (forceGridVisible && typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
   }
@@ -1304,13 +992,10 @@ function updateDebugConsole(deltaTime) {
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
-    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
-    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
-    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
-    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Terreno seed: ${terrainInfo.seed}`,
+    `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
@@ -1329,37 +1014,9 @@ function loop(currentTime) {
   const deltaTime = (currentTime - previousTime) / 1000;
   previousTime = currentTime;
 
-  tickAccumulator += deltaTime;
-  ticksLastFrame = 0;
-
-  while (tickAccumulator >= tickInterval) {
-    tickSimulation(tickInterval);
-    tickAccumulator -= tickInterval;
-    simulationTime += baseSimulationStep;
-    totalTicks += 1;
-    ticksLastFrame += 1;
-    tickStatsAccumulator += tickInterval;
-    tickSamples += 1;
-  }
-
-  if (tickStatsAccumulator >= 0.5) {
-    displayedTps = tickSamples / tickStatsAccumulator;
-    tickStatsAccumulator = 0;
-    tickSamples = 0;
-  }
-
-  simulationInfo.speed = simulationSpeed;
-  simulationInfo.tickRate = targetTickRate;
-  simulationInfo.tickInterval = tickInterval;
-  simulationInfo.time = simulationTime;
-  simulationInfo.totalTicks = totalTicks;
-  simulationInfo.displayedTps = displayedTps;
-  simulationInfo.ticksLastFrame = ticksLastFrame;
-
   update(deltaTime);
   render();
   updateDebugConsole(deltaTime);
-  updateSimulationHud();
 
   requestAnimationFrame(loop);
 }

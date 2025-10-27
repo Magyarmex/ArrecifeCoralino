@@ -9,10 +9,12 @@ function createWebGLStub() {
     viewport: [0, 0, 0, 0],
     draws: [],
     viewProjection: null,
+    opacity: 1,
   };
 
   const gl = {
     DEPTH_TEST: 0x0b71,
+    BLEND: 0x0be2,
     ARRAY_BUFFER: 0x8892,
     STATIC_DRAW: 0x88e4,
     FLOAT: 0x1406,
@@ -22,6 +24,8 @@ function createWebGLStub() {
     DEPTH_BUFFER_BIT: 0x0100,
     VERTEX_SHADER: 0x8b31,
     FRAGMENT_SHADER: 0x8b30,
+    SRC_ALPHA: 0x0302,
+    ONE_MINUS_SRC_ALPHA: 0x0303,
     NO_ERROR: 0x0000,
     CURRENT_PROGRAM: Symbol('CURRENT_PROGRAM'),
     ARRAY_BUFFER_BINDING: Symbol('ARRAY_BUFFER_BINDING'),
@@ -59,6 +63,11 @@ function createWebGLStub() {
         state.viewProjection = Array.from(value);
       }
     },
+    uniform1f: (location, value) => {
+      if (typeof value === 'number') {
+        state.opacity = value;
+      }
+    },
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
@@ -66,6 +75,7 @@ function createWebGLStub() {
     drawArrays: (mode, first, count) => {
       state.draws.push({ mode, first, count });
     },
+    blendFunc: () => {},
     getError: () => gl.NO_ERROR,
     getParameter: (param) => {
       if (param === gl.CURRENT_PROGRAM) {
@@ -149,6 +159,20 @@ function runGameScript() {
     addEventListener: () => {},
   };
 
+  const seeThroughToggle = {
+    checked: false,
+    _listeners: {},
+    addEventListener(event, handler) {
+      this._listeners[event] = handler;
+    },
+    dispatch(eventType) {
+      const handler = this._listeners[eventType];
+      if (handler) {
+        handler({ target: this });
+      }
+    },
+  };
+
   const listeners = {
     document: {},
     window: {},
@@ -180,6 +204,7 @@ function runGameScript() {
       if (id === 'settings-panel') return settingsPanel;
       if (id === 'seed-input') return seedInput;
       if (id === 'random-seed') return randomSeedButton;
+      if (id === 'see-through-toggle') return seeThroughToggle;
       return null;
     },
   };
@@ -202,15 +227,20 @@ function runGameScript() {
   const code = fs.readFileSync(scriptPath, 'utf8');
   vm.runInThisContext(code, { filename: scriptPath });
 
-  let framesProcessed = 0;
-  while (frameCallbacks.length > 0 && framesProcessed < 3) {
-    const callback = frameCallbacks.shift();
-    framesProcessed += 1;
-    performance._now += 16;
-    callback(performance._now);
+  function stepFrames(count = 1) {
+    let processed = 0;
+    while (frameCallbacks.length > 0 && processed < count) {
+      const callback = frameCallbacks.shift();
+      processed += 1;
+      performance._now += 16;
+      callback(performance._now);
+    }
+    return processed;
   }
 
-  return { canvas, overlay, debugConsole, glState: state };
+  stepFrames(3);
+
+  return { canvas, overlay, debugConsole, glState: state, stepFrame: stepFrames, seeThroughToggle };
 }
 
 function assert(condition, message) {
@@ -220,7 +250,7 @@ function assert(condition, message) {
 }
 
 function runTests() {
-  const { canvas, overlay, debugConsole, glState } = runGameScript();
+  const { canvas, overlay, debugConsole, glState, stepFrame, seeThroughToggle } = runGameScript();
 
   const blocksPerChunk = 8;
   const chunksPerSide = 16;
@@ -284,6 +314,18 @@ function runTests() {
     'La consola de depuración debe reportar el porcentaje de terreno visible'
   );
 
+  assert(!seeThroughToggle.checked, 'El modo see-through debe iniciar desactivado');
+
+  assert(
+    glState.opacity === 1,
+    'La opacidad del terreno debe iniciar en 1 para un modo opaco'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Terreno translúcido: No'),
+    'El panel de debug debe reflejar que el terreno inicia opaco'
+  );
+
   const terrainInfo = global.window.__terrainInfo;
   assert(terrainInfo, 'La información del terreno debe exponerse en window.__terrainInfo');
   assert(
@@ -302,6 +344,20 @@ function runTests() {
   assert(
     terrainInfo.maxHeight <= 20.0001,
     'La altura máxima del terreno debe estar acotada por el límite de 20 metros'
+  );
+
+  seeThroughToggle.checked = true;
+  seeThroughToggle.dispatch('change');
+  stepFrame(3);
+
+  assert(
+    glState.opacity < 1,
+    'El modo see-through debe reducir la opacidad del terreno para hacerlo translúcido'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Terreno translúcido: Sí'),
+    'El panel de debug debe actualizar el estado translúcido tras activar la opción'
   );
 
   console.log('✅ Todas las pruebas pasaron');

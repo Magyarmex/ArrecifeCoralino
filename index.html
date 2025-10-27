@@ -8,35 +8,6 @@
   </head>
   <body>
     <canvas id="scene"></canvas>
-    <div id="simulation-hud" aria-live="polite" aria-hidden="true">
-      <div class="hud-top-row">
-        <div class="hud-clock" role="status" aria-label="Tiempo de simulación">
-          <span class="hud-label">Tiempo sim</span>
-          <span id="simulation-clock" class="hud-value">00:00.0</span>
-        </div>
-        <div class="hud-speed" role="status" aria-label="Velocidad de simulación">
-          <span class="hud-label">Velocidad</span>
-          <span id="simulation-speed-indicator" class="hud-value">1.0×</span>
-        </div>
-      </div>
-      <div class="hud-speed-control">
-        <label class="hud-label hud-slider-label" for="simulation-speed"
-          >Ajustar velocidad</label
-        >
-        <div class="hud-slider-wrapper">
-          <input
-            id="simulation-speed"
-            name="simulationSpeed"
-            type="range"
-            min="0.1"
-            max="3"
-            step="0.1"
-            value="1"
-          />
-          <output id="simulation-speed-display" for="simulation-speed">1.0×</output>
-        </div>
-      </div>
-    </div>
     <div id="overlay" class="visible">
       <h1>Exploración Libre</h1>
       <p>Haz clic para capturar el cursor y usa el ratón para mirar.</p>
@@ -69,25 +40,33 @@
       </button>
       <form id="settings-panel" class="settings-panel" hidden>
         <h2>Configuración</h2>
-        <label for="seed-input">Semilla del terreno</label>
-        <input
-          id="seed-input"
-          name="seed"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <p class="settings-speed-info">
-          Velocidad actual:
-          <strong id="simulation-speed-display-settings">1.0×</strong>
-        </p>
-        <div class="settings-actions">
-          <button type="submit" id="apply-seed">Aplicar</button>
-          <button type="button" id="random-seed">Aleatoria</button>
-        </div>
+        <details class="settings-section" open>
+          <summary>Terreno</summary>
+          <label for="seed-input">Semilla del terreno</label>
+          <input
+            id="seed-input"
+            name="seed"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="settings-actions">
+            <button type="submit" id="apply-seed">Aplicar</button>
+            <button type="button" id="random-seed">Aleatoria</button>
+          </div>
+        </details>
+        <details class="settings-section" id="debug-section">
+          <summary>Debug</summary>
+          <div class="debug-controls">
+            <label class="toggle">
+              <input type="checkbox" id="see-through-toggle" />
+              See-through terrain
+            </label>
+            <pre id="debug-console" aria-live="polite"></pre>
+          </div>
+        </details>
       </form>
     </div>
-    <pre id="debug-console" aria-live="polite"></pre>
     <script src="scripts/main.js" type="module"></script>
   </body>
 </html>
