@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "node tests/render.test.js"
+    "test": "node tests/render.test.js && node tests/models-library.test.js"
   }
 }
