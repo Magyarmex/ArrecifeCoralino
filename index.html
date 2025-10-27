@@ -8,34 +8,9 @@
   </head>
   <body>
     <canvas id="scene"></canvas>
-    <div id="simulation-hud" aria-live="polite" aria-hidden="true">
-      <div class="hud-top-row">
-        <div class="hud-clock" role="status" aria-label="Tiempo de simulación">
-          <span class="hud-label">Tiempo sim</span>
-          <span id="simulation-clock" class="hud-value">00:00.0</span>
-        </div>
-        <div class="hud-speed" role="status" aria-label="Velocidad de simulación">
-          <span class="hud-label">Velocidad</span>
-          <span id="simulation-speed-indicator" class="hud-value">1.0×</span>
-        </div>
-      </div>
-      <div class="hud-speed-control">
-        <label class="hud-label hud-slider-label" for="simulation-speed"
-          >Ajustar velocidad</label
-        >
-        <div class="hud-slider-wrapper">
-          <input
-            id="simulation-speed"
-            name="simulationSpeed"
-            type="range"
-            min="0.1"
-            max="3"
-            step="0.1"
-            value="1"
-          />
-          <output id="simulation-speed-display" for="simulation-speed">1.0×</output>
-        </div>
-      </div>
+    <div id="skybox-overlay" aria-hidden="true">
+      <div id="sun" class="celestial-body sun"></div>
+      <div id="moon" class="celestial-body moon"></div>
     </div>
     <div id="overlay" class="visible">
       <h1>Exploración Libre</h1>
