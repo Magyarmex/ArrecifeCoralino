@@ -261,6 +261,31 @@ function runTests() {
     'La consola de depuración debe indicar el rango de alturas'
   );
 
+  assert(
+    debugConsole.textContent.includes('Terreno visible'),
+    'La consola de depuración debe reportar el porcentaje de terreno visible'
+  );
+
+  const terrainInfo = global.window.__terrainInfo;
+  assert(terrainInfo, 'La información del terreno debe exponerse en window.__terrainInfo');
+  assert(
+    terrainInfo.vertexCount === expectedTerrainVertices,
+    'El conteo de vértices del terreno debe coincidir con la malla completa'
+  );
+  assert(
+    terrainInfo.visibleVertices > 0,
+    'Debe haber vértices visibles por encima de la altura mínima'
+  );
+  assert(
+    terrainInfo.visibleVertexRatio > 0.05,
+    'Una fracción significativa del terreno debe ser visible'
+  );
+  assert(terrainInfo.minHeight >= 0, 'La altura mínima del terreno no debe ser negativa');
+  assert(
+    terrainInfo.maxHeight <= 20.0001,
+    'La altura máxima del terreno debe estar acotada por el límite de 20 metros'
+  );
+
   console.log('✅ Todas las pruebas pasaron');
   return { canvas, overlay, debugConsole, glState };
 }

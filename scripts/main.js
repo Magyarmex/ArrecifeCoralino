@@ -111,11 +111,19 @@ function createBuffer(data) {
   return buffer;
 }
 
-const baseSandColor = [0.86, 0.79, 0.62];
 const blockLineColor = [0.92, 0.88, 0.78];
 const chunkLineColor = [0.7, 0.64, 0.52];
-const terrainHeightScale = 2.4;
-const terrainNoiseScale = 6;
+const sandDarkColor = [0.73, 0.64, 0.48];
+const sandLightColor = [0.97, 0.91, 0.74];
+const terrainNoiseScale = 5.2;
+const maxTerrainHeight = 20;
+const minVisibleHeight = 0.001;
+const falloffRadius = 1.05;
+const falloffExponent = 3.1;
+const lightDirection = (() => {
+  const length = Math.hypot(0.37, 0.84, 0.4) || 1;
+  return [0.37 / length, 0.84 / length, 0.4 / length];
+})();
 
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
@@ -135,7 +143,14 @@ const terrainInfo = {
   seed: currentSeed,
   minHeight: 0,
   maxHeight: 0,
+  vertexCount: 0,
+  visibleVertices: 0,
+  visibleVertexRatio: 0,
 };
+
+if (typeof window !== 'undefined') {
+  window.__terrainInfo = terrainInfo;
+}
 
 if (seedInput) {
   seedInput.value = currentSeed;
@@ -209,15 +224,15 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-function pushVertex(buffer, offset, x, y, z, height) {
-  const normalized = Math.max(-1, Math.min(1, height / terrainHeightScale));
-  const brightness = normalized * 0.12;
-  const color = [
-    clamp01(baseSandColor[0] + brightness),
-    clamp01(baseSandColor[1] + brightness * 0.9),
-    clamp01(baseSandColor[2] + brightness * 0.6),
+function mixColor(a, b, t) {
+  return [
+    lerp(a[0], b[0], t),
+    lerp(a[1], b[1], t),
+    lerp(a[2], b[2], t),
   ];
+}
 
+function pushVertex(buffer, offset, x, y, z, color) {
   buffer[offset + 0] = x;
   buffer[offset + 1] = y;
   buffer[offset + 2] = z;
@@ -230,27 +245,77 @@ function pushVertex(buffer, offset, x, y, z, height) {
 function generateTerrainVertices(seedString) {
   const numericSeed = stringToSeed(seedString);
   const blocksPerSide = chunksPerSide * blocksPerChunk;
-  const vertexCount = blocksPerSide * blocksPerSide * 6 * floatsPerVertex;
-  const vertexData = new Float32Array(vertexCount);
+  const vertexFloatCount = blocksPerSide * blocksPerSide * 6 * floatsPerVertex;
+  const vertexData = new Float32Array(vertexFloatCount);
   const heights = new Array(blocksPerSide + 1);
+  const islandMask = new Array(blocksPerSide + 1);
   let minHeight = Infinity;
   let maxHeight = -Infinity;
 
   for (let z = 0; z <= blocksPerSide; z++) {
     heights[z] = new Array(blocksPerSide + 1);
+    islandMask[z] = new Array(blocksPerSide + 1);
     for (let x = 0; x <= blocksPerSide; x++) {
       const sampleX = (x / blocksPerSide) * terrainNoiseScale;
       const sampleZ = (z / blocksPerSide) * terrainNoiseScale;
-      const noiseValue = fbm(sampleX, sampleZ, numericSeed);
-      const height = (noiseValue - 0.5) * 2 * terrainHeightScale;
+      const baseNoise = fbm(sampleX, sampleZ, numericSeed);
+      const duneNoise = fbm(sampleX * 2.3, sampleZ * 2.3, numericSeed ^ 0x27d4eb2d);
+
+      const shapedBase = clamp01(baseNoise * 1.18 - 0.18);
+      const dunePeaks = Math.pow(1 - Math.abs(duneNoise * 2 - 1), 2.4);
+
+      const nx = x / blocksPerSide;
+      const nz = z / blocksPerSide;
+      const centeredX = nx * 2 - 1;
+      const centeredZ = nz * 2 - 1;
+      const radialDistance = Math.hypot(centeredX, centeredZ);
+      const normalizedDistance = Math.min(1, radialDistance / falloffRadius);
+      const falloff = Math.pow(normalizedDistance, falloffExponent);
+      const mask = clamp01(1 - falloff);
+
+      const combined = clamp01((shapedBase + dunePeaks * 0.45) * mask + mask * 0.08);
+      const height = clamp01(combined) * maxTerrainHeight;
+
       heights[z][x] = height;
+      islandMask[z][x] = mask;
       if (height < minHeight) minHeight = height;
       if (height > maxHeight) maxHeight = height;
     }
   }
 
+  const colors = new Array(blocksPerSide + 1);
+  for (let z = 0; z <= blocksPerSide; z++) {
+    colors[z] = new Array(blocksPerSide + 1);
+    for (let x = 0; x <= blocksPerSide; x++) {
+      const height = heights[z][x];
+      const normalizedHeight = maxTerrainHeight > 0 ? height / maxTerrainHeight : 0;
+
+      const sampleHeight = (xi, zi) => {
+        const clampedX = Math.max(0, Math.min(blocksPerSide, xi));
+        const clampedZ = Math.max(0, Math.min(blocksPerSide, zi));
+        return heights[clampedZ][clampedX];
+      };
+
+      const left = sampleHeight(x - 1, z);
+      const right = sampleHeight(x + 1, z);
+      const down = sampleHeight(x, z - 1);
+      const up = sampleHeight(x, z + 1);
+
+      const tangentX = [blockSize * 2, right - left, 0];
+      const tangentZ = [0, up - down, blockSize * 2];
+      const normal = normalize(cross(tangentZ, tangentX));
+      const diffuse = clamp01(dot(normal, lightDirection));
+      const ambient = 0.4;
+      const shading = clamp01(ambient + diffuse * 0.6);
+      const coastalBoost = clamp01(islandMask[z][x]) * 0.2;
+      const colorMix = clamp01(shading * 0.7 + normalizedHeight * 0.3 + coastalBoost * 0.5);
+      colors[z][x] = mixColor(sandDarkColor, sandLightColor, colorMix);
+    }
+  }
+
   let offset = 0;
   const half = baseplateSize / 2;
+  let visibleVertices = 0;
   for (let z = 0; z < blocksPerSide; z++) {
     for (let x = 0; x < blocksPerSide; x++) {
       const x0 = -half + x * blockSize;
@@ -263,27 +328,45 @@ function generateTerrainVertices(seedString) {
       const h01 = heights[z + 1][x];
       const h11 = heights[z + 1][x + 1];
 
-      offset = pushVertex(vertexData, offset, x0, h00, z0, h00);
-      offset = pushVertex(vertexData, offset, x1, h10, z0, h10);
-      offset = pushVertex(vertexData, offset, x1, h11, z1, h11);
+      const c00 = colors[z][x];
+      const c10 = colors[z][x + 1];
+      const c01 = colors[z + 1][x];
+      const c11 = colors[z + 1][x + 1];
 
-      offset = pushVertex(vertexData, offset, x0, h00, z0, h00);
-      offset = pushVertex(vertexData, offset, x1, h11, z1, h11);
-      offset = pushVertex(vertexData, offset, x0, h01, z1, h01);
+      const addVertex = (vx, vy, vz, color) => {
+        if (vy > minVisibleHeight) {
+          visibleVertices += 1;
+        }
+        offset = pushVertex(vertexData, offset, vx, vy, vz, color);
+      };
+
+      addVertex(x0, h00, z0, c00);
+      addVertex(x1, h10, z0, c10);
+      addVertex(x1, h11, z1, c11);
+
+      addVertex(x0, h00, z0, c00);
+      addVertex(x1, h11, z1, c11);
+      addVertex(x0, h01, z1, c01);
     }
   }
 
-  return { vertexData, minHeight, maxHeight };
+  return { vertexData, minHeight, maxHeight, visibleVertices };
 }
 
 function regenerateTerrain(seedString) {
-  const { vertexData, minHeight, maxHeight } = generateTerrainVertices(seedString);
+  const { vertexData, minHeight, maxHeight, visibleVertices } =
+    generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
   terrainInfo.seed = seedString;
-  terrainInfo.minHeight = minHeight;
-  terrainInfo.maxHeight = maxHeight;
+  terrainInfo.minHeight = Math.max(0, minHeight);
+  terrainInfo.maxHeight = Math.min(maxTerrainHeight, maxHeight);
+  terrainInfo.vertexCount = baseplateVertexCount;
+  terrainInfo.visibleVertices = visibleVertices;
+  terrainInfo.visibleVertexRatio = baseplateVertexCount
+    ? visibleVertices / baseplateVertexCount
+    : 0;
 }
 
 function generateRandomSeed() {
@@ -690,13 +773,18 @@ function updateDebugConsole(deltaTime) {
     .map(([key]) => key)
     .join(', ');
 
+  const visiblePercentage = terrainInfo.vertexCount
+    ? terrainInfo.visibleVertexRatio * 100
+    : 0;
+
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Terreno seed: ${terrainInfo.seed}`,
-    `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)} max=${terrainInfo.maxHeight.toFixed(2)}`,
+    `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
+    `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
