@@ -9,6 +9,26 @@
   <body>
     <canvas id="scene"></canvas>
     <div id="simulation-hud" aria-live="polite" aria-hidden="true">
+      <div class="hud-daycycle" id="day-cycle-display">
+        <div class="hud-daycycle__icons" aria-hidden="true">
+          <span class="hud-daycycle__icon" data-day-cycle-phase="dawn" title="Amanecer">🌅</span>
+          <span class="hud-daycycle__icon" data-day-cycle-phase="midday" title="Mediodía">🌞</span>
+          <span class="hud-daycycle__icon" data-day-cycle-phase="dusk" title="Atardecer">🌇</span>
+          <span class="hud-daycycle__icon" data-day-cycle-phase="midnight" title="Medianoche">🌙</span>
+        </div>
+        <div
+          id="day-cycle-progress-track"
+          class="hud-daycycle__track"
+          role="progressbar"
+          aria-label="Progreso del ciclo día/noche"
+          aria-valuemin="0"
+          aria-valuemax="24"
+          aria-valuenow="0"
+          aria-valuetext="Medianoche"
+        >
+          <div id="day-cycle-progress-fill" class="hud-daycycle__fill"></div>
+        </div>
+      </div>
       <div class="hud-top-row">
         <div class="hud-clock" role="status" aria-label="Tiempo de simulación">
           <span class="hud-label">Tiempo sim</span>
@@ -93,15 +113,10 @@
           <header class="settings-section-header">
             <h3>Panel de depuración</h3>
             <p>
-              Consulta métricas internas de la simulación y activa utilidades
-              experimentales.
+              Consulta métricas internas desde la consola en pantalla y activa
+              utilidades experimentales.
             </p>
           </header>
-          <pre
-            id="settings-debug-log"
-            class="settings-debug-log"
-            aria-live="polite"
-          ></pre>
           <div class="settings-debug-options" role="group" aria-label="Ajustes especiales">
             <label class="settings-checkbox" for="debug-terrain-translucent">
               <input
@@ -153,6 +168,7 @@
         </div>
       </dl>
     </aside>
+    <pre id="debug-console" class="debug-console" aria-live="polite" aria-hidden="true"></pre>
     <script src="scripts/main.js" type="module"></script>
   </body>
 </html>

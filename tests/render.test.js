@@ -10,6 +10,7 @@ function createWebGLStub() {
     draws: [],
     viewProjection: null,
     opacity: 1,
+    depthMask: true,
   };
 
   const gl = {
@@ -61,10 +62,22 @@ function createWebGLStub() {
     bufferData: () => {},
     enableVertexAttribArray: () => {},
     vertexAttribPointer: () => {},
-    uniformMatrix4fv: () => {},
+    uniformMatrix4fv: (location, transpose, matrix) => {
+      void location;
+      void transpose;
+      state.viewProjection = Array.isArray(matrix)
+        ? matrix.slice()
+        : Array.from(matrix || []);
+    },
     uniform3f: () => {},
-    uniform1f: () => {},
+    uniform1f: (location, value) => {
+      void location;
+      state.opacity = value;
+    },
     blendFunc: () => {},
+    depthMask: (flag) => {
+      state.depthMask = flag;
+    },
     clear: () => {},
     viewport: (x, y, width, height) => {
       state.viewport = [x, y, width, height];
@@ -129,6 +142,54 @@ function runGameScript() {
     textContent: '',
   };
 
+  const dayCycleProgressTrack = {
+    style: {},
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    },
+    getAttribute(name) {
+      return this.attributes[name];
+    },
+  };
+
+  const dayCycleProgressFill = {
+    style: { width: '0%' },
+  };
+
+  function createDayCycleIcon(phase) {
+    const icon = {
+      phase,
+      active: false,
+      classList: {
+        add(className) {
+          if (className === 'hud-daycycle__icon--active') {
+            icon.active = true;
+          }
+        },
+        remove(className) {
+          if (className === 'hud-daycycle__icon--active') {
+            icon.active = false;
+          }
+        },
+      },
+      getAttribute(name) {
+        if (name === 'data-day-cycle-phase') {
+          return phase;
+        }
+        return null;
+      },
+    };
+    return icon;
+  }
+
+  const dayCycleIcons = [
+    createDayCycleIcon('dawn'),
+    createDayCycleIcon('midday'),
+    createDayCycleIcon('dusk'),
+    createDayCycleIcon('midnight'),
+  ];
+
   const settingsToggle = {
     _attributes: { 'aria-expanded': 'false' },
     addEventListener: () => {},
@@ -155,10 +216,6 @@ function runGameScript() {
 
   const randomSeedButton = {
     addEventListener: () => {},
-  };
-
-  const settingsDebugLog = {
-    textContent: '',
   };
 
   const debugTerrainToggle = {
@@ -188,6 +245,12 @@ function runGameScript() {
       }
       listeners.document[event] = handler;
     },
+    exitPointerLock: () => {
+      document.pointerLockElement = null;
+      if (document._pointerLockChange) {
+        document._pointerLockChange();
+      }
+    },
     getElementById: (id) => {
       if (id === 'scene') return canvas;
       if (id === 'overlay') return overlay;
@@ -197,9 +260,16 @@ function runGameScript() {
       if (id === 'settings-panel') return settingsPanel;
       if (id === 'seed-input') return seedInput;
       if (id === 'random-seed') return randomSeedButton;
-      if (id === 'settings-debug-log') return settingsDebugLog;
       if (id === 'debug-terrain-translucent') return debugTerrainToggle;
+      if (id === 'day-cycle-progress-track') return dayCycleProgressTrack;
+      if (id === 'day-cycle-progress-fill') return dayCycleProgressFill;
       return null;
+    },
+    querySelectorAll: (selector) => {
+      if (selector === '[data-day-cycle-phase]') {
+        return dayCycleIcons;
+      }
+      return [];
     },
   };
 
@@ -240,9 +310,12 @@ function runGameScript() {
     debugConsole,
     glState: state,
     stepFrame: stepFrames,
-    seeThroughToggle,
-    selectionInfoPanel,
-    selectionBlockField,
+    seeThroughToggle: globalThis.seeThroughToggle,
+    selectionInfoPanel: globalThis.selectionInfoPanel,
+    selectionBlockField: globalThis.selectionBlockField,
+    dayCycleProgressTrack,
+    dayCycleProgressFill,
+    dayCycleIcons,
   };
 }
 
@@ -262,13 +335,16 @@ function runTests() {
     seeThroughToggle,
     selectionInfoPanel,
     selectionBlockField,
+    dayCycleProgressTrack,
+    dayCycleProgressFill,
+    dayCycleIcons,
   } = runGameScript();
 
   const blocksPerChunk = 8;
   const chunksPerSide = 16;
   const blocksPerSide = blocksPerChunk * chunksPerSide;
   const expectedTerrainVertices = blocksPerSide * blocksPerSide * 6;
-  const expectedBlockLineVertices = (blocksPerSide + 1) * blocksPerSide * 4;
+  const expectedBlockLineVertices = blocksPerSide * (blocksPerSide + 1) * 4;
   const expectedChunkLineVertices = (blocksPerSide / blocksPerChunk + 1) * blocksPerSide * 4;
 
   assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
@@ -296,8 +372,13 @@ function runTests() {
   assert(rockDraw, 'Las rocas deben renderizarse en draw calls adicionales');
   assert(rockDraw.count % 3 === 0, 'La geometría de rocas debe estar compuesta por triángulos completos');
 
-  const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 516);
-  assert(blockLines, 'La grid de bloques debe contener 516 vértices de línea');
+  const blockLines = glState.draws.find(
+    (draw) => draw.mode === 0x0001 && draw.count === expectedBlockLineVertices,
+  );
+  assert(
+    blockLines,
+    `La grid de bloques debe seguir la topografía con ${expectedBlockLineVertices} vértices`,
+  );
 
   const chunkLines = glState.draws.find(
     (draw) => draw.mode === 0x0001 && draw.count === expectedChunkLineVertices
@@ -306,9 +387,16 @@ function runTests() {
 
   assert(glState.draws.length >= 4, 'Se esperan múltiples draw calls por cuadro incluyendo rocas');
 
+  assert(glState.depthMask === true, 'El render debe restaurar la escritura en el depth buffer tras los grids');
+
   assert(
     debugConsole.textContent.includes('Draw calls'),
     'La consola de depuración debe reportar los draw calls'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Geometría:'),
+    'La consola de depuración debe informar los vértices de la geometría',
   );
 
   assert(
@@ -329,6 +417,11 @@ function runTests() {
   assert(
     debugConsole.textContent.includes('Terreno visible'),
     'La consola de depuración debe reportar el porcentaje de terreno visible'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Terreno características:'),
+    'La consola de depuración debe mostrar las métricas de rasgos del terreno',
   );
 
   assert(
@@ -374,6 +467,27 @@ function runTests() {
   assert(
     terrainInfo.rockCount > 0,
     'La generación de rocas debe producir al menos una formación'
+  );
+  assert(
+    terrainInfo.featureStats && typeof terrainInfo.featureStats.canyon === 'number',
+    'Las métricas de rasgos del terreno deben almacenarse en terrainInfo.featureStats',
+  );
+
+  stepFrame(8);
+  const progressNow = Number.parseFloat(dayCycleProgressTrack.attributes['aria-valuenow']);
+  assert(
+    Number.isFinite(progressNow),
+    'El progreso del ciclo día/noche debe actualizar su valor numérico',
+  );
+  const progressWidth = Number.parseFloat(dayCycleProgressFill.style.width);
+  assert(
+    progressWidth >= 0 && progressWidth <= 100,
+    'La barra del ciclo día/noche debe reflejar el avance en porcentaje',
+  );
+  const activeIcons = dayCycleIcons.filter((icon) => icon.active);
+  assert(
+    activeIcons.length === 1,
+    'Debe resaltarse exactamente un icono del ciclo día/noche a la vez',
   );
 
   seeThroughToggle.checked = true;
