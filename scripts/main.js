@@ -2,6 +2,10 @@ const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
+const settingsToggle = document.getElementById('settings-toggle');
+const settingsPanel = document.getElementById('settings-panel');
+const seedInput = document.getElementById('seed-input');
+const randomSeedButton = document.getElementById('random-seed');
 
 const gl = canvas.getContext('webgl', { antialias: true });
 if (!gl) {
@@ -81,18 +85,6 @@ const baseplateSize = chunkSize * chunksPerSide;
 const floatsPerVertex = 6;
 const vertexStride = floatsPerVertex * Float32Array.BYTES_PER_ELEMENT;
 
-function createBaseplate(size, color, yOffset) {
-  const half = size / 2;
-  return new Float32Array([
-    -half, yOffset, -half, color[0], color[1], color[2],
-    half, yOffset, -half, color[0], color[1], color[2],
-    half, yOffset, half, color[0], color[1], color[2],
-    -half, yOffset, -half, color[0], color[1], color[2],
-    half, yOffset, half, color[0], color[1], color[2],
-    -half, yOffset, half, color[0], color[1], color[2],
-  ]);
-}
-
 function createLineGrid(size, step, color, yOffset) {
   const half = size / 2;
   const lineCount = Math.round(size / step);
@@ -119,21 +111,219 @@ function createBuffer(data) {
   return buffer;
 }
 
-const baseplateColor = [0.14, 0.22, 0.27];
-const blockLineColor = [0.28, 0.38, 0.45];
-const chunkLineColor = [0.42, 0.55, 0.62];
+const baseSandColor = [0.86, 0.79, 0.62];
+const blockLineColor = [0.92, 0.88, 0.78];
+const chunkLineColor = [0.7, 0.64, 0.52];
+const terrainHeightScale = 2.4;
+const terrainNoiseScale = 6;
 
-const baseplateVertices = createBaseplate(baseplateSize, baseplateColor, -0.01);
-const blockGridVertices = createLineGrid(baseplateSize, blockSize, blockLineColor, 0);
-const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColor, 0.002);
+const baseplateBuffer = createBuffer(new Float32Array(0));
+let baseplateVertexCount = 0;
 
-const baseplateBuffer = createBuffer(baseplateVertices);
+const blockGridVertices = createLineGrid(baseplateSize, blockSize, blockLineColor, 0.02);
+const chunkGridVertices = createLineGrid(baseplateSize, chunkSize, chunkLineColor, 0.04);
+
 const blockGridBuffer = createBuffer(blockGridVertices);
 const chunkGridBuffer = createBuffer(chunkGridVertices);
 
-const baseplateVertexCount = baseplateVertices.length / floatsPerVertex;
 const blockGridVertexCount = blockGridVertices.length / floatsPerVertex;
 const chunkGridVertexCount = chunkGridVertices.length / floatsPerVertex;
+
+const defaultSeed = 'coral-dunas';
+let currentSeed = defaultSeed;
+const terrainInfo = {
+  seed: currentSeed,
+  minHeight: 0,
+  maxHeight: 0,
+};
+
+if (seedInput) {
+  seedInput.value = currentSeed;
+}
+
+function stringToSeed(value) {
+  const str = String(value ?? '').trim();
+  if (!str) {
+    return 0x9e3779b9;
+  }
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function hashCoords(x, z, seed) {
+  let h = Math.imul(x, 0x5bd1e995) ^ Math.imul(z, 0x27d4eb2d) ^ seed;
+  h ^= h >>> 13;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967295;
+}
+
+function fade(t) {
+  return t * t * (3 - 2 * t);
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function valueNoise(x, z, seed) {
+  const x0 = Math.floor(x);
+  const z0 = Math.floor(z);
+  const x1 = x0 + 1;
+  const z1 = z0 + 1;
+
+  const sx = fade(x - x0);
+  const sz = fade(z - z0);
+
+  const n00 = hashCoords(x0, z0, seed);
+  const n10 = hashCoords(x1, z0, seed);
+  const n01 = hashCoords(x0, z1, seed);
+  const n11 = hashCoords(x1, z1, seed);
+
+  const ix0 = lerp(n00, n10, sx);
+  const ix1 = lerp(n01, n11, sx);
+  return lerp(ix0, ix1, sz);
+}
+
+function fbm(x, z, seed) {
+  let total = 0;
+  let amplitude = 1;
+  let frequency = 1;
+  let maxValue = 0;
+
+  for (let octave = 0; octave < 4; octave++) {
+    total += valueNoise(x * frequency, z * frequency, seed + octave * 1013) * amplitude;
+    maxValue += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+
+  return total / maxValue;
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function pushVertex(buffer, offset, x, y, z, height) {
+  const normalized = Math.max(-1, Math.min(1, height / terrainHeightScale));
+  const brightness = normalized * 0.12;
+  const color = [
+    clamp01(baseSandColor[0] + brightness),
+    clamp01(baseSandColor[1] + brightness * 0.9),
+    clamp01(baseSandColor[2] + brightness * 0.6),
+  ];
+
+  buffer[offset + 0] = x;
+  buffer[offset + 1] = y;
+  buffer[offset + 2] = z;
+  buffer[offset + 3] = color[0];
+  buffer[offset + 4] = color[1];
+  buffer[offset + 5] = color[2];
+  return offset + floatsPerVertex;
+}
+
+function generateTerrainVertices(seedString) {
+  const numericSeed = stringToSeed(seedString);
+  const blocksPerSide = chunksPerSide * blocksPerChunk;
+  const vertexCount = blocksPerSide * blocksPerSide * 6 * floatsPerVertex;
+  const vertexData = new Float32Array(vertexCount);
+  const heights = new Array(blocksPerSide + 1);
+  let minHeight = Infinity;
+  let maxHeight = -Infinity;
+
+  for (let z = 0; z <= blocksPerSide; z++) {
+    heights[z] = new Array(blocksPerSide + 1);
+    for (let x = 0; x <= blocksPerSide; x++) {
+      const sampleX = (x / blocksPerSide) * terrainNoiseScale;
+      const sampleZ = (z / blocksPerSide) * terrainNoiseScale;
+      const noiseValue = fbm(sampleX, sampleZ, numericSeed);
+      const height = (noiseValue - 0.5) * 2 * terrainHeightScale;
+      heights[z][x] = height;
+      if (height < minHeight) minHeight = height;
+      if (height > maxHeight) maxHeight = height;
+    }
+  }
+
+  let offset = 0;
+  const half = baseplateSize / 2;
+  for (let z = 0; z < blocksPerSide; z++) {
+    for (let x = 0; x < blocksPerSide; x++) {
+      const x0 = -half + x * blockSize;
+      const x1 = x0 + blockSize;
+      const z0 = -half + z * blockSize;
+      const z1 = z0 + blockSize;
+
+      const h00 = heights[z][x];
+      const h10 = heights[z][x + 1];
+      const h01 = heights[z + 1][x];
+      const h11 = heights[z + 1][x + 1];
+
+      offset = pushVertex(vertexData, offset, x0, h00, z0, h00);
+      offset = pushVertex(vertexData, offset, x1, h10, z0, h10);
+      offset = pushVertex(vertexData, offset, x1, h11, z1, h11);
+
+      offset = pushVertex(vertexData, offset, x0, h00, z0, h00);
+      offset = pushVertex(vertexData, offset, x1, h11, z1, h11);
+      offset = pushVertex(vertexData, offset, x0, h01, z1, h01);
+    }
+  }
+
+  return { vertexData, minHeight, maxHeight };
+}
+
+function regenerateTerrain(seedString) {
+  const { vertexData, minHeight, maxHeight } = generateTerrainVertices(seedString);
+  gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
+  baseplateVertexCount = vertexData.length / floatsPerVertex;
+  terrainInfo.seed = seedString;
+  terrainInfo.minHeight = minHeight;
+  terrainInfo.maxHeight = maxHeight;
+}
+
+function generateRandomSeed() {
+  return `seed-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function closeSettingsPanel() {
+  if (settingsToggle && settingsPanel && !settingsPanel.hidden) {
+    settingsToggle.setAttribute('aria-expanded', 'false');
+    settingsPanel.hidden = true;
+  }
+}
+
+function setSeed(nextSeed) {
+  const sanitized = String(nextSeed ?? '').trim();
+  const chosen = sanitized || defaultSeed;
+  currentSeed = chosen;
+  if (seedInput && seedInput.value !== chosen) {
+    seedInput.value = chosen;
+  }
+  regenerateTerrain(chosen);
+}
+
+regenerateTerrain(currentSeed);
+
+function isEditableElement(element) {
+  if (!element) {
+    return false;
+  }
+  const tagName = element.tagName;
+  if (!tagName) {
+    return Boolean(element.isContentEditable);
+  }
+  return (
+    tagName === 'INPUT' ||
+    tagName === 'TEXTAREA' ||
+    element.isContentEditable === true ||
+    element.getAttribute?.('contenteditable') === 'true'
+  );
+}
 
 gl.enableVertexAttribArray(positionAttribute);
 gl.enableVertexAttribArray(colorAttribute);
@@ -280,6 +470,37 @@ if (startButton) {
   startButton.addEventListener('click', requestCameraControl);
 }
 
+if (settingsToggle && settingsPanel) {
+  settingsToggle.addEventListener('click', () => {
+    const expanded = settingsToggle.getAttribute('aria-expanded') === 'true';
+    const next = !expanded;
+    settingsToggle.setAttribute('aria-expanded', String(next));
+    settingsPanel.hidden = !next;
+    if (next && seedInput) {
+      seedInput.focus();
+      seedInput.select();
+    }
+  });
+}
+
+if (settingsPanel) {
+  settingsPanel.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (seedInput) {
+      setSeed(seedInput.value);
+    }
+    closeSettingsPanel();
+  });
+}
+
+if (randomSeedButton) {
+  randomSeedButton.addEventListener('click', () => {
+    const generated = generateRandomSeed();
+    setSeed(generated);
+    closeSettingsPanel();
+  });
+}
+
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
@@ -301,6 +522,9 @@ document.addEventListener('mousemove', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (isEditableElement(event.target)) {
+    return;
+  }
   switch (event.code) {
     case 'KeyW':
       movementState.forward = true;
@@ -332,6 +556,9 @@ document.addEventListener('keydown', (event) => {
 });
 
 document.addEventListener('keyup', (event) => {
+  if (isEditableElement(event.target)) {
+    return;
+  }
   switch (event.code) {
     case 'KeyW':
       movementState.forward = false;
@@ -413,14 +640,30 @@ function bindGeometry(buffer) {
 function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  bindGeometry(baseplateBuffer);
-  gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
+  if (baseplateVertexCount > 0) {
+    bindGeometry(baseplateBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
+  }
 
-  bindGeometry(blockGridBuffer);
-  gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
+  if (blockGridVertexCount > 0 || chunkGridVertexCount > 0) {
+    if (typeof gl.disable === 'function') {
+      gl.disable(gl.DEPTH_TEST);
+    }
 
-  bindGeometry(chunkGridBuffer);
-  gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+    if (blockGridVertexCount > 0) {
+      bindGeometry(blockGridBuffer);
+      gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
+    }
+
+    if (chunkGridVertexCount > 0) {
+      bindGeometry(chunkGridBuffer);
+      gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+    }
+
+    if (typeof gl.enable === 'function') {
+      gl.enable(gl.DEPTH_TEST);
+    }
+  }
 
   if (typeof gl.getError === 'function') {
     const error = gl.getError();
@@ -452,8 +695,10 @@ function updateDebugConsole(deltaTime) {
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
+    `Terreno seed: ${terrainInfo.seed}`,
+    `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)} max=${terrainInfo.maxHeight.toFixed(2)}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
-    `Draw calls: base=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+    `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
 

@@ -27,6 +27,7 @@ function createWebGLStub() {
     VIEWPORT: Symbol('VIEWPORT'),
     clearColor: () => {},
     enable: () => {},
+    disable: () => {},
     createShader: () => ({}),
     shaderSource: () => {},
     compileShader: () => {},
@@ -115,6 +116,34 @@ function runGameScript() {
     textContent: '',
   };
 
+  const settingsToggle = {
+    _attributes: { 'aria-expanded': 'false' },
+    addEventListener: () => {},
+    setAttribute(name, value) {
+      this._attributes[name] = value;
+    },
+    getAttribute(name) {
+      return this._attributes[name];
+    },
+  };
+
+  const settingsPanel = {
+    hidden: true,
+    addEventListener: () => {},
+    classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+  };
+
+  const seedInput = {
+    value: '',
+    focus: () => {},
+    select: () => {},
+    getAttribute: () => null,
+  };
+
+  const randomSeedButton = {
+    addEventListener: () => {},
+  };
+
   const listeners = {
     document: {},
     window: {},
@@ -142,6 +171,10 @@ function runGameScript() {
       if (id === 'overlay') return overlay;
       if (id === 'start-button') return startButton;
       if (id === 'debug-console') return debugConsole;
+      if (id === 'settings-toggle') return settingsToggle;
+      if (id === 'settings-panel') return settingsPanel;
+      if (id === 'seed-input') return seedInput;
+      if (id === 'random-seed') return randomSeedButton;
       return null;
     },
   };
@@ -184,14 +217,21 @@ function assert(condition, message) {
 function runTests() {
   const { canvas, overlay, debugConsole, glState } = runGameScript();
 
+  const blocksPerChunk = 8;
+  const chunksPerSide = 16;
+  const blocksPerSide = blocksPerChunk * chunksPerSide;
+  const expectedTerrainVertices = blocksPerSide * blocksPerSide * 6;
+
   assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
   assert(canvas.height === window.innerHeight, 'El canvas debe igualar el alto de la ventana');
 
   assert(glState.viewport[2] === window.innerWidth, 'Viewport debe usar el ancho completo');
   assert(glState.viewport[3] === window.innerHeight, 'Viewport debe usar el alto completo');
 
-  const triangleDraw = glState.draws.find((draw) => draw.mode === 0x0004 && draw.count === 6);
-  assert(triangleDraw, 'La baseplate debe dibujarse con dos triángulos');
+  const triangleDraw = glState.draws.find(
+    (draw) => draw.mode === 0x0004 && draw.count === expectedTerrainVertices
+  );
+  assert(triangleDraw, 'El terreno debe renderizar todos los vértices esperados');
 
   const blockLines = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 516);
   assert(blockLines, 'La grid de bloques debe contener 516 vértices de línea');
@@ -209,6 +249,16 @@ function runTests() {
   assert(
     debugConsole.textContent.includes('GL error'),
     'La consola de depuración debe mostrar el estado de WebGL'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Terreno seed'),
+    'La consola de depuración debe reflejar la semilla activa'
+  );
+
+  assert(
+    debugConsole.textContent.includes('Altura terreno'),
+    'La consola de depuración debe indicar el rango de alturas'
   );
 
   console.log('✅ Todas las pruebas pasaron');
