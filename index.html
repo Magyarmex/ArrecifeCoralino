@@ -168,7 +168,59 @@
         </div>
       </dl>
     </aside>
-    <pre id="debug-console" class="debug-console" aria-live="polite" aria-hidden="true"></pre>
+    <div
+      id="water-info"
+      class="water-info"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="water-info-title"
+      hidden
+    >
+      <div class="water-info__content">
+        <header class="water-info__header">
+          <h2 id="water-info-title">Información del agua</h2>
+          <button
+            type="button"
+            id="water-info-close"
+            class="water-info__close"
+            aria-label="Cerrar panel de agua"
+          >
+            ×
+          </button>
+        </header>
+        <p class="water-info__description">
+          Detalles experimentales del cuadro seleccionado.
+        </p>
+        <dl class="water-info__stats">
+          <div>
+            <dt>Volumen</dt>
+            <dd id="water-info-volume">—</dd>
+          </div>
+        </dl>
+        <p class="water-info__hint">Pulsa Esc o haz clic para volver a explorar.</p>
+      </div>
+    </div>
+    <div id="debug-panel" class="debug-panel">
+      <button
+        id="debug-toggle"
+        class="debug-toggle"
+        type="button"
+        aria-haspopup="true"
+        aria-expanded="false"
+        aria-controls="debug-console"
+        title="Panel de depuración"
+      >
+        🐞
+        <span class="debug-toggle__label">Panel de depuración</span>
+      </button>
+      <pre
+        id="debug-console"
+        class="debug-console"
+        aria-live="polite"
+        aria-hidden="true"
+        hidden
+      ></pre>
+    </div>
     <script src="scripts/main.js" type="module"></script>
   </body>
 </html>

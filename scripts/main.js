@@ -3,6 +3,8 @@ const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
+const debugPanel = document.getElementById('debug-panel');
+const debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -68,6 +70,11 @@ const selectionDepthField =
   document.getElementById('selection-info-depth') ?? createFallbackTextField();
 const selectionCloseButton =
   document.getElementById('selection-close') ?? createFallbackButton();
+const waterInfoPanel = document.getElementById('water-info') ?? createFallbackInfoPanel();
+const waterInfoVolumeField =
+  document.getElementById('water-info-volume') ?? createFallbackTextField();
+const waterInfoCloseButton =
+  document.getElementById('water-info-close') ?? createFallbackButton();
 
 const bodyElement = document.body;
 
@@ -75,6 +82,12 @@ const runtimeIssues = [];
 const MAX_RUNTIME_ISSUES = 8;
 let fatalRuntimeError = null;
 let loopHalted = false;
+let activeWaterSelection = null;
+let ignoreNextWaterPointerDown = false;
+let waterInfoPointerHandler = null;
+let waterInfoKeyHandler = null;
+let debugPanelExpanded = false;
+let suppressNextSelectionPointerDown = false;
 
 const diagnosticsToast =
   bodyElement && typeof document?.createElement === 'function'
@@ -85,6 +98,8 @@ const overlayErrorMessage =
   overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
     ? createOverlayErrorMessage(overlay)
     : null;
+
+setDebugPanelExpanded(false);
 
 function ensureEventDispatchSupport(element) {
   if (!element) {
@@ -483,6 +498,7 @@ const lightDirection = (() => {
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
 const seaLevel = 6;
+const waterSurfaceLevel = 20;
 const selectionHighlightColor = [0.32, 0.78, 0.94];
 
 const baseplateBuffer = createBuffer(new Float32Array(0));
@@ -964,6 +980,7 @@ function clearSelection() {
   if (selectionInfoPanel) {
     selectionInfoPanel.hidden = true;
   }
+  closeWaterInfo();
 }
 
 function updateSelectionPanel(selection) {
@@ -993,6 +1010,144 @@ function updateSelectionPanel(selection) {
     const depth = selection.waterDepth;
     const status = depth > 0 ? `${depth.toFixed(2)} m (sumergido)` : '0.00 m (emergido)';
     selectionDepthField.textContent = status;
+  }
+}
+
+function setDebugPanelExpanded(expanded) {
+  debugPanelExpanded = Boolean(expanded);
+
+  if (debugPanel && typeof debugPanel.classList?.toggle === 'function') {
+    debugPanel.classList.toggle('debug-panel--expanded', debugPanelExpanded);
+  }
+
+  if (debugToggleButton) {
+    debugToggleButton.setAttribute('aria-expanded', String(debugPanelExpanded));
+  }
+
+  if (debugConsole) {
+    debugConsole.hidden = !debugPanelExpanded;
+    if (typeof debugConsole.setAttribute === 'function') {
+      debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
+    }
+  }
+}
+
+function computeWaterTileVolume(selection) {
+  if (!selection) {
+    return 0;
+  }
+
+  const heights = selection.cornerHeights
+    ? [
+        selection.cornerHeights.h00,
+        selection.cornerHeights.h10,
+        selection.cornerHeights.h01,
+        selection.cornerHeights.h11,
+      ]
+    : [selection.height, selection.height, selection.height, selection.height];
+
+  let depthSum = 0;
+  for (const height of heights) {
+    depthSum += Math.max(0, waterSurfaceLevel - height);
+  }
+
+  const averageDepth = depthSum / heights.length;
+  const area = blockSize * blockSize;
+  return averageDepth * area;
+}
+
+function updateWaterInfoPanel(selection) {
+  if (!waterInfoPanel) {
+    return;
+  }
+
+  const volume = computeWaterTileVolume(selection);
+  if (waterInfoVolumeField) {
+    waterInfoVolumeField.textContent = `${volume.toFixed(2)} m³`;
+  }
+}
+
+function closeWaterInfo(options = {}) {
+  const { restoreCamera = false, event } = options;
+  activeWaterSelection = null;
+  ignoreNextWaterPointerDown = false;
+
+  if (waterInfoPanel) {
+    waterInfoPanel.hidden = true;
+    if (typeof waterInfoPanel.setAttribute === 'function') {
+      waterInfoPanel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  if (
+    waterInfoPointerHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('pointerdown', waterInfoPointerHandler, true);
+  }
+  if (
+    waterInfoKeyHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('keydown', waterInfoKeyHandler, true);
+  }
+
+  if (restoreCamera) {
+    requestCameraControl(event);
+  }
+}
+
+function openWaterInfo(selection, event) {
+  if (!waterInfoPanel) {
+    return;
+  }
+
+  if (!selection || !selection.underwater) {
+    closeWaterInfo();
+    return;
+  }
+
+  activeWaterSelection = selection;
+  updateWaterInfoPanel(selection);
+  waterInfoPanel.hidden = false;
+  if (typeof waterInfoPanel.setAttribute === 'function') {
+    waterInfoPanel.setAttribute('aria-hidden', 'false');
+  }
+  ignoreNextWaterPointerDown = event?.type === 'pointerdown';
+
+  if (!waterInfoPointerHandler) {
+    waterInfoPointerHandler = (pointerEvent) => {
+      if (pointerEvent.button !== undefined && pointerEvent.button !== 0) {
+        return;
+      }
+      if (ignoreNextWaterPointerDown) {
+        ignoreNextWaterPointerDown = false;
+        return;
+      }
+      suppressNextSelectionPointerDown = true;
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => {
+          suppressNextSelectionPointerDown = false;
+        }, 0);
+      }
+      closeWaterInfo({ restoreCamera: true, event: pointerEvent });
+    };
+  }
+
+  if (!waterInfoKeyHandler) {
+    waterInfoKeyHandler = (keyboardEvent) => {
+      if (keyboardEvent.key === 'Escape' || keyboardEvent.key === 'Esc') {
+        keyboardEvent.preventDefault();
+        closeWaterInfo({ restoreCamera: true, event: keyboardEvent });
+      }
+    };
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('pointerdown', waterInfoPointerHandler, true);
+    document.addEventListener('keydown', waterInfoKeyHandler, true);
   }
 }
 
@@ -1031,6 +1186,7 @@ function refreshSelectionAfterTerrain() {
     waterLevel: seaLevel,
     waterDepth,
     underwater: waterDepth > 0,
+    cornerHeights: sample.cornerHeights,
   });
 }
 
@@ -1108,6 +1264,7 @@ function castTerrainRay(origin, direction) {
           waterLevel: seaLevel,
           waterDepth,
           underwater: waterDepth > 0,
+          cornerHeights: centerSample.cornerHeights,
         };
       }
 
@@ -1161,19 +1318,6 @@ function selectBlockAtScreen(pointerX, pointerY) {
     clearSelection();
   }
   return selection;
-}
-
-function exitFreeCameraMode() {
-  if (document?.pointerLockElement === canvas && document?.exitPointerLock) {
-    document.exitPointerLock();
-  }
-}
-
-function activateInteractable(selection) {
-  exitFreeCameraMode();
-  if (selection) {
-    updateSelectionPanel(selection);
-  }
 }
 
 function generateTerrainVertices(seedString) {
@@ -2113,7 +2257,10 @@ function requestCameraControl(event) {
   }
 }
 
-canvas.addEventListener('click', requestCameraControl);
+canvas.addEventListener('click', (event) => {
+  requestCameraControl(event);
+});
+
 canvas.addEventListener('pointerdown', (event) => {
   if (fatalRuntimeError) {
     return;
@@ -2121,20 +2268,17 @@ canvas.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) {
     return;
   }
-  const pointer = getPointerPosition(event);
-  const selection = selectBlockAtScreen(pointer.x, pointer.y);
-  if (event.detail >= 2) {
-    activateInteractable(selection);
-  }
-});
-
-canvas.addEventListener('dblclick', (event) => {
-  if (fatalRuntimeError) {
+  if (suppressNextSelectionPointerDown) {
+    suppressNextSelectionPointerDown = false;
     return;
   }
   const pointer = getPointerPosition(event);
   const selection = selectBlockAtScreen(pointer.x, pointer.y);
-  activateInteractable(selection);
+  if (selection && selection.underwater) {
+    openWaterInfo(selection, event);
+  } else {
+    closeWaterInfo();
+  }
 });
 
 if (startButton) {
@@ -2172,6 +2316,15 @@ if (randomSeedButton) {
   });
 }
 
+if (debugToggleButton) {
+  debugToggleButton.addEventListener('click', () => {
+    setDebugPanelExpanded(!debugPanelExpanded);
+    if (debugPanelExpanded && debugConsole) {
+      debugConsole.scrollTop = debugConsole.scrollHeight;
+    }
+  });
+}
+
 function handleSimulationSpeedChange(value) {
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed)) {
@@ -2198,6 +2351,12 @@ if (debugTerrainToggle) {
 if (selectionCloseButton) {
   selectionCloseButton.addEventListener('click', () => {
     clearSelection();
+  });
+}
+
+if (waterInfoCloseButton) {
+  waterInfoCloseButton.addEventListener('click', (event) => {
+    closeWaterInfo({ restoreCamera: true, event });
   });
 }
 
@@ -2659,7 +2818,7 @@ function updateDebugConsole(deltaTime) {
 
   debugConsole.textContent = output;
   if (typeof debugConsole.setAttribute === 'function') {
-    debugConsole.setAttribute('aria-hidden', 'false');
+    debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
   }
 }
 
