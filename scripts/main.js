@@ -87,6 +87,7 @@ let ignoreNextWaterPointerDown = false;
 let waterInfoPointerHandler = null;
 let waterInfoKeyHandler = null;
 let debugPanelExpanded = false;
+let suppressNextSelectionPointerDown = false;
 
 const diagnosticsToast =
   bodyElement && typeof document?.createElement === 'function'
@@ -1125,6 +1126,12 @@ function openWaterInfo(selection, event) {
         ignoreNextWaterPointerDown = false;
         return;
       }
+      suppressNextSelectionPointerDown = true;
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => {
+          suppressNextSelectionPointerDown = false;
+        }, 0);
+      }
       closeWaterInfo({ restoreCamera: true, event: pointerEvent });
     };
   }
@@ -1311,23 +1318,6 @@ function selectBlockAtScreen(pointerX, pointerY) {
     clearSelection();
   }
   return selection;
-}
-
-function exitFreeCameraMode() {
-  if (document?.pointerLockElement === canvas && document?.exitPointerLock) {
-    document.exitPointerLock();
-  }
-}
-
-function activateInteractable(selection, event) {
-  const targetSelection = selection ?? selectedBlock;
-  if (!targetSelection || !targetSelection.underwater) {
-    closeWaterInfo();
-    return;
-  }
-  exitFreeCameraMode();
-  updateSelectionPanel(targetSelection);
-  openWaterInfo(targetSelection, event);
 }
 
 function generateTerrainVertices(seedString) {
@@ -2267,7 +2257,10 @@ function requestCameraControl(event) {
   }
 }
 
-canvas.addEventListener('click', requestCameraControl);
+canvas.addEventListener('click', (event) => {
+  requestCameraControl(event);
+});
+
 canvas.addEventListener('pointerdown', (event) => {
   if (fatalRuntimeError) {
     return;
@@ -2275,20 +2268,17 @@ canvas.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) {
     return;
   }
-  const pointer = getPointerPosition(event);
-  const selection = selectBlockAtScreen(pointer.x, pointer.y);
-  if (event.detail >= 2) {
-    activateInteractable(selection, event);
-  }
-});
-
-canvas.addEventListener('dblclick', (event) => {
-  if (fatalRuntimeError) {
+  if (suppressNextSelectionPointerDown) {
+    suppressNextSelectionPointerDown = false;
     return;
   }
   const pointer = getPointerPosition(event);
   const selection = selectBlockAtScreen(pointer.x, pointer.y);
-  activateInteractable(selection, event);
+  if (selection && selection.underwater) {
+    openWaterInfo(selection, event);
+  } else {
+    closeWaterInfo();
+  }
 });
 
 if (startButton) {
