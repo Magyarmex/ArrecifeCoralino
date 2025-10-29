@@ -484,6 +484,12 @@ body.tutorial-active #simulation-hud {
   gap: 14px;
 }
 
+.settings-audio-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .settings-section-header h3 {
   margin: 0 0 4px;
   font-size: 0.95rem;
