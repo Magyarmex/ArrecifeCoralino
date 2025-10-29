@@ -3,6 +3,8 @@ const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
+const debugPanel = document.getElementById('debug-panel');
+const debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -68,6 +70,14 @@ const selectionDepthField =
   document.getElementById('selection-info-depth') ?? createFallbackTextField();
 const selectionCloseButton =
   document.getElementById('selection-close') ?? createFallbackButton();
+const waterInfoPanel = document.getElementById('water-info') ?? createFallbackInfoPanel();
+const waterInfoVolumeField =
+  document.getElementById('water-info-volume') ?? createFallbackTextField();
+const waterInfoCloseButton =
+  document.getElementById('water-info-close') ?? createFallbackButton();
+const uiDebugHighlightToggle = document.getElementById('ui-debug-highlight');
+const uiDebugTrackToggle = document.getElementById('ui-debug-track');
+const uiDebugLogButton = document.getElementById('ui-debug-log');
 
 const bodyElement = document.body;
 
@@ -75,6 +85,14 @@ const runtimeIssues = [];
 const MAX_RUNTIME_ISSUES = 8;
 let fatalRuntimeError = null;
 let loopHalted = false;
+let activeWaterSelection = null;
+let ignoreNextWaterPointerDown = false;
+let waterInfoPointerHandler = null;
+let waterInfoKeyHandler = null;
+let debugPanelExpanded = false;
+let suppressNextSelectionPointerDown = false;
+let suppressNextSelectionClick = false;
+let pendingSelectionForClick = null;
 
 const diagnosticsToast =
   bodyElement && typeof document?.createElement === 'function'
@@ -85,6 +103,53 @@ const overlayErrorMessage =
   overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
     ? createOverlayErrorMessage(overlay)
     : null;
+
+setDebugPanelExpanded(false);
+
+const uiDebugRegistry = [
+  {
+    id: 'water-info',
+    name: 'waterInfo',
+    label: 'Panel de información de agua',
+    element: waterInfoPanel,
+  },
+  {
+    id: 'selection-info',
+    name: 'selectionInfo',
+    label: 'Panel de selección',
+    element: selectionInfoPanel,
+  },
+  {
+    id: 'simulation-hud',
+    name: 'simulationHud',
+    label: 'HUD de simulación',
+    element: simulationHud,
+  },
+  {
+    id: 'settings-panel',
+    name: 'settingsPanel',
+    label: 'Panel de configuración',
+    element: settingsPanel,
+  },
+  {
+    id: 'overlay',
+    name: 'tutorialOverlay',
+    label: 'Superposición de tutorial',
+    element: overlay,
+  },
+  {
+    id: 'debug-panel',
+    name: 'debugPanel',
+    label: 'Panel de depuración',
+    element: debugPanel,
+  },
+];
+
+const uiDebugState = {
+  highlight: false,
+  track: false,
+  snapshot: new Map(),
+};
 
 function ensureEventDispatchSupport(element) {
   if (!element) {
@@ -285,6 +350,99 @@ function recordRuntimeIssue(severity, context, error) {
   return entry;
 }
 
+function inspectUiElement(element) {
+  if (!element) {
+    return { present: false };
+  }
+
+  const computed =
+    typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(element)
+      : null;
+  const rect =
+    typeof element?.getBoundingClientRect === 'function'
+      ? element.getBoundingClientRect()
+      : null;
+
+  const width = rect ? Math.round(rect.width) : 0;
+  const height = rect ? Math.round(rect.height) : 0;
+  const hiddenAttribute = Boolean(element.hidden);
+  const display = computed ? computed.display : null;
+  const visibility = computed ? computed.visibility : null;
+  const opacity = computed ? Number.parseFloat(computed.opacity || '1') : 1;
+
+  const visible =
+    !hiddenAttribute &&
+    display !== 'none' &&
+    visibility !== 'hidden' &&
+    opacity > 0.01 &&
+    width > 0 &&
+    height > 0;
+
+  return {
+    present: true,
+    hiddenAttribute,
+    display,
+    visibility,
+    opacity,
+    width,
+    height,
+    top: rect ? Math.round(rect.top) : null,
+    left: rect ? Math.round(rect.left) : null,
+    visible,
+  };
+}
+
+function refreshUiDebugSnapshot() {
+  const snapshot = new Map();
+  for (const entry of uiDebugRegistry) {
+    snapshot.set(entry.name, inspectUiElement(entry.element));
+  }
+  uiDebugState.snapshot = snapshot;
+  return snapshot;
+}
+
+function getUiDebugSnapshotObject(snapshot = uiDebugState.snapshot) {
+  const result = {};
+  if (!(snapshot instanceof Map)) {
+    return result;
+  }
+  for (const entry of uiDebugRegistry) {
+    result[entry.name] = snapshot.get(entry.name);
+  }
+  return result;
+}
+
+function setUiDebugHighlight(active) {
+  uiDebugState.highlight = Boolean(active);
+  if (bodyElement?.classList?.toggle) {
+    bodyElement.classList.toggle('ui-debug-outlines', uiDebugState.highlight);
+  }
+  if (uiDebugHighlightToggle && uiDebugHighlightToggle.checked !== uiDebugState.highlight) {
+    uiDebugHighlightToggle.checked = uiDebugState.highlight;
+  }
+}
+
+function setUiDebugTracking(active) {
+  uiDebugState.track = Boolean(active);
+  if (uiDebugTrackToggle && uiDebugTrackToggle.checked !== uiDebugState.track) {
+    uiDebugTrackToggle.checked = uiDebugState.track;
+  }
+  if (uiDebugState.track) {
+    refreshUiDebugSnapshot();
+  }
+}
+
+function verifyCriticalUiElements() {
+  for (const entry of uiDebugRegistry) {
+    if (!entry.element) {
+      recordRuntimeIssue('error', 'ui', `No se encontró ${entry.label} (#${entry.id})`);
+    }
+  }
+}
+
+verifyCriticalUiElements();
+
 function showOverlayIssue(entry) {
   if (!overlay) {
     return;
@@ -482,7 +640,7 @@ const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
-const seaLevel = 6;
+const waterSurfaceLevel = 20;
 const selectionHighlightColor = [0.32, 0.78, 0.94];
 
 const baseplateBuffer = createBuffer(new Float32Array(0));
@@ -536,6 +694,27 @@ if (typeof window !== 'undefined') {
   window.__selectBlockAt = (x, y) => selectBlockAtScreen(x, y);
   window.__clearSelection = () => clearSelection();
   window.__runtimeIssues = runtimeIssues;
+  window.__uiDebug = {
+    registry: uiDebugRegistry.map(({ id, name, label }) => ({ id, name, label })),
+    refresh() {
+      return getUiDebugSnapshotObject(refreshUiDebugSnapshot());
+    },
+    get state() {
+      return {
+        highlight: uiDebugState.highlight,
+        track: uiDebugState.track,
+        snapshot: getUiDebugSnapshotObject(),
+      };
+    },
+    highlight(active) {
+      setUiDebugHighlight(active);
+      return uiDebugState.highlight;
+    },
+    track(active) {
+      setUiDebugTracking(active);
+      return uiDebugState.track;
+    },
+  };
   if (debugTerrainToggle) {
     if (!('seeThroughToggle' in window)) {
       window.seeThroughToggle = debugTerrainToggle;
@@ -964,6 +1143,7 @@ function clearSelection() {
   if (selectionInfoPanel) {
     selectionInfoPanel.hidden = true;
   }
+  closeWaterInfo();
 }
 
 function updateSelectionPanel(selection) {
@@ -996,6 +1176,151 @@ function updateSelectionPanel(selection) {
   }
 }
 
+function setDebugPanelExpanded(expanded) {
+  debugPanelExpanded = Boolean(expanded);
+
+  if (debugPanel && typeof debugPanel.classList?.toggle === 'function') {
+    debugPanel.classList.toggle('debug-panel--expanded', debugPanelExpanded);
+  }
+
+  if (debugToggleButton) {
+    debugToggleButton.setAttribute('aria-expanded', String(debugPanelExpanded));
+  }
+
+  if (debugConsole) {
+    debugConsole.hidden = !debugPanelExpanded;
+    if (typeof debugConsole.setAttribute === 'function') {
+      debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
+    }
+  }
+}
+
+function computeWaterTileVolume(selection) {
+  if (!selection) {
+    return 0;
+  }
+
+  const heights = selection.cornerHeights
+    ? [
+        selection.cornerHeights.h00,
+        selection.cornerHeights.h10,
+        selection.cornerHeights.h01,
+        selection.cornerHeights.h11,
+      ]
+    : [selection.height, selection.height, selection.height, selection.height];
+
+  let depthSum = 0;
+  for (const height of heights) {
+    depthSum += Math.max(0, waterSurfaceLevel - height);
+  }
+
+  const averageDepth = depthSum / heights.length;
+  const area = blockSize * blockSize;
+  return averageDepth * area;
+}
+
+function updateWaterInfoPanel(selection) {
+  if (!waterInfoPanel) {
+    return;
+  }
+
+  const volume = computeWaterTileVolume(selection);
+  if (waterInfoVolumeField) {
+    waterInfoVolumeField.textContent = `${volume.toFixed(2)} m³`;
+  }
+}
+
+function closeWaterInfo(options = {}) {
+  const { restoreCamera = false, event } = options;
+  activeWaterSelection = null;
+  ignoreNextWaterPointerDown = false;
+
+  if (waterInfoPanel) {
+    waterInfoPanel.hidden = true;
+    if (typeof waterInfoPanel.setAttribute === 'function') {
+      waterInfoPanel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  if (
+    waterInfoPointerHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('pointerdown', waterInfoPointerHandler, true);
+  }
+  if (
+    waterInfoKeyHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('keydown', waterInfoKeyHandler, true);
+  }
+
+  if (restoreCamera) {
+    requestCameraControl(event);
+  }
+}
+
+function openWaterInfo(selection, event) {
+  if (!waterInfoPanel) {
+    return;
+  }
+
+  if (!selection || !selection.underwater) {
+    closeWaterInfo();
+    return;
+  }
+
+  activeWaterSelection = selection;
+  updateWaterInfoPanel(selection);
+  waterInfoPanel.hidden = false;
+  if (typeof waterInfoPanel.setAttribute === 'function') {
+    waterInfoPanel.setAttribute('aria-hidden', 'false');
+  }
+  ignoreNextWaterPointerDown = event?.type === 'pointerdown';
+
+  if (!waterInfoPointerHandler) {
+    waterInfoPointerHandler = (pointerEvent) => {
+      if (pointerEvent.button !== undefined && pointerEvent.button !== 0) {
+        return;
+      }
+      if (ignoreNextWaterPointerDown) {
+        ignoreNextWaterPointerDown = false;
+        return;
+      }
+      suppressNextSelectionPointerDown = true;
+      suppressNextSelectionClick = true;
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => {
+          suppressNextSelectionPointerDown = false;
+        }, 0);
+        setTimeout(() => {
+          suppressNextSelectionClick = false;
+        }, 0);
+      } else {
+        suppressNextSelectionPointerDown = false;
+        suppressNextSelectionClick = false;
+      }
+      closeWaterInfo({ restoreCamera: true, event: pointerEvent });
+    };
+  }
+
+  if (!waterInfoKeyHandler) {
+    waterInfoKeyHandler = (keyboardEvent) => {
+      if (keyboardEvent.key === 'Escape' || keyboardEvent.key === 'Esc') {
+        keyboardEvent.preventDefault();
+        closeWaterInfo({ restoreCamera: true, event: keyboardEvent });
+      }
+    };
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('pointerdown', waterInfoPointerHandler, true);
+    document.addEventListener('keydown', waterInfoKeyHandler, true);
+  }
+}
+
 function applySelection(selection) {
   selectedBlock = selection;
   updateSelectionHighlight(selection.blockX, selection.blockZ);
@@ -1020,7 +1345,7 @@ function refreshSelectionAfterTerrain() {
   }
 
   const height = sample.height;
-  const waterDepth = Math.max(0, seaLevel - height);
+  const waterDepth = Math.max(0, waterSurfaceLevel - height);
   applySelection({
     blockX: sample.blockX,
     blockZ: sample.blockZ,
@@ -1028,9 +1353,10 @@ function refreshSelectionAfterTerrain() {
     chunkZ: sample.chunkZ,
     worldPosition: [sample.centerX, height, sample.centerZ],
     height,
-    waterLevel: seaLevel,
+    waterLevel: waterSurfaceLevel,
     waterDepth,
     underwater: waterDepth > 0,
+    cornerHeights: sample.cornerHeights,
   });
 }
 
@@ -1096,7 +1422,7 @@ function castTerrainRay(origin, direction) {
 
         const centerSample = sampleTerrain(finalSample.centerX, finalSample.centerZ) || finalSample;
         const height = centerSample.height;
-        const waterDepth = Math.max(0, seaLevel - height);
+        const waterDepth = Math.max(0, waterSurfaceLevel - height);
 
         return {
           blockX: centerSample.blockX,
@@ -1105,9 +1431,10 @@ function castTerrainRay(origin, direction) {
           chunkZ: centerSample.chunkZ,
           worldPosition: [centerSample.centerX, height, centerSample.centerZ],
           height,
-          waterLevel: seaLevel,
+          waterLevel: waterSurfaceLevel,
           waterDepth,
           underwater: waterDepth > 0,
+          cornerHeights: centerSample.cornerHeights,
         };
       }
 
@@ -1161,19 +1488,6 @@ function selectBlockAtScreen(pointerX, pointerY) {
     clearSelection();
   }
   return selection;
-}
-
-function exitFreeCameraMode() {
-  if (document?.pointerLockElement === canvas && document?.exitPointerLock) {
-    document.exitPointerLock();
-  }
-}
-
-function activateInteractable(selection) {
-  exitFreeCameraMode();
-  if (selection) {
-    updateSelectionPanel(selection);
-  }
 }
 
 function generateTerrainVertices(seedString) {
@@ -2113,28 +2427,47 @@ function requestCameraControl(event) {
   }
 }
 
-canvas.addEventListener('click', requestCameraControl);
-canvas.addEventListener('pointerdown', (event) => {
+canvas.addEventListener('click', (event) => {
+  requestCameraControl(event);
   if (fatalRuntimeError) {
+    pendingSelectionForClick = null;
     return;
   }
   if (event.button !== 0) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (suppressNextSelectionClick) {
+    suppressNextSelectionClick = false;
+    pendingSelectionForClick = null;
     return;
   }
   const pointer = getPointerPosition(event);
-  const selection = selectBlockAtScreen(pointer.x, pointer.y);
-  if (event.detail >= 2) {
-    activateInteractable(selection);
+  const selection = pendingSelectionForClick ?? selectBlockAtScreen(pointer.x, pointer.y);
+  pendingSelectionForClick = null;
+  if (selection && selection.underwater) {
+    openWaterInfo(selection, event);
+  } else {
+    closeWaterInfo();
   }
 });
 
-canvas.addEventListener('dblclick', (event) => {
+canvas.addEventListener('pointerdown', (event) => {
   if (fatalRuntimeError) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (event.button !== 0) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (suppressNextSelectionPointerDown) {
+    suppressNextSelectionPointerDown = false;
+    pendingSelectionForClick = null;
     return;
   }
   const pointer = getPointerPosition(event);
-  const selection = selectBlockAtScreen(pointer.x, pointer.y);
-  activateInteractable(selection);
+  pendingSelectionForClick = selectBlockAtScreen(pointer.x, pointer.y);
 });
 
 if (startButton) {
@@ -2172,6 +2505,38 @@ if (randomSeedButton) {
   });
 }
 
+if (debugToggleButton) {
+  debugToggleButton.addEventListener('click', () => {
+    setDebugPanelExpanded(!debugPanelExpanded);
+    if (debugPanelExpanded && debugConsole) {
+      debugConsole.scrollTop = debugConsole.scrollHeight;
+    }
+  });
+}
+
+if (uiDebugHighlightToggle) {
+  uiDebugHighlightToggle.addEventListener('change', (event) => {
+    setUiDebugHighlight(event.target.checked);
+  });
+}
+
+if (uiDebugTrackToggle) {
+  uiDebugTrackToggle.addEventListener('change', (event) => {
+    setUiDebugTracking(event.target.checked);
+  });
+}
+
+if (uiDebugLogButton) {
+  uiDebugLogButton.addEventListener('click', () => {
+    const snapshot = refreshUiDebugSnapshot();
+    const summary = getUiDebugSnapshotObject(snapshot);
+    console.info('[UI DEBUG] instantánea de elementos', summary);
+    if (typeof console.table === 'function') {
+      console.table(summary);
+    }
+  });
+}
+
 function handleSimulationSpeedChange(value) {
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed)) {
@@ -2198,6 +2563,12 @@ if (debugTerrainToggle) {
 if (selectionCloseButton) {
   selectionCloseButton.addEventListener('click', () => {
     clearSelection();
+  });
+}
+
+if (waterInfoCloseButton) {
+  waterInfoCloseButton.addEventListener('click', (event) => {
+    closeWaterInfo({ restoreCamera: true, event });
   });
 }
 
@@ -2647,6 +3018,25 @@ function updateDebugConsole(deltaTime) {
     info.push(`Pointer lock errores: ${pointerLockErrors}`);
   }
 
+  if (uiDebugState.track) {
+    const snapshot = refreshUiDebugSnapshot();
+    info.push('', 'UI (depuración):');
+    for (const entry of uiDebugRegistry) {
+      const details = snapshot.get(entry.name);
+      if (!details || !details.present) {
+        info.push(`• ${entry.label}: no encontrado`);
+        continue;
+      }
+      const status = details.visible ? 'visible' : 'oculto';
+      const size = `${details.width}×${details.height}`;
+      info.push(
+        `• ${entry.label}: ${status} (hidden=${
+          details.hiddenAttribute ? 'sí' : 'no'
+        }, display=${details.display ?? 'n/d'}, tamaño=${size})`,
+      );
+    }
+  }
+
   if (runtimeIssues.length > 0) {
     info.push('', 'Problemas recientes:');
     for (const issue of runtimeIssues) {
@@ -2659,7 +3049,7 @@ function updateDebugConsole(deltaTime) {
 
   debugConsole.textContent = output;
   if (typeof debugConsole.setAttribute === 'function') {
-    debugConsole.setAttribute('aria-hidden', 'false');
+    debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
   }
 }
 
