@@ -368,6 +368,14 @@ function runTests() {
   const triangleDraws = glState.draws.filter((draw) => draw.mode === 0x0004);
   assert(triangleDraws.length >= 2, 'Debe haber draw calls de triángulos para terreno y rocas');
 
+  const terrainSurfaceDraws = triangleDraws.filter(
+    (draw) => draw.count === expectedTerrainVertices,
+  );
+  assert(
+    terrainSurfaceDraws.length >= 2,
+    'Debe haber draw calls de triángulos para el terreno base y el agua',
+  );
+
   const rockDraw = triangleDraws.find((draw) => draw.count !== expectedTerrainVertices);
   assert(rockDraw, 'Las rocas deben renderizarse en draw calls adicionales');
   assert(rockDraw.count % 3 === 0, 'La geometría de rocas debe estar compuesta por triángulos completos');
@@ -392,6 +400,11 @@ function runTests() {
   assert(
     debugConsole.textContent.includes('Draw calls'),
     'La consola de depuración debe reportar los draw calls'
+  );
+
+  assert(
+    debugConsole.textContent.includes('agua='),
+    'La consola de depuración debe reportar draw calls de agua'
   );
 
   assert(

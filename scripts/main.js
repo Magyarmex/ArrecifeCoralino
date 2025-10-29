@@ -599,6 +599,7 @@ const vertexSource = `
   uniform float waterColorQuantizeStep;
 
   varying vec3 vColor;
+  varying vec3 vPosition;
 
   const float TAU = 6.2831853;
 
@@ -640,6 +641,7 @@ const vertexSource = `
       finalColor = clamp(quantized, 0.0, 1.0);
     }
 
+    vPosition = finalPosition;
     gl_Position = viewProjection * vec4(finalPosition, 1.0);
     vColor = finalColor;
   }
@@ -939,6 +941,7 @@ let waterAnimationTime = 0;
 
 const drawStats = {
   terrain: 0,
+  water: 0,
   rocks: 0,
   plants: 0,
   blockGrid: 0,
@@ -4074,6 +4077,7 @@ function bindGeometry(buffer) {
 
 function render() {
   drawStats.terrain = 0;
+  drawStats.water = 0;
   drawStats.rocks = 0;
   drawStats.plants = 0;
   drawStats.blockGrid = 0;
@@ -4128,6 +4132,52 @@ function render() {
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
     drawStats.terrain += 1;
     drawStats.total += 1;
+  }
+
+  if (waterVertexCount > 0) {
+    const blendingAlreadyActive = terrainRenderState.translucent;
+    let temporarilyEnabledBlend = false;
+    if (typeof gl.enable === 'function') {
+      if (!blendingAlreadyActive) {
+        gl.enable(gl.BLEND);
+        temporarilyEnabledBlend = true;
+      }
+      if (typeof gl.blendFunc === 'function') {
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      }
+    }
+
+    let depthMaskChanged = false;
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
+      depthMaskChanged = true;
+    }
+
+    if (renderModeUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(renderModeUniform, renderModes.water);
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, waterAlpha);
+    }
+
+    bindGeometry(waterBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
+    drawStats.water += 1;
+    drawStats.total += 1;
+
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (renderModeUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(renderModeUniform, renderModes.terrain);
+    }
+
+    if (depthMaskChanged) {
+      gl.depthMask(true);
+    }
+    if (temporarilyEnabledBlend && typeof gl.disable === 'function') {
+      gl.disable(gl.BLEND);
+    }
   }
 
   if (rockVertexCount > 0) {
@@ -4276,7 +4326,7 @@ function updateDebugConsole(deltaTime) {
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
