@@ -2,9 +2,9 @@ const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
-const debugConsole = document.getElementById('debug-console');
-const debugPanel = document.getElementById('debug-panel');
-const debugToggleButton = document.getElementById('debug-toggle');
+let debugConsole = document.getElementById('debug-console');
+let debugPanel = document.getElementById('debug-panel');
+let debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -28,74 +28,200 @@ const dayCyclePhaseIconMap = new Map(
 );
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
-function createFallbackInfoPanel() {
-  let hiddenState = true;
-  return {
-    get hidden() {
-      return hiddenState;
-    },
-    set hidden(value) {
-      hiddenState = Boolean(value);
-    },
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  };
+const runtimeState =
+  (globalThis.__ARRECIFE_RUNTIME_STATE__ =
+    globalThis.__ARRECIFE_RUNTIME_STATE__ || {
+      bootstrapAttempts: 0,
+      issues: [],
+      fallbackFactories: null,
+    });
+
+runtimeState.bootstrapAttempts += 1;
+
+const runtimeIssues = Array.isArray(runtimeState.issues)
+  ? runtimeState.issues
+  : (runtimeState.issues = []);
+const MAX_RUNTIME_ISSUES = 8;
+
+const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
+  ? runtimeState.pendingIssues
+  : (runtimeState.pendingIssues = []);
+
+if (runtimeState.bootstrapAttempts > 1) {
+  pendingRuntimeIssueQueue.push({
+    severity: 'fatal',
+    context: 'bootstrap',
+    error:
+      'Se detectó una segunda inicialización del script principal. Verifica que "scripts/main.js" solo se incluya una vez.',
+  });
 }
 
-function createFallbackTextField() {
-  return {
-    textContent: '',
-  };
-}
+const fallbackFactories = ensureFallbackFactories();
 
-function createFallbackButton() {
-  return {
-    addEventListener: () => {},
-  };
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = fallbackFactories.debugPanel();
+  if (!runtimeState.debugPanelFallbackReported) {
+    pendingRuntimeIssueQueue.push({
+      severity: 'error',
+      context: 'ui',
+      error:
+        'Se reconstruyó el panel de depuración porque faltaba en el DOM inicial.',
+    });
+    runtimeState.debugPanelFallbackReported = true;
+  }
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
 }
 
 const selectionInfoPanel =
-  document.getElementById('selection-info') ?? createFallbackInfoPanel();
+  document.getElementById('selection-info') ?? fallbackFactories.infoPanel();
 const selectionBlockField =
-  document.getElementById('selection-info-block') ?? createFallbackTextField();
+  document.getElementById('selection-info-block') ?? fallbackFactories.textField();
 const selectionChunkField =
-  document.getElementById('selection-info-chunk') ?? createFallbackTextField();
+  document.getElementById('selection-info-chunk') ?? fallbackFactories.textField();
 const selectionWorldField =
-  document.getElementById('selection-info-world') ?? createFallbackTextField();
+  document.getElementById('selection-info-world') ?? fallbackFactories.textField();
 const selectionHeightField =
-  document.getElementById('selection-info-height') ?? createFallbackTextField();
+  document.getElementById('selection-info-height') ?? fallbackFactories.textField();
 const selectionWaterField =
-  document.getElementById('selection-info-water') ?? createFallbackTextField();
+  document.getElementById('selection-info-water') ?? fallbackFactories.textField();
 const selectionDepthField =
-  document.getElementById('selection-info-depth') ?? createFallbackTextField();
+  document.getElementById('selection-info-depth') ?? fallbackFactories.textField();
 const selectionCloseButton =
-  document.getElementById('selection-close') ?? createFallbackButton();
-const waterInfoPanel = document.getElementById('water-info') ?? createFallbackInfoPanel();
+  document.getElementById('selection-close') ?? fallbackFactories.button();
+const waterInfoPanel = document.getElementById('water-info') ?? fallbackFactories.infoPanel();
 const waterInfoVolumeField =
-  document.getElementById('water-info-volume') ?? createFallbackTextField();
+  document.getElementById('water-info-volume') ?? fallbackFactories.textField();
 const waterInfoCloseButton =
-  document.getElementById('water-info-close') ?? createFallbackButton();
-const plantInfoPanel = document.getElementById('plant-info') ?? createFallbackInfoPanel();
+  document.getElementById('water-info-close') ?? fallbackFactories.button();
+const plantInfoPanel = document.getElementById('plant-info') ?? fallbackFactories.infoPanel();
 const plantInfoSpeciesField =
-  document.getElementById('plant-info-species') ?? createFallbackTextField();
+  document.getElementById('plant-info-species') ?? fallbackFactories.textField();
 const plantInfoAgeLoreField =
-  document.getElementById('plant-info-age-lore') ?? createFallbackTextField();
+  document.getElementById('plant-info-age-lore') ?? fallbackFactories.textField();
 const plantInfoAgeRealField =
-  document.getElementById('plant-info-age-real') ?? createFallbackTextField();
+  document.getElementById('plant-info-age-real') ?? fallbackFactories.textField();
 const plantInfoMassField =
-  document.getElementById('plant-info-mass') ?? createFallbackTextField();
+  document.getElementById('plant-info-mass') ?? fallbackFactories.textField();
 const plantInfoNutrientsField =
-  document.getElementById('plant-info-nutrients') ?? createFallbackTextField();
+  document.getElementById('plant-info-nutrients') ?? fallbackFactories.textField();
 const plantInfoCloseButton =
-  document.getElementById('plant-info-close') ?? createFallbackButton();
+  document.getElementById('plant-info-close') ?? fallbackFactories.button();
+
+function ensureFallbackFactories() {
+  if (runtimeState.fallbackFactories) {
+    return runtimeState.fallbackFactories;
+  }
+
+  function createDebugPanelFallback() {
+    const supportsDom =
+      typeof document?.createElement === 'function' && !!document?.body;
+
+    if (!supportsDom) {
+      const fallbackClassList = { toggle: () => {} };
+      const panel = {
+        id: 'debug-panel',
+        classList: fallbackClassList,
+        appendChild: () => {},
+      };
+      const toggle = {
+        setAttribute: () => {},
+        addEventListener: () => {},
+        append: () => {},
+      };
+      const consoleElement = {
+        hidden: true,
+        textContent: '',
+        scrollTop: 0,
+        scrollHeight: 0,
+        setAttribute: () => {},
+      };
+
+      return { panel, toggle, console: consoleElement };
+    }
+
+    const panel = document.createElement('div');
+    panel.id = 'debug-panel';
+    panel.className = 'debug-panel';
+    panel.dataset.uiElement = 'debug-panel';
+
+    const toggle = document.createElement('button');
+    toggle.id = 'debug-toggle';
+    toggle.type = 'button';
+    toggle.className = 'debug-toggle';
+    toggle.setAttribute('aria-haspopup', 'true');
+    toggle.setAttribute('aria-controls', 'debug-console');
+    toggle.setAttribute('title', 'Panel de depuración');
+
+    const toggleLabel = document.createElement('span');
+    toggleLabel.className = 'debug-toggle__label';
+    toggleLabel.textContent = 'Panel de depuración';
+
+    toggle.append('🐞', toggleLabel);
+
+    const consoleElement = document.createElement('pre');
+    consoleElement.id = 'debug-console';
+    consoleElement.className = 'debug-console';
+    consoleElement.hidden = true;
+    consoleElement.setAttribute('aria-live', 'polite');
+    consoleElement.setAttribute('aria-hidden', 'true');
+    consoleElement.dataset.uiElement = 'debug-console';
+
+    panel.appendChild(toggle);
+    panel.appendChild(consoleElement);
+    document.body.appendChild(panel);
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  function createInfoPanelFallback() {
+    let hiddenState = true;
+    return {
+      get hidden() {
+        return hiddenState;
+      },
+      set hidden(value) {
+        hiddenState = Boolean(value);
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+  }
+
+  function createTextFieldFallback() {
+    return {
+      textContent: '',
+    };
+  }
+
+  function createButtonFallback() {
+    return {
+      addEventListener: () => {},
+    };
+  }
+
+  runtimeState.fallbackFactories = {
+    debugPanel: createDebugPanelFallback,
+    infoPanel: createInfoPanelFallback,
+    textField: createTextFieldFallback,
+    button: createButtonFallback,
+  };
+
+  return runtimeState.fallbackFactories;
+}
 const uiDebugHighlightToggle = document.getElementById('ui-debug-highlight');
 const uiDebugTrackToggle = document.getElementById('ui-debug-track');
 const uiDebugLogButton = document.getElementById('ui-debug-log');
 
 const bodyElement = document.body;
 
-const runtimeIssues = [];
-const MAX_RUNTIME_ISSUES = 8;
 let fatalRuntimeError = null;
 let loopHalted = false;
 let activeWaterSelection = null;
@@ -374,6 +500,11 @@ function recordRuntimeIssue(severity, context, error) {
   return entry;
 }
 
+while (pendingRuntimeIssueQueue.length > 0) {
+  const pendingIssue = pendingRuntimeIssueQueue.shift();
+  recordRuntimeIssue(pendingIssue.severity, pendingIssue.context, pendingIssue.error);
+}
+
 function inspectUiElement(element) {
   if (!element) {
     return { present: false };
@@ -599,6 +730,7 @@ const vertexSource = `
   uniform float waterColorQuantizeStep;
 
   varying vec3 vColor;
+  varying vec3 vPosition;
 
   const float TAU = 6.2831853;
 
@@ -640,6 +772,7 @@ const vertexSource = `
       finalColor = clamp(quantized, 0.0, 1.0);
     }
 
+    vPosition = finalPosition;
     gl_Position = viewProjection * vec4(finalPosition, 1.0);
     vColor = finalColor;
   }
@@ -752,7 +885,9 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
-const renderModeUniform = gl.getUniformLocation(program, 'renderMode');
+const uniformLocations = {
+  renderMode: gl.getUniformLocation(program, 'renderMode'),
+};
 const waterTimeUniform = gl.getUniformLocation(program, 'waterTime');
 const waterSurfaceLevelUniform = gl.getUniformLocation(program, 'waterSurfaceLevel');
 const waterPrimaryWaveFrequencyUniform = gl.getUniformLocation(
@@ -831,8 +966,8 @@ const waterSecondaryWaveSpeed = 0.55;
 const waterPrimaryAmplitude = 0.22;
 const waterSecondaryAmplitude = 0.12;
 
-if (renderModeUniform && typeof gl.uniform1i === 'function') {
-  gl.uniform1i(renderModeUniform, renderModes.terrain);
+if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+  gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
 }
 if (waterTimeUniform) {
   gl.uniform1f(waterTimeUniform, 0);
@@ -939,6 +1074,7 @@ let waterAnimationTime = 0;
 
 const drawStats = {
   terrain: 0,
+  water: 0,
   rocks: 0,
   plants: 0,
   blockGrid: 0,
@@ -4074,6 +4210,7 @@ function bindGeometry(buffer) {
 
 function render() {
   drawStats.terrain = 0;
+  drawStats.water = 0;
   drawStats.rocks = 0;
   drawStats.plants = 0;
   drawStats.blockGrid = 0;
@@ -4106,8 +4243,8 @@ function render() {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
 
-  if (renderModeUniform && typeof gl.uniform1i === 'function') {
-    gl.uniform1i(renderModeUniform, renderModes.terrain);
+  if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
   }
 
   uploadWaterSurfaceBuffer();
@@ -4128,6 +4265,52 @@ function render() {
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
     drawStats.terrain += 1;
     drawStats.total += 1;
+  }
+
+  if (waterVertexCount > 0) {
+    const blendingAlreadyActive = terrainRenderState.translucent;
+    let temporarilyEnabledBlend = false;
+    if (typeof gl.enable === 'function') {
+      if (!blendingAlreadyActive) {
+        gl.enable(gl.BLEND);
+        temporarilyEnabledBlend = true;
+      }
+      if (typeof gl.blendFunc === 'function') {
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      }
+    }
+
+    let depthMaskChanged = false;
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
+      depthMaskChanged = true;
+    }
+
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.water);
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, waterAlpha);
+    }
+
+    bindGeometry(waterBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
+    drawStats.water += 1;
+    drawStats.total += 1;
+
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
+    }
+
+    if (depthMaskChanged) {
+      gl.depthMask(true);
+    }
+    if (temporarilyEnabledBlend && typeof gl.disable === 'function') {
+      gl.disable(gl.BLEND);
+    }
   }
 
   if (rockVertexCount > 0) {
@@ -4276,7 +4459,7 @@ function updateDebugConsole(deltaTime) {
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
