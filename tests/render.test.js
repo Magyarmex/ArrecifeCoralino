@@ -110,7 +110,7 @@ function createWebGLStub() {
 
 
 function runGameScript(options = {}) {
-  const { disableGlobalThis = false } = options;
+  const { disableGlobalThis = false, omitCanvas = false, enableDomFallback = false } = options;
   const { gl, state } = createWebGLStub();
   const frameCallbacks = [];
   const listeners = {
@@ -120,25 +120,35 @@ function runGameScript(options = {}) {
 
   let documentStub;
 
-  const canvas = {
-    width: 0,
-    height: 0,
-    style: {},
-    getContext: (type) => {
-      if (type !== 'webgl') {
-        throw new Error('Se esperaba contexto webgl');
-      }
-      return gl;
-    },
-    addEventListener: () => {},
-    requestPointerLock: () => {
-      documentStub.pointerLockElement = canvas;
-      if (documentStub._pointerLockChange) {
-        documentStub._pointerLockChange();
-      }
-    },
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: canvas.width, height: canvas.height }),
-  };
+  function createCanvasElement() {
+    const element = {
+      width: 0,
+      height: 0,
+      style: {},
+      dataset: {},
+      classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+      setAttribute: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      requestPointerLock: () => {
+        documentStub.pointerLockElement = element;
+        if (documentStub._pointerLockChange) {
+          documentStub._pointerLockChange();
+        }
+      },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: element.width, height: element.height }),
+      getContext: (type) => {
+        if (type !== 'webgl') {
+          throw new Error('Se esperaba contexto webgl');
+        }
+        return gl;
+      },
+    };
+    return element;
+  }
+
+  const canvas = createCanvasElement();
+  let activeCanvas = canvas;
 
   const overlay = {
     className: 'visible',
@@ -241,6 +251,41 @@ function runGameScript(options = {}) {
     classList: { add: () => {}, remove: () => {}, toggle: () => {} },
   };
 
+  const appendedNodes = [];
+
+  function createElementStub(tagName) {
+    const upper = String(tagName || '').toUpperCase();
+    if (upper === 'CANVAS') {
+      return createCanvasElement();
+    }
+    const base = {
+      tagName: upper,
+      style: {},
+      dataset: {},
+      attributes: {},
+      children: [],
+      hidden: false,
+      textContent: '',
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      append(...children) {
+        this.children.push(...children);
+      },
+      setAttribute(name, value) {
+        this.attributes[name] = value;
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+    };
+    if (upper === 'BUTTON') {
+      base.type = 'button';
+    }
+    return base;
+  }
+
   documentStub = {
     pointerLockElement: null,
     _pointerLockChange: null,
@@ -260,7 +305,7 @@ function runGameScript(options = {}) {
       }
     },
     getElementById: (id) => {
-      if (id === 'scene') return canvas;
+      if (id === 'scene') return omitCanvas ? null : activeCanvas;
       if (id === 'overlay') return overlay;
       if (id === 'start-button') return startButton;
       if (id === 'debug-console') return debugConsole;
@@ -282,6 +327,22 @@ function runGameScript(options = {}) {
     },
     body: null,
   };
+
+  if (enableDomFallback) {
+    documentStub.body = {
+      appendChild: (node) => {
+        appendedNodes.push(node);
+        if (node && node.id === 'scene') {
+          activeCanvas = node;
+        }
+        return node;
+      },
+      classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+    };
+    documentStub.createElement = createElementStub;
+  } else {
+    documentStub.createElement = undefined;
+  }
 
   const windowStub = {
     innerWidth: 1280,
@@ -386,7 +447,7 @@ function runGameScript(options = {}) {
     null;
 
   return {
-    canvas,
+    canvas: activeCanvas,
     overlay,
     debugConsole,
     glState: state,
@@ -399,6 +460,7 @@ function runGameScript(options = {}) {
     dayCycleIcons,
     runtimeState: runtimeStateRef,
     windowApi: sandbox.window,
+    domAppends: appendedNodes,
   };
 }
 
@@ -574,6 +636,24 @@ function runTests() {
     'La reconstrucción del panel de depuración debe registrarse como incidencia',
   );
   assert(
+    runtimeState.reportedFallbacks &&
+      typeof runtimeState.reportedFallbacks === 'object' &&
+      runtimeState.reportedFallbacks['debug-panel'] &&
+      runtimeState.reportedFallbacks['debug-panel'].count >= 1,
+    'El estado global debe contabilizar el fallback del panel de depuración',
+  );
+  assert(
+    Array.isArray(runtimeState.uiFallbackEvents) &&
+      runtimeState.uiFallbackEvents.some(
+        (event) => event && event.id === 'debug-panel',
+      ),
+    'Los eventos de fallback deben incluir la reconstrucción del panel de depuración',
+  );
+  assert(
+    debugConsole.textContent.includes('Recuperaciones UI:'),
+    'La consola de depuración debe listar los fallbacks detectados de la interfaz',
+  );
+  assert(
     runtimeState.issues.every(
       (issue) =>
         !(issue && issue.context === 'bootstrap' && issue.severity === 'fatal'),
@@ -696,6 +776,62 @@ function runTests() {
   assert(
     fallbackDebugConsole.textContent.includes('Draw calls'),
     'La consola de depuración debe seguir actualizándose aunque globalThis falte',
+  );
+
+  const {
+    canvas: rebuiltCanvas,
+    debugConsole: rebuiltDebugConsole,
+    runtimeState: rebuiltRuntimeState,
+    domAppends: rebuiltDomAppends,
+  } = runGameScript({ enableDomFallback: true, omitCanvas: true });
+
+  assert(
+    rebuiltRuntimeState &&
+      rebuiltRuntimeState.reportedFallbacks &&
+      rebuiltRuntimeState.reportedFallbacks['scene-canvas'] &&
+      rebuiltRuntimeState.reportedFallbacks['scene-canvas'].count >= 1,
+    'La ausencia del canvas principal debe registrarse como fallback recuperado',
+  );
+  assert(
+    Array.isArray(rebuiltRuntimeState.uiFallbackEvents) &&
+      rebuiltRuntimeState.uiFallbackEvents.some(
+        (event) => event && event.id === 'scene-canvas',
+      ),
+    'El registro de eventos debe incluir la reconstrucción del canvas principal',
+  );
+  const canvasFallbackIssue =
+    Array.isArray(rebuiltRuntimeState.issues)
+      ? rebuiltRuntimeState.issues.find(
+          (issue) =>
+            issue &&
+            typeof issue.message === 'string' &&
+            issue.message.includes('canvas de emergencia'),
+        )
+      : null;
+  assert(
+    Boolean(canvasFallbackIssue),
+    'La reconstrucción del canvas debe aparecer como incidencia registrada',
+  );
+  assert(
+    Array.isArray(rebuiltDomAppends) &&
+      rebuiltDomAppends.some((node) => node && node.id === 'scene'),
+    'El canvas reconstruido debe adjuntarse al DOM simulado',
+  );
+  assert(
+    rebuiltCanvas && rebuiltCanvas.id === 'scene',
+    'El canvas reconstruido debe mantener el identificador #scene',
+  );
+  const rebuiltGl =
+    rebuiltCanvas && typeof rebuiltCanvas.getContext === 'function'
+      ? rebuiltCanvas.getContext('webgl')
+      : null;
+  assert(
+    rebuiltGl && typeof rebuiltGl.drawArrays === 'function',
+    'El canvas reconstruido debe proporcionar un contexto WebGL operativo',
+  );
+  assert(
+    rebuiltDebugConsole.textContent.includes('scene-canvas'),
+    'La consola debe reportar la reconstrucción del canvas principal',
   );
 
   console.log('✅ Todas las pruebas pasaron');

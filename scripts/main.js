@@ -9,7 +9,7 @@ const runtimeGlobal =
     ? global
     : {};
 
-const canvas = document.getElementById('scene');
+let canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
@@ -70,6 +70,8 @@ const runtimeState =
       bootstrapAttempts: 0,
       issues: [],
       fallbackFactories: null,
+      reportedFallbacks: null,
+      uiFallbackEvents: null,
     });
 
 runtimeState.bootstrapAttempts += 1;
@@ -83,6 +85,39 @@ const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   ? runtimeState.pendingIssues
   : (runtimeState.pendingIssues = []);
 
+const MAX_UI_FALLBACK_EVENTS = 12;
+const reportedFallbacks =
+  runtimeState.reportedFallbacks && typeof runtimeState.reportedFallbacks === 'object'
+    ? runtimeState.reportedFallbacks
+    : (runtimeState.reportedFallbacks = {});
+const uiFallbackEvents = Array.isArray(runtimeState.uiFallbackEvents)
+  ? runtimeState.uiFallbackEvents
+  : (runtimeState.uiFallbackEvents = []);
+
+function registerUiFallback(id, message, severity = 'error') {
+  if (!id) {
+    return null;
+  }
+  const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const existing = reportedFallbacks[id];
+  const count = existing ? (existing.count || 0) + 1 : 1;
+  reportedFallbacks[id] = {
+    id,
+    message,
+    severity,
+    count,
+    timestamp,
+  };
+  uiFallbackEvents.push({ id, message, severity, count, timestamp });
+  if (uiFallbackEvents.length > MAX_UI_FALLBACK_EVENTS) {
+    uiFallbackEvents.shift();
+  }
+  if (!existing) {
+    pendingRuntimeIssueQueue.push({ severity, context: 'ui', error: message });
+  }
+  return reportedFallbacks[id];
+}
+
 if (runtimeState.bootstrapAttempts > 1) {
   pendingRuntimeIssueQueue.push({
     severity: 'fatal',
@@ -94,17 +129,14 @@ if (runtimeState.bootstrapAttempts > 1) {
 
 const fallbackFactories = ensureFallbackFactories();
 
+canvas = ensurePrimaryCanvas(canvas);
+
 if (!debugPanel || !debugToggleButton || !debugConsole) {
   const fallback = fallbackFactories.debugPanel();
-  if (!runtimeState.debugPanelFallbackReported) {
-    pendingRuntimeIssueQueue.push({
-      severity: 'error',
-      context: 'ui',
-      error:
-        'Se reconstruyó el panel de depuración porque faltaba en el DOM inicial.',
-    });
-    runtimeState.debugPanelFallbackReported = true;
-  }
+  registerUiFallback(
+    'debug-panel',
+    'Se reconstruyó el panel de depuración porque faltaba en el DOM inicial.',
+  );
   if (!debugPanel) {
     debugPanel = fallback.panel;
   }
@@ -251,6 +283,108 @@ function ensureFallbackFactories() {
   };
 
   return runtimeState.fallbackFactories;
+}
+
+function createCanvasFallbackElement() {
+  const width =
+    (typeof window !== 'undefined' && Number.isFinite(window.innerWidth) && window.innerWidth) || 1280;
+  const height =
+    (typeof window !== 'undefined' && Number.isFinite(window.innerHeight) && window.innerHeight) || 720;
+
+  if (typeof document?.createElement === 'function') {
+    try {
+      const element = document.createElement('canvas');
+      if (!element) {
+        return null;
+      }
+      element.id = 'scene';
+      if (element.dataset) {
+        element.dataset.uiElement = element.dataset.uiElement || 'scene-canvas';
+      } else {
+        element.dataset = { uiElement: 'scene-canvas' };
+      }
+      element.width = element.width || width;
+      element.height = element.height || height;
+      if (element.style) {
+        element.style.display = element.style.display || 'block';
+      }
+      if (document.body && typeof document.body.appendChild === 'function') {
+        document.body.appendChild(element);
+      }
+      return element;
+    } catch (error) {
+      void error;
+    }
+  }
+
+  return {
+    id: 'scene',
+    width,
+    height,
+    dataset: { uiElement: 'scene-canvas' },
+    style: {},
+    classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+    setAttribute: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    requestPointerLock: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width, height }),
+    getContext: () => null,
+  };
+}
+
+function ensurePrimaryCanvas(element) {
+  if (element && typeof element.getContext === 'function') {
+    return element;
+  }
+
+  const fallback = createCanvasFallbackElement();
+  if (fallback && typeof fallback.getContext === 'function') {
+    const originalGetContext =
+      typeof fallback.getContext === 'function' ? fallback.getContext.bind(fallback) : null;
+    let validationContext = null;
+    if (originalGetContext) {
+      try {
+        validationContext = originalGetContext('webgl', { antialias: true });
+      } catch (error) {
+        validationContext = null;
+      }
+    }
+
+    if (validationContext) {
+      try {
+        fallback.getContext = (type, options) => {
+          if (type === 'webgl') {
+            return validationContext;
+          }
+          return originalGetContext ? originalGetContext(type, options) : null;
+        };
+      } catch (error) {
+        void error;
+      }
+      try {
+        Object.defineProperty(fallback, '__arrecifeWebglContext', {
+          value: validationContext,
+          enumerable: false,
+          configurable: true,
+        });
+      } catch (error) {
+        void error;
+      }
+      registerUiFallback(
+        'scene-canvas',
+        'Se creó un canvas de emergencia porque faltaba el elemento principal #scene.',
+      );
+      return fallback;
+    }
+  }
+
+  registerUiFallback(
+    'scene-canvas-missing',
+    'No se pudo recuperar el canvas principal (#scene). Revisa que el HTML incluya <canvas id="scene">.',
+    'fatal',
+  );
+  throw new Error('No se pudo inicializar el canvas principal (#scene)');
 }
 const uiDebugHighlightToggle = document.getElementById('ui-debug-highlight');
 const uiDebugTrackToggle = document.getElementById('ui-debug-track');
@@ -4527,6 +4661,23 @@ function updateDebugConsole(deltaTime) {
           details.hiddenAttribute ? 'sí' : 'no'
         }, display=${details.display ?? 'n/d'}, tamaño=${size})`,
       );
+    }
+  }
+
+  const fallbackSummary =
+    reportedFallbacks && typeof reportedFallbacks === 'object'
+      ? Object.values(reportedFallbacks)
+      : [];
+  if (fallbackSummary.length > 0) {
+    info.push('', 'Recuperaciones UI:');
+    for (const entry of fallbackSummary) {
+      if (!entry) {
+        continue;
+      }
+      const status = entry.severity === 'fatal' ? 'crítico' : 'recuperado';
+      const count = entry.count ?? 1;
+      const detail = entry.message ? ` – ${entry.message}` : '';
+      info.push(`• ${entry.id ?? 'elemento'} (${status}, intentos=${count})${detail}`);
     }
   }
 
