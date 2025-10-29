@@ -1,3 +1,14 @@
+const runtimeGlobal =
+  typeof globalThis !== 'undefined'
+    ? globalThis
+    : typeof self !== 'undefined'
+    ? self
+    : typeof window !== 'undefined'
+    ? window
+    : typeof global !== 'undefined'
+    ? global
+    : {};
+
 const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
@@ -53,133 +64,9 @@ function createFallbackDebugPanel() {
       setAttribute: () => {},
     };
 
-    return { panel, toggle, console: consoleElement };
-  }
-
-  const panel = document.createElement('div');
-  panel.id = 'debug-panel';
-  panel.className = 'debug-panel';
-  panel.dataset.uiElement = 'debug-panel';
-
-  const toggle = document.createElement('button');
-  toggle.id = 'debug-toggle';
-  toggle.type = 'button';
-  toggle.className = 'debug-toggle';
-  toggle.setAttribute('aria-haspopup', 'true');
-  toggle.setAttribute('aria-controls', 'debug-console');
-  toggle.setAttribute('title', 'Panel de depuración');
-
-  const toggleLabel = document.createElement('span');
-  toggleLabel.className = 'debug-toggle__label';
-  toggleLabel.textContent = 'Panel de depuración';
-
-  toggle.append('🐞', toggleLabel);
-
-  const consoleElement = document.createElement('pre');
-  consoleElement.id = 'debug-console';
-  consoleElement.className = 'debug-console';
-  consoleElement.hidden = true;
-  consoleElement.setAttribute('aria-live', 'polite');
-  consoleElement.setAttribute('aria-hidden', 'true');
-  consoleElement.dataset.uiElement = 'debug-console';
-
-  panel.appendChild(toggle);
-  panel.appendChild(consoleElement);
-  document.body.appendChild(panel);
-
-  return { panel, toggle, console: consoleElement };
-}
-
-if (!debugPanel || !debugToggleButton || !debugConsole) {
-  const fallback = createFallbackDebugPanel();
-  if (!debugPanel) {
-    debugPanel = fallback.panel;
-  }
-  if (!debugToggleButton) {
-    debugToggleButton = fallback.toggle;
-  }
-  if (!debugConsole) {
-    debugConsole = fallback.console;
-  }
-}
-
-function createFallbackDebugPanel() {
-  const unsupportedEnvironment =
-    typeof document?.createElement !== 'function' || !document?.body;
-
-  if (unsupportedEnvironment) {
-    const fallbackClassList = { toggle: () => {} };
-    const panel = {
-      id: 'debug-panel',
-      classList: fallbackClassList,
-      appendChild: () => {},
-    };
-    const toggle = {
-      setAttribute: () => {},
-      addEventListener: () => {},
-      append: () => {},
-    };
-    const consoleElement = {
-      hidden: true,
-      textContent: '',
-      scrollTop: 0,
-      scrollHeight: 0,
-      setAttribute: () => {},
-    };
-
-    return { panel, toggle, console: consoleElement };
-  }
-
-  const panel = document.createElement('div');
-  panel.id = 'debug-panel';
-  panel.className = 'debug-panel';
-  panel.dataset.uiElement = 'debug-panel';
-
-  const toggle = document.createElement('button');
-  toggle.id = 'debug-toggle';
-  toggle.type = 'button';
-  toggle.className = 'debug-toggle';
-  toggle.setAttribute('aria-haspopup', 'true');
-  toggle.setAttribute('aria-controls', 'debug-console');
-  toggle.setAttribute('title', 'Panel de depuración');
-
-  const toggleLabel = document.createElement('span');
-  toggleLabel.className = 'debug-toggle__label';
-  toggleLabel.textContent = 'Panel de depuración';
-
-  toggle.append('🐞', toggleLabel);
-
-  const consoleElement = document.createElement('pre');
-  consoleElement.id = 'debug-console';
-  consoleElement.className = 'debug-console';
-  consoleElement.hidden = true;
-  consoleElement.setAttribute('aria-live', 'polite');
-  consoleElement.setAttribute('aria-hidden', 'true');
-  consoleElement.dataset.uiElement = 'debug-console';
-
-  panel.appendChild(toggle);
-  panel.appendChild(consoleElement);
-  document.body.appendChild(panel);
-
-  return { panel, toggle, console: consoleElement };
-}
-
-if (!debugPanel || !debugToggleButton || !debugConsole) {
-  const fallback = createFallbackDebugPanel();
-  if (!debugPanel) {
-    debugPanel = fallback.panel;
-  }
-  if (!debugToggleButton) {
-    debugToggleButton = fallback.toggle;
-  }
-  if (!debugConsole) {
-    debugConsole = fallback.console;
-  }
-}
-
 const runtimeState =
-  (globalThis.__ARRECIFE_RUNTIME_STATE__ =
-    globalThis.__ARRECIFE_RUNTIME_STATE__ || {
+  (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ =
+    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ || {
       bootstrapAttempts: 0,
       issues: [],
       fallbackFactories: null,
@@ -1456,6 +1343,10 @@ function createRandomGenerator(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+runtimeGlobal.__runtimeIssues = runtimeIssues;
+runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ = runtimeState;
+
 
 function randomInRange(random, min, max) {
   return min + random() * (max - min);
