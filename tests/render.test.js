@@ -466,6 +466,41 @@ function runTests() {
     'El panel de debug debe reflejar que el terreno inicia opaco'
   );
 
+  const runtimeState = globalThis.__ARRECIFE_RUNTIME_STATE__;
+  assert(runtimeState && typeof runtimeState === 'object', 'El estado global de runtime debe inicializarse');
+  assert(
+    runtimeState.bootstrapAttempts === 1,
+    'El runtime debe registrar una única inicialización del script principal',
+  );
+  assert(
+    runtimeState.fallbackFactories &&
+      typeof runtimeState.fallbackFactories.debugPanel === 'function' &&
+      typeof runtimeState.fallbackFactories.infoPanel === 'function',
+    'Los factories de fallback deben almacenarse en el estado global',
+  );
+  assert(
+    Array.isArray(runtimeState.issues) && runtimeState.issues.length >= 1,
+    'Las incidencias de runtime deben registrarse en el estado global',
+  );
+  const debugPanelFallbackIssue = runtimeState.issues.find(
+    (issue) =>
+      issue &&
+      issue.context === 'ui' &&
+      typeof issue.message === 'string' &&
+      issue.message.includes('Se reconstruyó el panel de depuración'),
+  );
+  assert(
+    Boolean(debugPanelFallbackIssue),
+    'La reconstrucción del panel de depuración debe registrarse como incidencia',
+  );
+  assert(
+    runtimeState.issues.every(
+      (issue) =>
+        !(issue && issue.context === 'bootstrap' && issue.severity === 'fatal'),
+    ),
+    'Una sola inicialización no debe generar errores fatales de bootstrap',
+  );
+
   const terrainInfo = global.window.__terrainInfo;
   assert(terrainInfo, 'La información del terreno debe exponerse en window.__terrainInfo');
   assert(
