@@ -117,6 +117,32 @@
         </div>
         <div class="settings-divider" aria-hidden="true"></div>
         <section
+          class="settings-section settings-section-audio"
+          aria-label="Audio ambiental"
+        >
+          <header class="settings-section-header">
+            <h3>Audio ambiental</h3>
+            <p>Activa música relajante que acompañe la exploración del arrecife.</p>
+          </header>
+          <div class="settings-audio-options" role="group" aria-label="Opciones de audio">
+            <label class="settings-checkbox" for="audio-music-toggle">
+              <input
+                id="audio-music-toggle"
+                type="checkbox"
+                name="audioMusicEnabled"
+                checked
+              />
+              <span class="settings-checkbox-copy">
+                <span class="settings-checkbox-title">Música ambiental</span>
+                <span class="settings-checkbox-description">
+                  Reproduce una mezcla suave de tonos cálidos y marinos en segundo plano.
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+        <div class="settings-divider" aria-hidden="true"></div>
+        <section
           class="settings-section settings-section-debug"
           aria-label="Depuración"
         >
