@@ -75,7 +75,6 @@ const waterInfoVolumeField =
   document.getElementById('water-info-volume') ?? createFallbackTextField();
 const waterInfoCloseButton =
   document.getElementById('water-info-close') ?? createFallbackButton();
-const uiDebugToolsContainer = document.getElementById('debug-tools');
 const uiDebugHighlightToggle = document.getElementById('ui-debug-highlight');
 const uiDebugTrackToggle = document.getElementById('ui-debug-track');
 const uiDebugLogButton = document.getElementById('ui-debug-log');
@@ -641,7 +640,6 @@ const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
-const seaLevel = 6;
 const waterSurfaceLevel = 20;
 const selectionHighlightColor = [0.32, 0.78, 0.94];
 
@@ -1185,10 +1183,6 @@ function setDebugPanelExpanded(expanded) {
     debugPanel.classList.toggle('debug-panel--expanded', debugPanelExpanded);
   }
 
-  if (uiDebugToolsContainer) {
-    uiDebugToolsContainer.hidden = !debugPanelExpanded;
-  }
-
   if (debugToggleButton) {
     debugToggleButton.setAttribute('aria-expanded', String(debugPanelExpanded));
   }
@@ -1351,7 +1345,7 @@ function refreshSelectionAfterTerrain() {
   }
 
   const height = sample.height;
-  const waterDepth = Math.max(0, seaLevel - height);
+  const waterDepth = Math.max(0, waterSurfaceLevel - height);
   applySelection({
     blockX: sample.blockX,
     blockZ: sample.blockZ,
@@ -1359,7 +1353,7 @@ function refreshSelectionAfterTerrain() {
     chunkZ: sample.chunkZ,
     worldPosition: [sample.centerX, height, sample.centerZ],
     height,
-    waterLevel: seaLevel,
+    waterLevel: waterSurfaceLevel,
     waterDepth,
     underwater: waterDepth > 0,
     cornerHeights: sample.cornerHeights,
@@ -1428,7 +1422,7 @@ function castTerrainRay(origin, direction) {
 
         const centerSample = sampleTerrain(finalSample.centerX, finalSample.centerZ) || finalSample;
         const height = centerSample.height;
-        const waterDepth = Math.max(0, seaLevel - height);
+        const waterDepth = Math.max(0, waterSurfaceLevel - height);
 
         return {
           blockX: centerSample.blockX,
@@ -1437,7 +1431,7 @@ function castTerrainRay(origin, direction) {
           chunkZ: centerSample.chunkZ,
           worldPosition: [centerSample.centerX, height, centerSample.centerZ],
           height,
-          waterLevel: seaLevel,
+          waterLevel: waterSurfaceLevel,
           waterDepth,
           underwater: waterDepth > 0,
           cornerHeights: centerSample.cornerHeights,

@@ -142,6 +142,36 @@
                 </span>
               </span>
             </label>
+            <label class="settings-checkbox" for="ui-debug-highlight">
+              <input
+                id="ui-debug-highlight"
+                type="checkbox"
+                name="uiDebugHighlight"
+              />
+              <span class="settings-checkbox-copy">
+                <span class="settings-checkbox-title">Resaltar interfaz</span>
+                <span class="settings-checkbox-description">
+                  Dibuja contornos sobre los elementos clave de la interfaz para
+                  revisar su estado en pantalla.
+                </span>
+              </span>
+            </label>
+            <label class="settings-checkbox" for="ui-debug-track">
+              <input id="ui-debug-track" type="checkbox" name="uiDebugTrack" />
+              <span class="settings-checkbox-copy">
+                <span class="settings-checkbox-title">Monitorear visibilidad</span>
+                <span class="settings-checkbox-description">
+                  Agrega métricas de visibilidad y tamaño al panel de depuración
+                  para verificar el renderizado de la UI.
+                </span>
+              </span>
+            </label>
+            <button type="button" id="ui-debug-log" class="settings-debug-button">
+              Registrar instantánea de la UI
+            </button>
+            <p class="settings-debug-hint">
+              Las instantáneas se envían a la consola del navegador (F12).
+            </p>
           </div>
         </section>
       </form>
@@ -229,23 +259,6 @@
         🐞
         <span class="debug-toggle__label">Panel de depuración</span>
       </button>
-      <div id="debug-tools" class="debug-tools" hidden data-ui-element="debug-tools">
-        <h2 class="debug-tools__title">Herramientas de interfaz</h2>
-        <label class="debug-tools__option" for="ui-debug-highlight">
-          <input id="ui-debug-highlight" type="checkbox" />
-          <span>Resaltar elementos de la UI</span>
-        </label>
-        <label class="debug-tools__option" for="ui-debug-track">
-          <input id="ui-debug-track" type="checkbox" />
-          <span>Monitorear visibilidad y tamaño</span>
-        </label>
-        <button type="button" id="ui-debug-log" class="debug-tools__action">
-          Registrar instantánea de la UI
-        </button>
-        <p class="debug-tools__hint">
-          Las instantáneas se envían a la consola del navegador (F12).
-        </p>
-      </div>
       <pre
         id="debug-console"
         class="debug-console"
