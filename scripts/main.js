@@ -2,9 +2,9 @@ const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
-const debugConsole = document.getElementById('debug-console');
-const debugPanel = document.getElementById('debug-panel');
-const debugToggleButton = document.getElementById('debug-toggle');
+let debugConsole = document.getElementById('debug-console');
+let debugPanel = document.getElementById('debug-panel');
+let debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -27,6 +27,80 @@ const dayCyclePhaseIconMap = new Map(
     .filter(([phase, element]) => phase && element),
 );
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
+
+function createFallbackDebugPanel() {
+  const unsupportedEnvironment =
+    typeof document?.createElement !== 'function' || !document?.body;
+
+  if (unsupportedEnvironment) {
+    const fallbackClassList = { toggle: () => {} };
+    const panel = {
+      id: 'debug-panel',
+      classList: fallbackClassList,
+      appendChild: () => {},
+    };
+    const toggle = {
+      setAttribute: () => {},
+      addEventListener: () => {},
+      append: () => {},
+    };
+    const consoleElement = {
+      hidden: true,
+      textContent: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      setAttribute: () => {},
+    };
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'debug-panel';
+  panel.className = 'debug-panel';
+  panel.dataset.uiElement = 'debug-panel';
+
+  const toggle = document.createElement('button');
+  toggle.id = 'debug-toggle';
+  toggle.type = 'button';
+  toggle.className = 'debug-toggle';
+  toggle.setAttribute('aria-haspopup', 'true');
+  toggle.setAttribute('aria-controls', 'debug-console');
+  toggle.setAttribute('title', 'Panel de depuración');
+
+  const toggleLabel = document.createElement('span');
+  toggleLabel.className = 'debug-toggle__label';
+  toggleLabel.textContent = 'Panel de depuración';
+
+  toggle.append('🐞', toggleLabel);
+
+  const consoleElement = document.createElement('pre');
+  consoleElement.id = 'debug-console';
+  consoleElement.className = 'debug-console';
+  consoleElement.hidden = true;
+  consoleElement.setAttribute('aria-live', 'polite');
+  consoleElement.setAttribute('aria-hidden', 'true');
+  consoleElement.dataset.uiElement = 'debug-console';
+
+  panel.appendChild(toggle);
+  panel.appendChild(consoleElement);
+  document.body.appendChild(panel);
+
+  return { panel, toggle, console: consoleElement };
+}
+
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = createFallbackDebugPanel();
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
+}
 
 function createFallbackInfoPanel() {
   let hiddenState = true;
@@ -599,6 +673,7 @@ const vertexSource = `
   uniform float waterColorQuantizeStep;
 
   varying vec3 vColor;
+  varying vec3 vPosition;
 
   const float TAU = 6.2831853;
 
@@ -640,6 +715,7 @@ const vertexSource = `
       finalColor = clamp(quantized, 0.0, 1.0);
     }
 
+    vPosition = finalPosition;
     gl_Position = viewProjection * vec4(finalPosition, 1.0);
     vColor = finalColor;
   }
@@ -752,7 +828,9 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
-const renderModeUniform = gl.getUniformLocation(program, 'renderMode');
+const uniformLocations = {
+  renderMode: gl.getUniformLocation(program, 'renderMode'),
+};
 const waterTimeUniform = gl.getUniformLocation(program, 'waterTime');
 const waterSurfaceLevelUniform = gl.getUniformLocation(program, 'waterSurfaceLevel');
 const waterPrimaryWaveFrequencyUniform = gl.getUniformLocation(
@@ -831,8 +909,8 @@ const waterSecondaryWaveSpeed = 0.55;
 const waterPrimaryAmplitude = 0.22;
 const waterSecondaryAmplitude = 0.12;
 
-if (renderModeUniform && typeof gl.uniform1i === 'function') {
-  gl.uniform1i(renderModeUniform, renderModes.terrain);
+if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+  gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
 }
 if (waterTimeUniform) {
   gl.uniform1f(waterTimeUniform, 0);
@@ -939,6 +1017,7 @@ let waterAnimationTime = 0;
 
 const drawStats = {
   terrain: 0,
+  water: 0,
   rocks: 0,
   plants: 0,
   blockGrid: 0,
@@ -4074,6 +4153,7 @@ function bindGeometry(buffer) {
 
 function render() {
   drawStats.terrain = 0;
+  drawStats.water = 0;
   drawStats.rocks = 0;
   drawStats.plants = 0;
   drawStats.blockGrid = 0;
@@ -4106,8 +4186,8 @@ function render() {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
 
-  if (renderModeUniform && typeof gl.uniform1i === 'function') {
-    gl.uniform1i(renderModeUniform, renderModes.terrain);
+  if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
   }
 
   uploadWaterSurfaceBuffer();
@@ -4128,6 +4208,52 @@ function render() {
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
     drawStats.terrain += 1;
     drawStats.total += 1;
+  }
+
+  if (waterVertexCount > 0) {
+    const blendingAlreadyActive = terrainRenderState.translucent;
+    let temporarilyEnabledBlend = false;
+    if (typeof gl.enable === 'function') {
+      if (!blendingAlreadyActive) {
+        gl.enable(gl.BLEND);
+        temporarilyEnabledBlend = true;
+      }
+      if (typeof gl.blendFunc === 'function') {
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      }
+    }
+
+    let depthMaskChanged = false;
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
+      depthMaskChanged = true;
+    }
+
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.water);
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, waterAlpha);
+    }
+
+    bindGeometry(waterBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
+    drawStats.water += 1;
+    drawStats.total += 1;
+
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
+    }
+
+    if (depthMaskChanged) {
+      gl.depthMask(true);
+    }
+    if (temporarilyEnabledBlend && typeof gl.disable === 'function') {
+      gl.disable(gl.BLEND);
+    }
   }
 
   if (rockVertexCount > 0) {
@@ -4276,7 +4402,7 @@ function updateDebugConsole(deltaTime) {
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];

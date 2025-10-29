@@ -11,6 +11,7 @@ function createWebGLStub() {
     viewProjection: null,
     opacity: 1,
     depthMask: true,
+    uniformAssignments: [],
   };
 
   const gl = {
@@ -52,7 +53,7 @@ function createWebGLStub() {
       state.currentProgram = program || {};
     },
     getAttribLocation: () => 0,
-    getUniformLocation: () => ({}),
+    getUniformLocation: (program, name) => ({ program, name }),
     createBuffer: () => ({}),
     bindBuffer: (target, buffer) => {
       if (target === gl.ARRAY_BUFFER) {
@@ -73,6 +74,9 @@ function createWebGLStub() {
     uniform1f: (location, value) => {
       void location;
       state.opacity = value;
+    },
+    uniform1i: (location, value) => {
+      state.uniformAssignments.push({ location, value, name: location?.name ?? null });
     },
     blendFunc: () => {},
     depthMask: (flag) => {
@@ -368,6 +372,14 @@ function runTests() {
   const triangleDraws = glState.draws.filter((draw) => draw.mode === 0x0004);
   assert(triangleDraws.length >= 2, 'Debe haber draw calls de triángulos para terreno y rocas');
 
+  const terrainSurfaceDraws = triangleDraws.filter(
+    (draw) => draw.count === expectedTerrainVertices,
+  );
+  assert(
+    terrainSurfaceDraws.length >= 2,
+    'Debe haber draw calls de triángulos para el terreno base y el agua',
+  );
+
   const rockDraw = triangleDraws.find((draw) => draw.count !== expectedTerrainVertices);
   assert(rockDraw, 'Las rocas deben renderizarse en draw calls adicionales');
   assert(rockDraw.count % 3 === 0, 'La geometría de rocas debe estar compuesta por triángulos completos');
@@ -387,11 +399,24 @@ function runTests() {
 
   assert(glState.draws.length >= 4, 'Se esperan múltiples draw calls por cuadro incluyendo rocas');
 
+  const renderModeAssignments = glState.uniformAssignments.filter(
+    (entry) => entry.name === 'renderMode'
+  );
+  assert(renderModeAssignments.length >= 2, 'El render debe actualizar el uniform renderMode durante el cuadro');
+  const renderModeValues = new Set(renderModeAssignments.map((entry) => entry.value));
+  assert(renderModeValues.has(0), 'El modo de render debe forzar el valor 0 para dibujar el terreno');
+  assert(renderModeValues.has(1), 'El modo de render debe forzar el valor 1 para dibujar el agua');
+
   assert(glState.depthMask === true, 'El render debe restaurar la escritura en el depth buffer tras los grids');
 
   assert(
     debugConsole.textContent.includes('Draw calls'),
     'La consola de depuración debe reportar los draw calls'
+  );
+
+  assert(
+    debugConsole.textContent.includes('agua='),
+    'La consola de depuración debe reportar draw calls de agua'
   );
 
   assert(
