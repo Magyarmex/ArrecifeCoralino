@@ -17,6 +17,9 @@ const simulationSpeedSettingsDisplay = document.getElementById(
 const settingsDebugLog = document.getElementById('settings-debug-log');
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
+const modelLibrary =
+  typeof window !== 'undefined' && Array.isArray(window.modelLibrary) ? window.modelLibrary : [];
+
 function createFallbackInfoPanel() {
   let hiddenState = true;
   return {
@@ -2571,6 +2574,7 @@ function updateDebugConsole(deltaTime) {
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
+    `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
