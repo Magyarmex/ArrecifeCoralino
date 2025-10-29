@@ -27,6 +27,155 @@ const dayCyclePhaseIconMap = new Map(
     .filter(([phase, element]) => phase && element),
 );
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
+const musicToggle = document.getElementById('audio-music-toggle');
+
+function createFallbackDebugPanel() {
+  const unsupportedEnvironment =
+    typeof document?.createElement !== 'function' || !document?.body;
+
+  if (unsupportedEnvironment) {
+    const fallbackClassList = { toggle: () => {} };
+    const panel = {
+      id: 'debug-panel',
+      classList: fallbackClassList,
+      appendChild: () => {},
+    };
+    const toggle = {
+      setAttribute: () => {},
+      addEventListener: () => {},
+      append: () => {},
+    };
+    const consoleElement = {
+      hidden: true,
+      textContent: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      setAttribute: () => {},
+    };
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'debug-panel';
+  panel.className = 'debug-panel';
+  panel.dataset.uiElement = 'debug-panel';
+
+  const toggle = document.createElement('button');
+  toggle.id = 'debug-toggle';
+  toggle.type = 'button';
+  toggle.className = 'debug-toggle';
+  toggle.setAttribute('aria-haspopup', 'true');
+  toggle.setAttribute('aria-controls', 'debug-console');
+  toggle.setAttribute('title', 'Panel de depuración');
+
+  const toggleLabel = document.createElement('span');
+  toggleLabel.className = 'debug-toggle__label';
+  toggleLabel.textContent = 'Panel de depuración';
+
+  toggle.append('🐞', toggleLabel);
+
+  const consoleElement = document.createElement('pre');
+  consoleElement.id = 'debug-console';
+  consoleElement.className = 'debug-console';
+  consoleElement.hidden = true;
+  consoleElement.setAttribute('aria-live', 'polite');
+  consoleElement.setAttribute('aria-hidden', 'true');
+  consoleElement.dataset.uiElement = 'debug-console';
+
+  panel.appendChild(toggle);
+  panel.appendChild(consoleElement);
+  document.body.appendChild(panel);
+
+  return { panel, toggle, console: consoleElement };
+}
+
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = createFallbackDebugPanel();
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
+}
+
+function createFallbackDebugPanel() {
+  const unsupportedEnvironment =
+    typeof document?.createElement !== 'function' || !document?.body;
+
+  if (unsupportedEnvironment) {
+    const fallbackClassList = { toggle: () => {} };
+    const panel = {
+      id: 'debug-panel',
+      classList: fallbackClassList,
+      appendChild: () => {},
+    };
+    const toggle = {
+      setAttribute: () => {},
+      addEventListener: () => {},
+      append: () => {},
+    };
+    const consoleElement = {
+      hidden: true,
+      textContent: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      setAttribute: () => {},
+    };
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'debug-panel';
+  panel.className = 'debug-panel';
+  panel.dataset.uiElement = 'debug-panel';
+
+  const toggle = document.createElement('button');
+  toggle.id = 'debug-toggle';
+  toggle.type = 'button';
+  toggle.className = 'debug-toggle';
+  toggle.setAttribute('aria-haspopup', 'true');
+  toggle.setAttribute('aria-controls', 'debug-console');
+  toggle.setAttribute('title', 'Panel de depuración');
+
+  const toggleLabel = document.createElement('span');
+  toggleLabel.className = 'debug-toggle__label';
+  toggleLabel.textContent = 'Panel de depuración';
+
+  toggle.append('🐞', toggleLabel);
+
+  const consoleElement = document.createElement('pre');
+  consoleElement.id = 'debug-console';
+  consoleElement.className = 'debug-console';
+  consoleElement.hidden = true;
+  consoleElement.setAttribute('aria-live', 'polite');
+  consoleElement.setAttribute('aria-hidden', 'true');
+  consoleElement.dataset.uiElement = 'debug-console';
+
+  panel.appendChild(toggle);
+  panel.appendChild(consoleElement);
+  document.body.appendChild(panel);
+
+  return { panel, toggle, console: consoleElement };
+}
+
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = createFallbackDebugPanel();
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
+}
 
 const runtimeState =
   (globalThis.__ARRECIFE_RUNTIME_STATE__ =
@@ -3729,7 +3878,11 @@ function requestCameraControl(event) {
     }
     return;
   }
+  const trustedInteraction = !event || Boolean(event.isTrusted);
   if (event?.detail >= 2) {
+    if (trustedInteraction) {
+      handleAmbientMusicUserGesture();
+    }
     return;
   }
   if (event) {
@@ -3738,6 +3891,9 @@ function requestCameraControl(event) {
   dismissTutorialOverlay();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
+  }
+  if (trustedInteraction) {
+    handleAmbientMusicUserGesture();
   }
 }
 
@@ -4233,8 +4389,8 @@ function render() {
     );
   }
 
-  if (waterTimeUniform) {
-    gl.uniform1f(waterTimeUniform, waterAnimationTime);
+  if (patternTimeUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(patternTimeUniform, waterAnimationTime ?? 0);
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -4451,11 +4607,7 @@ function updateDebugConsole(deltaTime) {
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
-    `Plantas generadas: ${terrainInfo.plantCount}`,
-    `Plantas activas: ${plantMetrics.count} (maduras ${plantMetrics.matureCount} brotes ${plantMetrics.sproutCount})`,
-    `Biomasa vegetal media: altura=${avgHeightMetric}m masa=${avgMassMetric}kg`,
-    `Energía vegetal: media=${avgEnergyMetric} capacidad=${avgCapacityMetric} (${reservePercent}% reserva) absorción=${absorbedMetric} consumo=${consumedMetric} crecimientos=${growthEventsMetric}`,
-    `Terreno características: cañones=${formatFeaturePercent(featureStats.canyon)}% barrancos=${formatFeaturePercent(featureStats.ravine)}% acantilados=${formatFeaturePercent(featureStats.cliffs)}%`,
+    `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
