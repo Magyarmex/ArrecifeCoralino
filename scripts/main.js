@@ -103,6 +103,80 @@ if (!debugPanel || !debugToggleButton || !debugConsole) {
   }
 }
 
+function createFallbackDebugPanel() {
+  const unsupportedEnvironment =
+    typeof document?.createElement !== 'function' || !document?.body;
+
+  if (unsupportedEnvironment) {
+    const fallbackClassList = { toggle: () => {} };
+    const panel = {
+      id: 'debug-panel',
+      classList: fallbackClassList,
+      appendChild: () => {},
+    };
+    const toggle = {
+      setAttribute: () => {},
+      addEventListener: () => {},
+      append: () => {},
+    };
+    const consoleElement = {
+      hidden: true,
+      textContent: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      setAttribute: () => {},
+    };
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'debug-panel';
+  panel.className = 'debug-panel';
+  panel.dataset.uiElement = 'debug-panel';
+
+  const toggle = document.createElement('button');
+  toggle.id = 'debug-toggle';
+  toggle.type = 'button';
+  toggle.className = 'debug-toggle';
+  toggle.setAttribute('aria-haspopup', 'true');
+  toggle.setAttribute('aria-controls', 'debug-console');
+  toggle.setAttribute('title', 'Panel de depuración');
+
+  const toggleLabel = document.createElement('span');
+  toggleLabel.className = 'debug-toggle__label';
+  toggleLabel.textContent = 'Panel de depuración';
+
+  toggle.append('🐞', toggleLabel);
+
+  const consoleElement = document.createElement('pre');
+  consoleElement.id = 'debug-console';
+  consoleElement.className = 'debug-console';
+  consoleElement.hidden = true;
+  consoleElement.setAttribute('aria-live', 'polite');
+  consoleElement.setAttribute('aria-hidden', 'true');
+  consoleElement.dataset.uiElement = 'debug-console';
+
+  panel.appendChild(toggle);
+  panel.appendChild(consoleElement);
+  document.body.appendChild(panel);
+
+  return { panel, toggle, console: consoleElement };
+}
+
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = createFallbackDebugPanel();
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
+}
+
 function createFallbackInfoPanel() {
   let hiddenState = true;
   return {
@@ -1147,11 +1221,50 @@ const vertexSource = `
 
   varying vec3 vColor;
   varying vec3 vPosition;
+
+  const float TAU = 6.2831853;
+
   void main() {
-    vec4 worldPosition = vec4(position, 1.0);
-    gl_Position = viewProjection * worldPosition;
-    vColor = color;
-    vPosition = worldPosition.xyz;
+    vec3 finalPosition = position;
+    vec3 finalColor = color;
+
+    if (renderMode == 1) {
+      float foam = color.r;
+      float pattern = color.g;
+      float shallowMix = color.b;
+
+      float timePrimary = waterTime * waterPrimaryWaveSpeed;
+      float timeSecondary = waterTime * waterSecondaryWaveSpeed;
+
+      float primaryPhase = position.x * waterPrimaryWaveFrequency + position.z * 0.4 + timePrimary + pattern * TAU;
+      float secondaryPhase = (position.x - position.z) * waterSecondaryWaveFrequency + timeSecondary * 1.1 + pattern * 3.14159265;
+
+      float amplitudeFactor = 0.45 + (1.0 - foam) * 0.55;
+      float waveOffset =
+        sin(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor +
+        cos(secondaryPhase) * waterSecondaryAmplitude * (0.35 + (1.0 - foam) * 0.65);
+
+      finalPosition.y = waterSurfaceLevel + waveOffset;
+
+      vec3 baseColor = mix(waterDeepColor, waterShallowColor, shallowMix);
+      float sparkle = sin(waterTime * 1.3 + (position.x + position.z) * 0.18 + pattern * TAU) * 0.04;
+      baseColor.r = clamp(baseColor.r + sparkle * 0.8, 0.0, 1.0);
+      baseColor.g = clamp(baseColor.g + sparkle * 0.6, 0.0, 1.0);
+      baseColor.b = clamp(baseColor.b + sparkle, 0.0, 1.0);
+
+      float foamHighlight = pow(max(0.0, foam - 0.45), 1.5);
+      if (foamHighlight > 0.0) {
+        float foamBlend = clamp(foamHighlight + pattern * 0.15, 0.0, 1.0);
+        baseColor = mix(baseColor, waterFoamColor, foamBlend);
+      }
+
+      vec3 quantized = floor(baseColor / waterColorQuantizeStep + 0.5) * waterColorQuantizeStep;
+      finalColor = clamp(quantized, 0.0, 1.0);
+    }
+
+    vPosition = finalPosition;
+    gl_Position = viewProjection * vec4(finalPosition, 1.0);
+    vColor = finalColor;
   }
 `;
 
@@ -1262,7 +1375,32 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
-const patternTimeUniform = gl.getUniformLocation(program, 'patternTime');
+const uniformLocations = {
+  renderMode: gl.getUniformLocation(program, 'renderMode'),
+};
+const waterTimeUniform = gl.getUniformLocation(program, 'waterTime');
+const waterSurfaceLevelUniform = gl.getUniformLocation(program, 'waterSurfaceLevel');
+const waterPrimaryWaveFrequencyUniform = gl.getUniformLocation(
+  program,
+  'waterPrimaryWaveFrequency',
+);
+const waterSecondaryWaveFrequencyUniform = gl.getUniformLocation(
+  program,
+  'waterSecondaryWaveFrequency',
+);
+const waterPrimaryWaveSpeedUniform = gl.getUniformLocation(program, 'waterPrimaryWaveSpeed');
+const waterSecondaryWaveSpeedUniform = gl.getUniformLocation(program, 'waterSecondaryWaveSpeed');
+const waterPrimaryAmplitudeUniform = gl.getUniformLocation(program, 'waterPrimaryAmplitude');
+const waterSecondaryAmplitudeUniform = gl.getUniformLocation(program, 'waterSecondaryAmplitude');
+const waterDeepColorUniform = gl.getUniformLocation(program, 'waterDeepColor');
+const waterShallowColorUniform = gl.getUniformLocation(program, 'waterShallowColor');
+const waterFoamColorUniform = gl.getUniformLocation(program, 'waterFoamColor');
+const waterColorQuantizeStepUniform = gl.getUniformLocation(program, 'waterColorQuantizeStep');
+
+const renderModes = {
+  terrain: 0,
+  water: 1,
+};
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -1318,8 +1456,8 @@ const waterSecondaryWaveSpeed = 0.55;
 const waterPrimaryAmplitude = 0.22;
 const waterSecondaryAmplitude = 0.12;
 
-if (renderModeUniform && typeof gl.uniform1i === 'function') {
-  gl.uniform1i(renderModeUniform, renderModes.terrain);
+if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+  gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
 }
 if (waterTimeUniform) {
   gl.uniform1f(waterTimeUniform, 0);
@@ -4602,8 +4740,8 @@ function render() {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
 
-  if (renderModeUniform && typeof gl.uniform1i === 'function') {
-    gl.uniform1i(renderModeUniform, renderModes.terrain);
+  if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
   }
 
   uploadWaterSurfaceBuffer();
@@ -4645,8 +4783,8 @@ function render() {
       depthMaskChanged = true;
     }
 
-    if (renderModeUniform && typeof gl.uniform1i === 'function') {
-      gl.uniform1i(renderModeUniform, renderModes.water);
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.water);
     }
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, waterAlpha);
@@ -4660,8 +4798,8 @@ function render() {
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
     }
-    if (renderModeUniform && typeof gl.uniform1i === 'function') {
-      gl.uniform1i(renderModeUniform, renderModes.terrain);
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
     }
 
     if (depthMaskChanged) {
