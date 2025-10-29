@@ -558,11 +558,66 @@ function createShader(type, source) {
 const vertexSource = `
   attribute vec3 position;
   attribute vec3 color;
+
   uniform mat4 viewProjection;
+  uniform int renderMode;
+  uniform float waterTime;
+  uniform float waterSurfaceLevel;
+  uniform float waterPrimaryWaveFrequency;
+  uniform float waterSecondaryWaveFrequency;
+  uniform float waterPrimaryWaveSpeed;
+  uniform float waterSecondaryWaveSpeed;
+  uniform float waterPrimaryAmplitude;
+  uniform float waterSecondaryAmplitude;
+  uniform vec3 waterDeepColor;
+  uniform vec3 waterShallowColor;
+  uniform vec3 waterFoamColor;
+  uniform float waterColorQuantizeStep;
+
   varying vec3 vColor;
+
+  const float TAU = 6.2831853;
+
   void main() {
-    gl_Position = viewProjection * vec4(position, 1.0);
-    vColor = color;
+    vec3 finalPosition = position;
+    vec3 finalColor = color;
+
+    if (renderMode == 1) {
+      float foam = color.r;
+      float pattern = color.g;
+      float shallowMix = color.b;
+
+      float timePrimary = waterTime * waterPrimaryWaveSpeed;
+      float timeSecondary = waterTime * waterSecondaryWaveSpeed;
+
+      float primaryPhase = position.x * waterPrimaryWaveFrequency + position.z * 0.4 + timePrimary + pattern * TAU;
+      float secondaryPhase = (position.x - position.z) * waterSecondaryWaveFrequency + timeSecondary * 1.1 + pattern * 3.14159265;
+
+      float amplitudeFactor = 0.45 + (1.0 - foam) * 0.55;
+      float waveOffset =
+        sin(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor +
+        cos(secondaryPhase) * waterSecondaryAmplitude * (0.35 + (1.0 - foam) * 0.65);
+
+      finalPosition.y = waterSurfaceLevel + waveOffset;
+
+      vec3 baseColor = mix(waterDeepColor, waterShallowColor, shallowMix);
+      float sparkle = sin(waterTime * 1.3 + (position.x + position.z) * 0.18 + pattern * TAU) * 0.04;
+      baseColor.r = clamp(baseColor.r + sparkle * 0.8, 0.0, 1.0);
+      baseColor.g = clamp(baseColor.g + sparkle * 0.6, 0.0, 1.0);
+      baseColor.b = clamp(baseColor.b + sparkle, 0.0, 1.0);
+
+      float foamHighlight = pow(max(0.0, foam - 0.45), 1.5);
+      if (foamHighlight > 0.0) {
+        float foamBlend = clamp(foamHighlight + pattern * 0.15, 0.0, 1.0);
+        baseColor = mix(baseColor, waterFoamColor, foamBlend);
+      }
+
+      vec3 quantized = floor(baseColor / waterColorQuantizeStep + 0.5) * waterColorQuantizeStep;
+      finalColor = clamp(quantized, 0.0, 1.0);
+    }
+
+    gl_Position = viewProjection * vec4(finalPosition, 1.0);
+    vColor = finalColor;
   }
 `;
 
@@ -600,6 +655,30 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
+const renderModeUniform = gl.getUniformLocation(program, 'renderMode');
+const waterTimeUniform = gl.getUniformLocation(program, 'waterTime');
+const waterSurfaceLevelUniform = gl.getUniformLocation(program, 'waterSurfaceLevel');
+const waterPrimaryWaveFrequencyUniform = gl.getUniformLocation(
+  program,
+  'waterPrimaryWaveFrequency',
+);
+const waterSecondaryWaveFrequencyUniform = gl.getUniformLocation(
+  program,
+  'waterSecondaryWaveFrequency',
+);
+const waterPrimaryWaveSpeedUniform = gl.getUniformLocation(program, 'waterPrimaryWaveSpeed');
+const waterSecondaryWaveSpeedUniform = gl.getUniformLocation(program, 'waterSecondaryWaveSpeed');
+const waterPrimaryAmplitudeUniform = gl.getUniformLocation(program, 'waterPrimaryAmplitude');
+const waterSecondaryAmplitudeUniform = gl.getUniformLocation(program, 'waterSecondaryAmplitude');
+const waterDeepColorUniform = gl.getUniformLocation(program, 'waterDeepColor');
+const waterShallowColorUniform = gl.getUniformLocation(program, 'waterShallowColor');
+const waterFoamColorUniform = gl.getUniformLocation(program, 'waterFoamColor');
+const waterColorQuantizeStepUniform = gl.getUniformLocation(program, 'waterColorQuantizeStep');
+
+const renderModes = {
+  terrain: 0,
+  water: 1,
+};
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -640,11 +719,84 @@ const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
-const waterSurfaceLevel = 20;
+const waterSurfaceLevel = 19;
+const waterAlpha = 0.62;
+const waterDeepColor = [0.06, 0.32, 0.66];
+const waterShallowColor = [0.28, 0.74, 0.86];
+const waterFoamColor = [0.95, 0.97, 1.0];
+const waterFoamDepthStart = 0.35;
+const waterFoamDepthEnd = 4.5;
+const waterColorQuantizeStep = 0.04;
+const waterPrimaryWaveFrequency = 0.58;
+const waterSecondaryWaveFrequency = 0.32;
+const waterPrimaryWaveSpeed = 0.85;
+const waterSecondaryWaveSpeed = 0.55;
+const waterPrimaryAmplitude = 0.22;
+const waterSecondaryAmplitude = 0.12;
+
+if (renderModeUniform && typeof gl.uniform1i === 'function') {
+  gl.uniform1i(renderModeUniform, renderModes.terrain);
+}
+if (waterTimeUniform) {
+  gl.uniform1f(waterTimeUniform, 0);
+}
+if (waterSurfaceLevelUniform) {
+  gl.uniform1f(waterSurfaceLevelUniform, waterSurfaceLevel);
+}
+if (waterPrimaryWaveFrequencyUniform) {
+  gl.uniform1f(waterPrimaryWaveFrequencyUniform, waterPrimaryWaveFrequency);
+}
+if (waterSecondaryWaveFrequencyUniform) {
+  gl.uniform1f(waterSecondaryWaveFrequencyUniform, waterSecondaryWaveFrequency);
+}
+if (waterPrimaryWaveSpeedUniform) {
+  gl.uniform1f(waterPrimaryWaveSpeedUniform, waterPrimaryWaveSpeed);
+}
+if (waterSecondaryWaveSpeedUniform) {
+  gl.uniform1f(waterSecondaryWaveSpeedUniform, waterSecondaryWaveSpeed);
+}
+if (waterPrimaryAmplitudeUniform) {
+  gl.uniform1f(waterPrimaryAmplitudeUniform, waterPrimaryAmplitude);
+}
+if (waterSecondaryAmplitudeUniform) {
+  gl.uniform1f(waterSecondaryAmplitudeUniform, waterSecondaryAmplitude);
+}
+if (waterDeepColorUniform) {
+  gl.uniform3f(
+    waterDeepColorUniform,
+    waterDeepColor[0],
+    waterDeepColor[1],
+    waterDeepColor[2],
+  );
+}
+if (waterShallowColorUniform) {
+  gl.uniform3f(
+    waterShallowColorUniform,
+    waterShallowColor[0],
+    waterShallowColor[1],
+    waterShallowColor[2],
+  );
+}
+if (waterFoamColorUniform) {
+  gl.uniform3f(
+    waterFoamColorUniform,
+    waterFoamColor[0],
+    waterFoamColor[1],
+    waterFoamColor[2],
+  );
+}
+if (waterColorQuantizeStepUniform) {
+  gl.uniform1f(waterColorQuantizeStepUniform, waterColorQuantizeStep);
+}
+if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+  gl.uniform1f(terrainAlphaUniform, 1);
+}
 const selectionHighlightColor = [0.32, 0.78, 0.94];
 
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
+
+const waterBuffer = createBuffer(new Float32Array(0));
 
 const blockGridBuffer = createBuffer(new Float32Array(0));
 const chunkGridBuffer = createBuffer(new Float32Array(0));
@@ -655,6 +807,9 @@ let blockGridVertexCount = 0;
 let chunkGridVertexCount = 0;
 let rockVertexCount = 0;
 let selectionHighlightVertexCount = 0;
+let waterVertexCount = 0;
+let waterVertexData = null;
+let waterNeedsUpload = false;
 
 let terrainHeightField = null;
 let terrainMaskField = null;
@@ -679,9 +834,12 @@ let seeThroughTerrain = false;
 let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
 
+let waterAnimationTime = 0;
+
 const drawStats = {
   terrain: 0,
   rocks: 0,
+  water: 0,
   blockGrid: 0,
   chunkGrid: 0,
   selection: 0,
@@ -840,6 +998,10 @@ function clamp(value, minValue, maxValue) {
   if (value < minValue) return minValue;
   if (value > maxValue) return maxValue;
   return value;
+}
+
+function fract(value) {
+  return value - Math.floor(value);
 }
 
 function mixColor(a, b, t) {
@@ -1037,6 +1199,108 @@ function updateGridBuffers(heightField) {
   chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
 }
 
+function clearWaterSurface() {
+  waterVertexCount = 0;
+  waterVertexData = null;
+  waterNeedsUpload = false;
+  gl.bindBuffer(gl.ARRAY_BUFFER, waterBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(0), gl.STATIC_DRAW);
+}
+
+function computeWaterFoamFactor(depth) {
+  if (!Number.isFinite(depth)) {
+    return 0;
+  }
+  if (depth <= waterFoamDepthStart) {
+    return 1;
+  }
+  if (depth >= waterFoamDepthEnd) {
+    return 0;
+  }
+  const normalized = 1 - (depth - waterFoamDepthStart) / (waterFoamDepthEnd - waterFoamDepthStart);
+  return clamp01(normalized);
+}
+
+function sampleWaterPattern(x, z) {
+  const hash = Math.sin((x + 37.2) * 12.9898 + (z - 91.7) * 78.233) * 43758.5453;
+  return fract(hash);
+}
+
+function pushWaterVertexData(vertexIndex, x, z, foam) {
+  if (!waterVertexData) {
+    return vertexIndex;
+  }
+  const baseIndex = vertexIndex * floatsPerVertex;
+  const pattern = sampleWaterPattern(x, z);
+  const shallowMix = Math.pow(clamp01(foam), 0.7);
+  waterVertexData[baseIndex + 0] = x;
+  waterVertexData[baseIndex + 1] = waterSurfaceLevel;
+  waterVertexData[baseIndex + 2] = z;
+  waterVertexData[baseIndex + 3] = clamp01(foam);
+  waterVertexData[baseIndex + 4] = pattern;
+  waterVertexData[baseIndex + 5] = shallowMix;
+  return vertexIndex + 1;
+}
+
+function rebuildWaterSurface(heightField) {
+  if (!heightField || heightField.length <= 1) {
+    clearWaterSurface();
+    return;
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  if (blocksPerSide <= 0) {
+    clearWaterSurface();
+    return;
+  }
+
+  const totalVertices = blocksPerSide * blocksPerSide * 6;
+  waterVertexData = new Float32Array(totalVertices * floatsPerVertex);
+
+  const half = baseplateSize / 2;
+  let vertexIndex = 0;
+
+  for (let z = 0; z < blocksPerSide; z++) {
+    const z0 = -half + z * blockSize;
+    const z1 = z0 + blockSize;
+    const row0 = heightField[z] ?? [];
+    const row1 = heightField[z + 1] ?? row0;
+    for (let x = 0; x < blocksPerSide; x++) {
+      const x0 = -half + x * blockSize;
+      const x1 = x0 + blockSize;
+      const h00 = row0[x] ?? 0;
+      const h10 = row0[x + 1] ?? h00;
+      const h01 = row1[x] ?? h00;
+      const h11 = row1[x + 1] ?? h10;
+
+      const foam00 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h00));
+      const foam10 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h10));
+      const foam01 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h01));
+      const foam11 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h11));
+
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z0, foam00);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z0, foam10);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z1, foam11);
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z0, foam00);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z1, foam11);
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z1, foam01);
+    }
+  }
+
+  waterVertexCount = vertexIndex;
+  waterNeedsUpload = true;
+  uploadWaterSurfaceBuffer();
+}
+
+function uploadWaterSurfaceBuffer() {
+  if (!waterNeedsUpload || !waterVertexData) {
+    return;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, waterBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, waterVertexData, gl.STATIC_DRAW);
+  waterNeedsUpload = false;
+}
+
 function sampleTerrain(worldX, worldZ) {
   if (!terrainHeightField) {
     return null;
@@ -1210,13 +1474,25 @@ function computeWaterTileVolume(selection) {
     : [selection.height, selection.height, selection.height, selection.height];
 
   let depthSum = 0;
+  let wetSamples = 0;
   for (const height of heights) {
-    depthSum += Math.max(0, waterSurfaceLevel - height);
+    const depth = Math.max(0, waterSurfaceLevel - height);
+    if (depth > 0) {
+      wetSamples += 1;
+    }
+    depthSum += depth;
+  }
+
+  if (depthSum <= 0) {
+    return 0;
   }
 
   const averageDepth = depthSum / heights.length;
+  const coverage = wetSamples > 0 ? wetSamples / heights.length : 0;
+  const waveCompensation =
+    (waterPrimaryAmplitude * 0.5 + waterSecondaryAmplitude * 0.35) * coverage;
   const area = blockSize * blockSize;
-  return averageDepth * area;
+  return Math.max(0, averageDepth + waveCompensation) * area;
 }
 
 function updateWaterInfoPanel(selection) {
@@ -2148,6 +2424,7 @@ function regenerateTerrain(seedString) {
   terrainHeightField = heightfield;
   terrainMaskField = maskfield;
   updateGridBuffers(heightfield);
+  rebuildWaterSurface(heightfield);
   refreshSelectionAfterTerrain();
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
@@ -2836,6 +3113,10 @@ function update(deltaTime) {
     cameraPosition[1] -= moveSpeed * deltaTime;
   }
 
+  if (Number.isFinite(deltaTime)) {
+    waterAnimationTime += deltaTime;
+  }
+
   const target = add(cameraPosition, forwardDirection);
   const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 500);
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
@@ -2854,6 +3135,7 @@ function bindGeometry(buffer) {
 function render() {
   drawStats.terrain = 0;
   drawStats.rocks = 0;
+  drawStats.water = 0;
   drawStats.blockGrid = 0;
   drawStats.chunkGrid = 0;
   drawStats.selection = 0;
@@ -2874,11 +3156,21 @@ function render() {
     );
   }
 
+  if (waterTimeUniform) {
+    gl.uniform1f(waterTimeUniform, waterAnimationTime);
+  }
+
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
+
+  if (renderModeUniform && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(renderModeUniform, renderModes.terrain);
+  }
+
+  uploadWaterSurfaceBuffer();
 
   if (typeof gl.enable === 'function' && typeof gl.disable === 'function') {
     if (terrainRenderState.translucent) {
@@ -2908,6 +3200,41 @@ function render() {
     drawStats.total += 1;
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+  }
+
+  if (waterVertexCount > 0) {
+    const blendingWasEnabled = terrainRenderState.translucent;
+    if (!blendingWasEnabled && typeof gl.enable === 'function') {
+      gl.enable(gl.BLEND);
+    }
+    if (typeof gl.blendFunc === 'function') {
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
+    }
+    if (renderModeUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(renderModeUniform, renderModes.water);
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, waterAlpha);
+    }
+    bindGeometry(waterBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
+    drawStats.water += 1;
+    drawStats.total += 1;
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (renderModeUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(renderModeUniform, renderModes.terrain);
+    }
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(true);
+    }
+    if (!blendingWasEnabled && typeof gl.disable === 'function') {
+      gl.disable(gl.BLEND);
     }
   }
 
@@ -3009,7 +3336,7 @@ function updateDebugConsole(deltaTime) {
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} agua=${drawStats.water} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
