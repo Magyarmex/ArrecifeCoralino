@@ -682,3 +682,100 @@ body.tutorial-active #simulation-hud {
   text-transform: uppercase;
   color: rgba(217, 240, 255, 0.62);
 }
+
+.plant-info {
+  position: fixed;
+  top: 24px;
+  right: 384px;
+  display: block;
+  z-index: 47;
+}
+
+.plant-info[hidden] {
+  display: none !important;
+}
+
+.plant-info__content {
+  width: min(340px, calc(100vw - 48px));
+  padding: 20px 24px;
+  border-radius: 16px;
+  background: rgba(18, 28, 20, 0.96);
+  border: 1px solid rgba(120, 220, 160, 0.45);
+  box-shadow: 0 20px 42px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: #e0ffe9;
+  backdrop-filter: blur(4px);
+}
+
+.plant-info__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plant-info__header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: 0.04em;
+}
+
+.plant-info__close {
+  appearance: none;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 1.45rem;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f2fff5;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.plant-info__close:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.plant-info__description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(224, 255, 233, 0.78);
+}
+
+.plant-info__stats {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.92rem;
+}
+
+.plant-info__stats dt {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+}
+
+.plant-info__stats dd {
+  margin: 2px 0 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.plant-info__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(224, 255, 233, 0.62);
+}
