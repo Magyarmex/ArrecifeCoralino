@@ -1,10 +1,21 @@
-const canvas = document.getElementById('scene');
+const runtimeGlobal =
+  typeof globalThis !== 'undefined'
+    ? globalThis
+    : typeof self !== 'undefined'
+    ? self
+    : typeof window !== 'undefined'
+    ? window
+    : typeof global !== 'undefined'
+    ? global
+    : {};
+
+let canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
-const debugConsole = document.getElementById('debug-console');
-const debugPanel = document.getElementById('debug-panel');
-const debugToggleButton = document.getElementById('debug-toggle');
+let debugConsole = document.getElementById('debug-console');
+let debugPanel = document.getElementById('debug-panel');
+let debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -28,74 +39,334 @@ const dayCyclePhaseIconMap = new Map(
 );
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
-function createFallbackInfoPanel() {
-  let hiddenState = true;
-  return {
-    get hidden() {
-      return hiddenState;
-    },
-    set hidden(value) {
-      hiddenState = Boolean(value);
-    },
-    addEventListener: () => {},
-    removeEventListener: () => {},
+const runtimeState =
+  (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ =
+    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ || {
+      bootstrapAttempts: 0,
+      issues: [],
+      fallbackFactories: null,
+      reportedFallbacks: null,
+      uiFallbackEvents: null,
+    });
+
+runtimeState.bootstrapAttempts += 1;
+
+const runtimeIssues = Array.isArray(runtimeState.issues)
+  ? runtimeState.issues
+  : (runtimeState.issues = []);
+const MAX_RUNTIME_ISSUES = 8;
+
+const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
+  ? runtimeState.pendingIssues
+  : (runtimeState.pendingIssues = []);
+
+const MAX_UI_FALLBACK_EVENTS = 12;
+const reportedFallbacks =
+  runtimeState.reportedFallbacks && typeof runtimeState.reportedFallbacks === 'object'
+    ? runtimeState.reportedFallbacks
+    : (runtimeState.reportedFallbacks = {});
+const uiFallbackEvents = Array.isArray(runtimeState.uiFallbackEvents)
+  ? runtimeState.uiFallbackEvents
+  : (runtimeState.uiFallbackEvents = []);
+
+function registerUiFallback(id, message, severity = 'error') {
+  if (!id) {
+    return null;
+  }
+  const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const existing = reportedFallbacks[id];
+  const count = existing ? (existing.count || 0) + 1 : 1;
+  reportedFallbacks[id] = {
+    id,
+    message,
+    severity,
+    count,
+    timestamp,
   };
+  uiFallbackEvents.push({ id, message, severity, count, timestamp });
+  if (uiFallbackEvents.length > MAX_UI_FALLBACK_EVENTS) {
+    uiFallbackEvents.shift();
+  }
+  if (!existing) {
+    pendingRuntimeIssueQueue.push({ severity, context: 'ui', error: message });
+  }
+  return reportedFallbacks[id];
 }
 
-function createFallbackTextField() {
-  return {
-    textContent: '',
-  };
+if (runtimeState.bootstrapAttempts > 1) {
+  pendingRuntimeIssueQueue.push({
+    severity: 'fatal',
+    context: 'bootstrap',
+    error:
+      'Se detectó una segunda inicialización del script principal. Verifica que "scripts/main.js" solo se incluya una vez.',
+  });
 }
 
-function createFallbackButton() {
-  return {
-    addEventListener: () => {},
-  };
+const fallbackFactories = ensureFallbackFactories();
+
+canvas = ensurePrimaryCanvas(canvas);
+
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = fallbackFactories.debugPanel();
+  registerUiFallback(
+    'debug-panel',
+    'Se reconstruyó el panel de depuración porque faltaba en el DOM inicial.',
+  );
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
 }
 
 const selectionInfoPanel =
-  document.getElementById('selection-info') ?? createFallbackInfoPanel();
+  document.getElementById('selection-info') ?? fallbackFactories.infoPanel();
 const selectionBlockField =
-  document.getElementById('selection-info-block') ?? createFallbackTextField();
+  document.getElementById('selection-info-block') ?? fallbackFactories.textField();
 const selectionChunkField =
-  document.getElementById('selection-info-chunk') ?? createFallbackTextField();
+  document.getElementById('selection-info-chunk') ?? fallbackFactories.textField();
 const selectionWorldField =
-  document.getElementById('selection-info-world') ?? createFallbackTextField();
+  document.getElementById('selection-info-world') ?? fallbackFactories.textField();
 const selectionHeightField =
-  document.getElementById('selection-info-height') ?? createFallbackTextField();
+  document.getElementById('selection-info-height') ?? fallbackFactories.textField();
 const selectionWaterField =
-  document.getElementById('selection-info-water') ?? createFallbackTextField();
+  document.getElementById('selection-info-water') ?? fallbackFactories.textField();
 const selectionDepthField =
-  document.getElementById('selection-info-depth') ?? createFallbackTextField();
+  document.getElementById('selection-info-depth') ?? fallbackFactories.textField();
 const selectionCloseButton =
-  document.getElementById('selection-close') ?? createFallbackButton();
-const waterInfoPanel = document.getElementById('water-info') ?? createFallbackInfoPanel();
+  document.getElementById('selection-close') ?? fallbackFactories.button();
+const waterInfoPanel = document.getElementById('water-info') ?? fallbackFactories.infoPanel();
 const waterInfoVolumeField =
-  document.getElementById('water-info-volume') ?? createFallbackTextField();
+  document.getElementById('water-info-volume') ?? fallbackFactories.textField();
 const waterInfoCloseButton =
-  document.getElementById('water-info-close') ?? createFallbackButton();
-const plantInfoPanel = document.getElementById('plant-info') ?? createFallbackInfoPanel();
+  document.getElementById('water-info-close') ?? fallbackFactories.button();
+const plantInfoPanel = document.getElementById('plant-info') ?? fallbackFactories.infoPanel();
 const plantInfoSpeciesField =
-  document.getElementById('plant-info-species') ?? createFallbackTextField();
+  document.getElementById('plant-info-species') ?? fallbackFactories.textField();
 const plantInfoAgeLoreField =
-  document.getElementById('plant-info-age-lore') ?? createFallbackTextField();
+  document.getElementById('plant-info-age-lore') ?? fallbackFactories.textField();
 const plantInfoAgeRealField =
-  document.getElementById('plant-info-age-real') ?? createFallbackTextField();
+  document.getElementById('plant-info-age-real') ?? fallbackFactories.textField();
 const plantInfoMassField =
-  document.getElementById('plant-info-mass') ?? createFallbackTextField();
+  document.getElementById('plant-info-mass') ?? fallbackFactories.textField();
 const plantInfoNutrientsField =
-  document.getElementById('plant-info-nutrients') ?? createFallbackTextField();
+  document.getElementById('plant-info-nutrients') ?? fallbackFactories.textField();
 const plantInfoCloseButton =
-  document.getElementById('plant-info-close') ?? createFallbackButton();
+  document.getElementById('plant-info-close') ?? fallbackFactories.button();
+
+function ensureFallbackFactories() {
+  if (runtimeState.fallbackFactories) {
+    return runtimeState.fallbackFactories;
+  }
+
+  function createDebugPanelFallback() {
+    const supportsDom =
+      typeof document?.createElement === 'function' && !!document?.body;
+
+    if (!supportsDom) {
+      const fallbackClassList = { toggle: () => {} };
+      const panel = {
+        id: 'debug-panel',
+        classList: fallbackClassList,
+        appendChild: () => {},
+      };
+      const toggle = {
+        setAttribute: () => {},
+        addEventListener: () => {},
+        append: () => {},
+      };
+      const consoleElement = {
+        hidden: true,
+        textContent: '',
+        scrollTop: 0,
+        scrollHeight: 0,
+        setAttribute: () => {},
+      };
+
+      return { panel, toggle, console: consoleElement };
+    }
+
+    const panel = document.createElement('div');
+    panel.id = 'debug-panel';
+    panel.className = 'debug-panel';
+    panel.dataset.uiElement = 'debug-panel';
+
+    const toggle = document.createElement('button');
+    toggle.id = 'debug-toggle';
+    toggle.type = 'button';
+    toggle.className = 'debug-toggle';
+    toggle.setAttribute('aria-haspopup', 'true');
+    toggle.setAttribute('aria-controls', 'debug-console');
+    toggle.setAttribute('title', 'Panel de depuración');
+
+    const toggleLabel = document.createElement('span');
+    toggleLabel.className = 'debug-toggle__label';
+    toggleLabel.textContent = 'Panel de depuración';
+
+    toggle.append('🐞', toggleLabel);
+
+    const consoleElement = document.createElement('pre');
+    consoleElement.id = 'debug-console';
+    consoleElement.className = 'debug-console';
+    consoleElement.hidden = true;
+    consoleElement.setAttribute('aria-live', 'polite');
+    consoleElement.setAttribute('aria-hidden', 'true');
+    consoleElement.dataset.uiElement = 'debug-console';
+
+    panel.appendChild(toggle);
+    panel.appendChild(consoleElement);
+    document.body.appendChild(panel);
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  function createInfoPanelFallback() {
+    let hiddenState = true;
+    return {
+      get hidden() {
+        return hiddenState;
+      },
+      set hidden(value) {
+        hiddenState = Boolean(value);
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+  }
+
+  function createTextFieldFallback() {
+    return {
+      textContent: '',
+    };
+  }
+
+  function createButtonFallback() {
+    return {
+      addEventListener: () => {},
+    };
+  }
+
+  runtimeState.fallbackFactories = {
+    debugPanel: createDebugPanelFallback,
+    infoPanel: createInfoPanelFallback,
+    textField: createTextFieldFallback,
+    button: createButtonFallback,
+  };
+
+  return runtimeState.fallbackFactories;
+}
+
+function createCanvasFallbackElement() {
+  const width =
+    (typeof window !== 'undefined' && Number.isFinite(window.innerWidth) && window.innerWidth) || 1280;
+  const height =
+    (typeof window !== 'undefined' && Number.isFinite(window.innerHeight) && window.innerHeight) || 720;
+
+  if (typeof document?.createElement === 'function') {
+    try {
+      const element = document.createElement('canvas');
+      if (!element) {
+        return null;
+      }
+      element.id = 'scene';
+      if (element.dataset) {
+        element.dataset.uiElement = element.dataset.uiElement || 'scene-canvas';
+      } else {
+        element.dataset = { uiElement: 'scene-canvas' };
+      }
+      element.width = element.width || width;
+      element.height = element.height || height;
+      if (element.style) {
+        element.style.display = element.style.display || 'block';
+      }
+      if (document.body && typeof document.body.appendChild === 'function') {
+        document.body.appendChild(element);
+      }
+      return element;
+    } catch (error) {
+      void error;
+    }
+  }
+
+  return {
+    id: 'scene',
+    width,
+    height,
+    dataset: { uiElement: 'scene-canvas' },
+    style: {},
+    classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+    setAttribute: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    requestPointerLock: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width, height }),
+    getContext: () => null,
+  };
+}
+
+function ensurePrimaryCanvas(element) {
+  if (element && typeof element.getContext === 'function') {
+    return element;
+  }
+
+  const fallback = createCanvasFallbackElement();
+  if (fallback && typeof fallback.getContext === 'function') {
+    const originalGetContext =
+      typeof fallback.getContext === 'function' ? fallback.getContext.bind(fallback) : null;
+    let validationContext = null;
+    if (originalGetContext) {
+      try {
+        validationContext = originalGetContext('webgl', { antialias: true });
+      } catch (error) {
+        validationContext = null;
+      }
+    }
+
+    if (validationContext) {
+      try {
+        fallback.getContext = (type, options) => {
+          if (type === 'webgl') {
+            return validationContext;
+          }
+          return originalGetContext ? originalGetContext(type, options) : null;
+        };
+      } catch (error) {
+        void error;
+      }
+      try {
+        Object.defineProperty(fallback, '__arrecifeWebglContext', {
+          value: validationContext,
+          enumerable: false,
+          configurable: true,
+        });
+      } catch (error) {
+        void error;
+      }
+      registerUiFallback(
+        'scene-canvas',
+        'Se creó un canvas de emergencia porque faltaba el elemento principal #scene.',
+      );
+      return fallback;
+    }
+  }
+
+  registerUiFallback(
+    'scene-canvas-missing',
+    'No se pudo recuperar el canvas principal (#scene). Revisa que el HTML incluya <canvas id="scene">.',
+    'fatal',
+  );
+  throw new Error('No se pudo inicializar el canvas principal (#scene)');
+}
 const uiDebugHighlightToggle = document.getElementById('ui-debug-highlight');
 const uiDebugTrackToggle = document.getElementById('ui-debug-track');
 const uiDebugLogButton = document.getElementById('ui-debug-log');
 
 const bodyElement = document.body;
 
-const runtimeIssues = [];
-const MAX_RUNTIME_ISSUES = 8;
 let fatalRuntimeError = null;
 let loopHalted = false;
 let activeWaterSelection = null;
@@ -374,6 +645,11 @@ function recordRuntimeIssue(severity, context, error) {
   return entry;
 }
 
+while (pendingRuntimeIssueQueue.length > 0) {
+  const pendingIssue = pendingRuntimeIssueQueue.shift();
+  recordRuntimeIssue(pendingIssue.severity, pendingIssue.context, pendingIssue.error);
+}
+
 function inspectUiElement(element) {
   if (!element) {
     return { present: false };
@@ -599,6 +875,7 @@ const vertexSource = `
   uniform float waterColorQuantizeStep;
 
   varying vec3 vColor;
+  varying vec3 vPosition;
 
   const float TAU = 6.2831853;
 
@@ -640,6 +917,7 @@ const vertexSource = `
       finalColor = clamp(quantized, 0.0, 1.0);
     }
 
+    vPosition = finalPosition;
     gl_Position = viewProjection * vec4(finalPosition, 1.0);
     vColor = finalColor;
   }
@@ -752,7 +1030,9 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
-const renderModeUniform = gl.getUniformLocation(program, 'renderMode');
+const uniformLocations = {
+  renderMode: gl.getUniformLocation(program, 'renderMode'),
+};
 const waterTimeUniform = gl.getUniformLocation(program, 'waterTime');
 const waterSurfaceLevelUniform = gl.getUniformLocation(program, 'waterSurfaceLevel');
 const waterPrimaryWaveFrequencyUniform = gl.getUniformLocation(
@@ -831,8 +1111,8 @@ const waterSecondaryWaveSpeed = 0.55;
 const waterPrimaryAmplitude = 0.22;
 const waterSecondaryAmplitude = 0.12;
 
-if (renderModeUniform && typeof gl.uniform1i === 'function') {
-  gl.uniform1i(renderModeUniform, renderModes.terrain);
+if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+  gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
 }
 if (waterTimeUniform) {
   gl.uniform1f(waterTimeUniform, 0);
@@ -939,6 +1219,7 @@ let waterAnimationTime = 0;
 
 const drawStats = {
   terrain: 0,
+  water: 0,
   rocks: 0,
   plants: 0,
   blockGrid: 0,
@@ -1171,6 +1452,10 @@ function createRandomGenerator(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+runtimeGlobal.__runtimeIssues = runtimeIssues;
+runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ = runtimeState;
+
 
 function randomInRange(random, min, max) {
   return min + random() * (max - min);
@@ -4074,6 +4359,7 @@ function bindGeometry(buffer) {
 
 function render() {
   drawStats.terrain = 0;
+  drawStats.water = 0;
   drawStats.rocks = 0;
   drawStats.plants = 0;
   drawStats.blockGrid = 0;
@@ -4106,8 +4392,8 @@ function render() {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
 
-  if (renderModeUniform && typeof gl.uniform1i === 'function') {
-    gl.uniform1i(renderModeUniform, renderModes.terrain);
+  if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
   }
 
   uploadWaterSurfaceBuffer();
@@ -4128,6 +4414,52 @@ function render() {
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
     drawStats.terrain += 1;
     drawStats.total += 1;
+  }
+
+  if (waterVertexCount > 0) {
+    const blendingAlreadyActive = terrainRenderState.translucent;
+    let temporarilyEnabledBlend = false;
+    if (typeof gl.enable === 'function') {
+      if (!blendingAlreadyActive) {
+        gl.enable(gl.BLEND);
+        temporarilyEnabledBlend = true;
+      }
+      if (typeof gl.blendFunc === 'function') {
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      }
+    }
+
+    let depthMaskChanged = false;
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
+      depthMaskChanged = true;
+    }
+
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.water);
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, waterAlpha);
+    }
+
+    bindGeometry(waterBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
+    drawStats.water += 1;
+    drawStats.total += 1;
+
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
+    }
+
+    if (depthMaskChanged) {
+      gl.depthMask(true);
+    }
+    if (temporarilyEnabledBlend && typeof gl.disable === 'function') {
+      gl.disable(gl.BLEND);
+    }
   }
 
   if (rockVertexCount > 0) {
@@ -4276,7 +4608,7 @@ function updateDebugConsole(deltaTime) {
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -4301,6 +4633,23 @@ function updateDebugConsole(deltaTime) {
           details.hiddenAttribute ? 'sí' : 'no'
         }, display=${details.display ?? 'n/d'}, tamaño=${size})`,
       );
+    }
+  }
+
+  const fallbackSummary =
+    reportedFallbacks && typeof reportedFallbacks === 'object'
+      ? Object.values(reportedFallbacks)
+      : [];
+  if (fallbackSummary.length > 0) {
+    info.push('', 'Recuperaciones UI:');
+    for (const entry of fallbackSummary) {
+      if (!entry) {
+        continue;
+      }
+      const status = entry.severity === 'fatal' ? 'crítico' : 'recuperado';
+      const count = entry.count ?? 1;
+      const detail = entry.message ? ` – ${entry.message}` : '';
+      info.push(`• ${entry.id ?? 'elemento'} (${status}, intentos=${count})${detail}`);
     }
   }
 
