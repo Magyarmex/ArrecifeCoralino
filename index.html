@@ -246,6 +246,55 @@
         <p class="water-info__hint">Pulsa Esc o haz clic para volver a explorar.</p>
       </div>
     </div>
+    <div
+      id="plant-info"
+      class="plant-info"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="plant-info-title"
+      hidden
+      data-ui-element="plant-info-panel"
+    >
+      <div class="plant-info__content">
+        <header class="plant-info__header">
+          <h2 id="plant-info-title">Organismo vegetal</h2>
+          <button
+            type="button"
+            id="plant-info-close"
+            class="plant-info__close"
+            aria-label="Cerrar panel de organismo vegetal"
+          >
+            ×
+          </button>
+        </header>
+        <p class="plant-info__description">
+          Estado general del organismo seleccionado.
+        </p>
+        <dl class="plant-info__stats">
+          <div>
+            <dt>Especie</dt>
+            <dd id="plant-info-species">—</dd>
+          </div>
+          <div>
+            <dt>Edad (lore)</dt>
+            <dd id="plant-info-age-lore">—</dd>
+          </div>
+          <div>
+            <dt>Edad (tiempo sim)</dt>
+            <dd id="plant-info-age-real">—</dd>
+          </div>
+          <div>
+            <dt>Masa estimada</dt>
+            <dd id="plant-info-mass">—</dd>
+          </div>
+          <div>
+            <dt>Nutrientes</dt>
+            <dd id="plant-info-nutrients">—</dd>
+          </div>
+        </dl>
+        <p class="plant-info__hint">Pulsa Esc o haz clic para continuar explorando.</p>
+      </div>
+    </div>
     <div id="debug-panel" class="debug-panel" data-ui-element="debug-panel">
       <button
         id="debug-toggle"
