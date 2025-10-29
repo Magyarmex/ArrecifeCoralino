@@ -2,9 +2,9 @@ const canvas = document.getElementById('scene');
 const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
-const debugConsole = document.getElementById('debug-console');
-const debugPanel = document.getElementById('debug-panel');
-const debugToggleButton = document.getElementById('debug-toggle');
+let debugConsole = document.getElementById('debug-console');
+let debugPanel = document.getElementById('debug-panel');
+let debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -28,8 +28,79 @@ const dayCyclePhaseIconMap = new Map(
 );
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
-const modelLibrary =
-  typeof window !== 'undefined' && Array.isArray(window.modelLibrary) ? window.modelLibrary : [];
+function createFallbackDebugPanel() {
+  const unsupportedEnvironment =
+    typeof document?.createElement !== 'function' || !document?.body;
+
+  if (unsupportedEnvironment) {
+    const fallbackClassList = { toggle: () => {} };
+    const panel = {
+      id: 'debug-panel',
+      classList: fallbackClassList,
+      appendChild: () => {},
+    };
+    const toggle = {
+      setAttribute: () => {},
+      addEventListener: () => {},
+      append: () => {},
+    };
+    const consoleElement = {
+      hidden: true,
+      textContent: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      setAttribute: () => {},
+    };
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'debug-panel';
+  panel.className = 'debug-panel';
+  panel.dataset.uiElement = 'debug-panel';
+
+  const toggle = document.createElement('button');
+  toggle.id = 'debug-toggle';
+  toggle.type = 'button';
+  toggle.className = 'debug-toggle';
+  toggle.setAttribute('aria-haspopup', 'true');
+  toggle.setAttribute('aria-controls', 'debug-console');
+  toggle.setAttribute('title', 'Panel de depuración');
+
+  const toggleLabel = document.createElement('span');
+  toggleLabel.className = 'debug-toggle__label';
+  toggleLabel.textContent = 'Panel de depuración';
+
+  toggle.append('🐞', toggleLabel);
+
+  const consoleElement = document.createElement('pre');
+  consoleElement.id = 'debug-console';
+  consoleElement.className = 'debug-console';
+  consoleElement.hidden = true;
+  consoleElement.setAttribute('aria-live', 'polite');
+  consoleElement.setAttribute('aria-hidden', 'true');
+  consoleElement.dataset.uiElement = 'debug-console';
+
+  panel.appendChild(toggle);
+  panel.appendChild(consoleElement);
+  document.body.appendChild(panel);
+
+  return { panel, toggle, console: consoleElement };
+}
+
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = createFallbackDebugPanel();
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
+}
 
 function createFallbackInfoPanel() {
   let hiddenState = true;
