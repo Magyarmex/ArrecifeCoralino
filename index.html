@@ -7,8 +7,13 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <canvas id="scene"></canvas>
-    <div id="simulation-hud" aria-live="polite" aria-hidden="true">
+    <canvas id="scene" data-ui-element="scene-canvas"></canvas>
+    <div
+      id="simulation-hud"
+      aria-live="polite"
+      aria-hidden="true"
+      data-ui-element="simulation-hud"
+    >
       <div class="hud-daycycle" id="day-cycle-display">
         <div class="hud-daycycle__icons" aria-hidden="true">
           <span class="hud-daycycle__icon" data-day-cycle-phase="dawn" title="Amanecer">🌅</span>
@@ -57,7 +62,7 @@
         </div>
       </div>
     </div>
-    <div id="overlay" class="visible">
+    <div id="overlay" class="visible" data-ui-element="tutorial-overlay">
       <h1>Exploración Libre</h1>
       <p>Haz clic para capturar el cursor y usa el ratón para mirar.</p>
       <p>
@@ -75,7 +80,7 @@
       <p>Presiona <strong>Esc</strong> para liberar el cursor.</p>
       <button type="button" id="start-button">Iniciar exploración</button>
     </div>
-    <div id="settings-container">
+    <div id="settings-container" data-ui-element="settings-launcher">
       <button
         id="settings-toggle"
         class="settings-toggle"
@@ -87,7 +92,12 @@
       >
         ⚙️
       </button>
-      <form id="settings-panel" class="settings-panel" hidden>
+      <form
+        id="settings-panel"
+        class="settings-panel"
+        hidden
+        data-ui-element="settings-panel"
+      >
         <h2>Configuración</h2>
         <label for="seed-input">Semilla del terreno</label>
         <input
@@ -136,7 +146,12 @@
         </section>
       </form>
     </div>
-    <aside id="selection-info" class="selection-info" hidden>
+    <aside
+      id="selection-info"
+      class="selection-info"
+      hidden
+      data-ui-element="selection-panel"
+    >
       <header class="selection-info__header">
         <h2>Cuadro seleccionado</h2>
         <button type="button" id="selection-close" aria-label="Cerrar información">×</button>
@@ -175,6 +190,7 @@
       aria-modal="true"
       aria-labelledby="water-info-title"
       hidden
+      data-ui-element="water-info-panel"
     >
       <div class="water-info__content">
         <header class="water-info__header">
@@ -200,7 +216,7 @@
         <p class="water-info__hint">Pulsa Esc o haz clic para volver a explorar.</p>
       </div>
     </div>
-    <div id="debug-panel" class="debug-panel">
+    <div id="debug-panel" class="debug-panel" data-ui-element="debug-panel">
       <button
         id="debug-toggle"
         class="debug-toggle"
@@ -213,11 +229,29 @@
         🐞
         <span class="debug-toggle__label">Panel de depuración</span>
       </button>
+      <div id="debug-tools" class="debug-tools" hidden data-ui-element="debug-tools">
+        <h2 class="debug-tools__title">Herramientas de interfaz</h2>
+        <label class="debug-tools__option" for="ui-debug-highlight">
+          <input id="ui-debug-highlight" type="checkbox" />
+          <span>Resaltar elementos de la UI</span>
+        </label>
+        <label class="debug-tools__option" for="ui-debug-track">
+          <input id="ui-debug-track" type="checkbox" />
+          <span>Monitorear visibilidad y tamaño</span>
+        </label>
+        <button type="button" id="ui-debug-log" class="debug-tools__action">
+          Registrar instantánea de la UI
+        </button>
+        <p class="debug-tools__hint">
+          Las instantáneas se envían a la consola del navegador (F12).
+        </p>
+      </div>
       <pre
         id="debug-console"
         class="debug-console"
         aria-live="polite"
         aria-hidden="true"
+        data-ui-element="debug-console"
         hidden
       ></pre>
     </div>

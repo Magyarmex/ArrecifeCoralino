@@ -75,6 +75,10 @@ const waterInfoVolumeField =
   document.getElementById('water-info-volume') ?? createFallbackTextField();
 const waterInfoCloseButton =
   document.getElementById('water-info-close') ?? createFallbackButton();
+const uiDebugToolsContainer = document.getElementById('debug-tools');
+const uiDebugHighlightToggle = document.getElementById('ui-debug-highlight');
+const uiDebugTrackToggle = document.getElementById('ui-debug-track');
+const uiDebugLogButton = document.getElementById('ui-debug-log');
 
 const bodyElement = document.body;
 
@@ -88,6 +92,8 @@ let waterInfoPointerHandler = null;
 let waterInfoKeyHandler = null;
 let debugPanelExpanded = false;
 let suppressNextSelectionPointerDown = false;
+let suppressNextSelectionClick = false;
+let pendingSelectionForClick = null;
 
 const diagnosticsToast =
   bodyElement && typeof document?.createElement === 'function'
@@ -100,6 +106,51 @@ const overlayErrorMessage =
     : null;
 
 setDebugPanelExpanded(false);
+
+const uiDebugRegistry = [
+  {
+    id: 'water-info',
+    name: 'waterInfo',
+    label: 'Panel de información de agua',
+    element: waterInfoPanel,
+  },
+  {
+    id: 'selection-info',
+    name: 'selectionInfo',
+    label: 'Panel de selección',
+    element: selectionInfoPanel,
+  },
+  {
+    id: 'simulation-hud',
+    name: 'simulationHud',
+    label: 'HUD de simulación',
+    element: simulationHud,
+  },
+  {
+    id: 'settings-panel',
+    name: 'settingsPanel',
+    label: 'Panel de configuración',
+    element: settingsPanel,
+  },
+  {
+    id: 'overlay',
+    name: 'tutorialOverlay',
+    label: 'Superposición de tutorial',
+    element: overlay,
+  },
+  {
+    id: 'debug-panel',
+    name: 'debugPanel',
+    label: 'Panel de depuración',
+    element: debugPanel,
+  },
+];
+
+const uiDebugState = {
+  highlight: false,
+  track: false,
+  snapshot: new Map(),
+};
 
 function ensureEventDispatchSupport(element) {
   if (!element) {
@@ -299,6 +350,99 @@ function recordRuntimeIssue(severity, context, error) {
   updateDiagnosticsToast();
   return entry;
 }
+
+function inspectUiElement(element) {
+  if (!element) {
+    return { present: false };
+  }
+
+  const computed =
+    typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(element)
+      : null;
+  const rect =
+    typeof element?.getBoundingClientRect === 'function'
+      ? element.getBoundingClientRect()
+      : null;
+
+  const width = rect ? Math.round(rect.width) : 0;
+  const height = rect ? Math.round(rect.height) : 0;
+  const hiddenAttribute = Boolean(element.hidden);
+  const display = computed ? computed.display : null;
+  const visibility = computed ? computed.visibility : null;
+  const opacity = computed ? Number.parseFloat(computed.opacity || '1') : 1;
+
+  const visible =
+    !hiddenAttribute &&
+    display !== 'none' &&
+    visibility !== 'hidden' &&
+    opacity > 0.01 &&
+    width > 0 &&
+    height > 0;
+
+  return {
+    present: true,
+    hiddenAttribute,
+    display,
+    visibility,
+    opacity,
+    width,
+    height,
+    top: rect ? Math.round(rect.top) : null,
+    left: rect ? Math.round(rect.left) : null,
+    visible,
+  };
+}
+
+function refreshUiDebugSnapshot() {
+  const snapshot = new Map();
+  for (const entry of uiDebugRegistry) {
+    snapshot.set(entry.name, inspectUiElement(entry.element));
+  }
+  uiDebugState.snapshot = snapshot;
+  return snapshot;
+}
+
+function getUiDebugSnapshotObject(snapshot = uiDebugState.snapshot) {
+  const result = {};
+  if (!(snapshot instanceof Map)) {
+    return result;
+  }
+  for (const entry of uiDebugRegistry) {
+    result[entry.name] = snapshot.get(entry.name);
+  }
+  return result;
+}
+
+function setUiDebugHighlight(active) {
+  uiDebugState.highlight = Boolean(active);
+  if (bodyElement?.classList?.toggle) {
+    bodyElement.classList.toggle('ui-debug-outlines', uiDebugState.highlight);
+  }
+  if (uiDebugHighlightToggle && uiDebugHighlightToggle.checked !== uiDebugState.highlight) {
+    uiDebugHighlightToggle.checked = uiDebugState.highlight;
+  }
+}
+
+function setUiDebugTracking(active) {
+  uiDebugState.track = Boolean(active);
+  if (uiDebugTrackToggle && uiDebugTrackToggle.checked !== uiDebugState.track) {
+    uiDebugTrackToggle.checked = uiDebugState.track;
+  }
+  if (uiDebugState.track) {
+    refreshUiDebugSnapshot();
+  }
+}
+
+function verifyCriticalUiElements() {
+  for (const entry of uiDebugRegistry) {
+    if (!entry.element) {
+      recordRuntimeIssue('error', 'ui', `No se encontró ${entry.label} (#${entry.id})`);
+    }
+  }
+}
+
+verifyCriticalUiElements();
 
 function showOverlayIssue(entry) {
   if (!overlay) {
@@ -552,6 +696,27 @@ if (typeof window !== 'undefined') {
   window.__selectBlockAt = (x, y) => selectBlockAtScreen(x, y);
   window.__clearSelection = () => clearSelection();
   window.__runtimeIssues = runtimeIssues;
+  window.__uiDebug = {
+    registry: uiDebugRegistry.map(({ id, name, label }) => ({ id, name, label })),
+    refresh() {
+      return getUiDebugSnapshotObject(refreshUiDebugSnapshot());
+    },
+    get state() {
+      return {
+        highlight: uiDebugState.highlight,
+        track: uiDebugState.track,
+        snapshot: getUiDebugSnapshotObject(),
+      };
+    },
+    highlight(active) {
+      setUiDebugHighlight(active);
+      return uiDebugState.highlight;
+    },
+    track(active) {
+      setUiDebugTracking(active);
+      return uiDebugState.track;
+    },
+  };
   if (debugTerrainToggle) {
     if (!('seeThroughToggle' in window)) {
       window.seeThroughToggle = debugTerrainToggle;
@@ -1020,6 +1185,10 @@ function setDebugPanelExpanded(expanded) {
     debugPanel.classList.toggle('debug-panel--expanded', debugPanelExpanded);
   }
 
+  if (uiDebugToolsContainer) {
+    uiDebugToolsContainer.hidden = !debugPanelExpanded;
+  }
+
   if (debugToggleButton) {
     debugToggleButton.setAttribute('aria-expanded', String(debugPanelExpanded));
   }
@@ -1127,10 +1296,17 @@ function openWaterInfo(selection, event) {
         return;
       }
       suppressNextSelectionPointerDown = true;
+      suppressNextSelectionClick = true;
       if (typeof setTimeout === 'function') {
         setTimeout(() => {
           suppressNextSelectionPointerDown = false;
         }, 0);
+        setTimeout(() => {
+          suppressNextSelectionClick = false;
+        }, 0);
+      } else {
+        suppressNextSelectionPointerDown = false;
+        suppressNextSelectionClick = false;
       }
       closeWaterInfo({ restoreCamera: true, event: pointerEvent });
     };
@@ -2259,26 +2435,45 @@ function requestCameraControl(event) {
 
 canvas.addEventListener('click', (event) => {
   requestCameraControl(event);
-});
-
-canvas.addEventListener('pointerdown', (event) => {
   if (fatalRuntimeError) {
+    pendingSelectionForClick = null;
     return;
   }
   if (event.button !== 0) {
+    pendingSelectionForClick = null;
     return;
   }
-  if (suppressNextSelectionPointerDown) {
-    suppressNextSelectionPointerDown = false;
+  if (suppressNextSelectionClick) {
+    suppressNextSelectionClick = false;
+    pendingSelectionForClick = null;
     return;
   }
   const pointer = getPointerPosition(event);
-  const selection = selectBlockAtScreen(pointer.x, pointer.y);
+  const selection = pendingSelectionForClick ?? selectBlockAtScreen(pointer.x, pointer.y);
+  pendingSelectionForClick = null;
   if (selection && selection.underwater) {
     openWaterInfo(selection, event);
   } else {
     closeWaterInfo();
   }
+});
+
+canvas.addEventListener('pointerdown', (event) => {
+  if (fatalRuntimeError) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (event.button !== 0) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (suppressNextSelectionPointerDown) {
+    suppressNextSelectionPointerDown = false;
+    pendingSelectionForClick = null;
+    return;
+  }
+  const pointer = getPointerPosition(event);
+  pendingSelectionForClick = selectBlockAtScreen(pointer.x, pointer.y);
 });
 
 if (startButton) {
@@ -2321,6 +2516,29 @@ if (debugToggleButton) {
     setDebugPanelExpanded(!debugPanelExpanded);
     if (debugPanelExpanded && debugConsole) {
       debugConsole.scrollTop = debugConsole.scrollHeight;
+    }
+  });
+}
+
+if (uiDebugHighlightToggle) {
+  uiDebugHighlightToggle.addEventListener('change', (event) => {
+    setUiDebugHighlight(event.target.checked);
+  });
+}
+
+if (uiDebugTrackToggle) {
+  uiDebugTrackToggle.addEventListener('change', (event) => {
+    setUiDebugTracking(event.target.checked);
+  });
+}
+
+if (uiDebugLogButton) {
+  uiDebugLogButton.addEventListener('click', () => {
+    const snapshot = refreshUiDebugSnapshot();
+    const summary = getUiDebugSnapshotObject(snapshot);
+    console.info('[UI DEBUG] instantánea de elementos', summary);
+    if (typeof console.table === 'function') {
+      console.table(summary);
     }
   });
 }
@@ -2804,6 +3022,25 @@ function updateDebugConsole(deltaTime) {
 
   if (pointerLockErrors > 0) {
     info.push(`Pointer lock errores: ${pointerLockErrors}`);
+  }
+
+  if (uiDebugState.track) {
+    const snapshot = refreshUiDebugSnapshot();
+    info.push('', 'UI (depuración):');
+    for (const entry of uiDebugRegistry) {
+      const details = snapshot.get(entry.name);
+      if (!details || !details.present) {
+        info.push(`• ${entry.label}: no encontrado`);
+        continue;
+      }
+      const status = details.visible ? 'visible' : 'oculto';
+      const size = `${details.width}×${details.height}`;
+      info.push(
+        `• ${entry.label}: ${status} (hidden=${
+          details.hiddenAttribute ? 'sí' : 'no'
+        }, display=${details.display ?? 'n/d'}, tamaño=${size})`,
+      );
+    }
   }
 
   if (runtimeIssues.length > 0) {
