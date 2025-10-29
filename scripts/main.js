@@ -3,6 +3,8 @@ const overlay = document.getElementById('overlay');
 const simulationHud = document.getElementById('simulation-hud');
 const startButton = document.getElementById('start-button');
 const debugConsole = document.getElementById('debug-console');
+const debugPanel = document.getElementById('debug-panel');
+const debugToggleButton = document.getElementById('debug-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -14,7 +16,16 @@ const simulationSpeedDisplay = document.getElementById('simulation-speed-display
 const simulationSpeedSettingsDisplay = document.getElementById(
   'simulation-speed-display-settings',
 );
-const settingsDebugLog = document.getElementById('settings-debug-log');
+const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
+const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
+const dayCyclePhaseIcons = Array.from(
+  document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
+);
+const dayCyclePhaseIconMap = new Map(
+  dayCyclePhaseIcons
+    .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
+    .filter(([phase, element]) => phase && element),
+);
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 
 const modelLibrary =
@@ -62,6 +73,27 @@ const selectionDepthField =
   document.getElementById('selection-info-depth') ?? createFallbackTextField();
 const selectionCloseButton =
   document.getElementById('selection-close') ?? createFallbackButton();
+const waterInfoPanel = document.getElementById('water-info') ?? createFallbackInfoPanel();
+const waterInfoVolumeField =
+  document.getElementById('water-info-volume') ?? createFallbackTextField();
+const waterInfoCloseButton =
+  document.getElementById('water-info-close') ?? createFallbackButton();
+const plantInfoPanel = document.getElementById('plant-info') ?? createFallbackInfoPanel();
+const plantInfoSpeciesField =
+  document.getElementById('plant-info-species') ?? createFallbackTextField();
+const plantInfoAgeLoreField =
+  document.getElementById('plant-info-age-lore') ?? createFallbackTextField();
+const plantInfoAgeRealField =
+  document.getElementById('plant-info-age-real') ?? createFallbackTextField();
+const plantInfoMassField =
+  document.getElementById('plant-info-mass') ?? createFallbackTextField();
+const plantInfoNutrientsField =
+  document.getElementById('plant-info-nutrients') ?? createFallbackTextField();
+const plantInfoCloseButton =
+  document.getElementById('plant-info-close') ?? createFallbackButton();
+const uiDebugHighlightToggle = document.getElementById('ui-debug-highlight');
+const uiDebugTrackToggle = document.getElementById('ui-debug-track');
+const uiDebugLogButton = document.getElementById('ui-debug-log');
 
 const bodyElement = document.body;
 
@@ -69,6 +101,19 @@ const runtimeIssues = [];
 const MAX_RUNTIME_ISSUES = 8;
 let fatalRuntimeError = null;
 let loopHalted = false;
+let activeWaterSelection = null;
+let ignoreNextWaterPointerDown = false;
+let waterInfoPointerHandler = null;
+let waterInfoKeyHandler = null;
+let activePlantSelection = null;
+let pendingPlantSelection = null;
+let ignoreNextPlantPointerDown = false;
+let plantInfoPointerHandler = null;
+let plantInfoKeyHandler = null;
+let debugPanelExpanded = false;
+let suppressNextSelectionPointerDown = false;
+let suppressNextSelectionClick = false;
+let pendingSelectionForClick = null;
 
 const diagnosticsToast =
   bodyElement && typeof document?.createElement === 'function'
@@ -79,6 +124,59 @@ const overlayErrorMessage =
   overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
     ? createOverlayErrorMessage(overlay)
     : null;
+
+setDebugPanelExpanded(false);
+
+const uiDebugRegistry = [
+  {
+    id: 'water-info',
+    name: 'waterInfo',
+    label: 'Panel de información de agua',
+    element: waterInfoPanel,
+  },
+  {
+    id: 'plant-info',
+    name: 'plantInfo',
+    label: 'Panel de organismos vegetales',
+    element: plantInfoPanel,
+  },
+  {
+    id: 'selection-info',
+    name: 'selectionInfo',
+    label: 'Panel de selección',
+    element: selectionInfoPanel,
+  },
+  {
+    id: 'simulation-hud',
+    name: 'simulationHud',
+    label: 'HUD de simulación',
+    element: simulationHud,
+  },
+  {
+    id: 'settings-panel',
+    name: 'settingsPanel',
+    label: 'Panel de configuración',
+    element: settingsPanel,
+  },
+  {
+    id: 'overlay',
+    name: 'tutorialOverlay',
+    label: 'Superposición de tutorial',
+    element: overlay,
+  },
+  {
+    id: 'debug-panel',
+    name: 'debugPanel',
+    label: 'Panel de depuración',
+    element: debugPanel,
+  },
+];
+
+const uiDebugState = {
+  highlight: false,
+  track: false,
+  snapshot: new Map(),
+};
 
 function ensureEventDispatchSupport(element) {
   if (!element) {
@@ -279,6 +377,99 @@ function recordRuntimeIssue(severity, context, error) {
   return entry;
 }
 
+function inspectUiElement(element) {
+  if (!element) {
+    return { present: false };
+  }
+
+  const computed =
+    typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(element)
+      : null;
+  const rect =
+    typeof element?.getBoundingClientRect === 'function'
+      ? element.getBoundingClientRect()
+      : null;
+
+  const width = rect ? Math.round(rect.width) : 0;
+  const height = rect ? Math.round(rect.height) : 0;
+  const hiddenAttribute = Boolean(element.hidden);
+  const display = computed ? computed.display : null;
+  const visibility = computed ? computed.visibility : null;
+  const opacity = computed ? Number.parseFloat(computed.opacity || '1') : 1;
+
+  const visible =
+    !hiddenAttribute &&
+    display !== 'none' &&
+    visibility !== 'hidden' &&
+    opacity > 0.01 &&
+    width > 0 &&
+    height > 0;
+
+  return {
+    present: true,
+    hiddenAttribute,
+    display,
+    visibility,
+    opacity,
+    width,
+    height,
+    top: rect ? Math.round(rect.top) : null,
+    left: rect ? Math.round(rect.left) : null,
+    visible,
+  };
+}
+
+function refreshUiDebugSnapshot() {
+  const snapshot = new Map();
+  for (const entry of uiDebugRegistry) {
+    snapshot.set(entry.name, inspectUiElement(entry.element));
+  }
+  uiDebugState.snapshot = snapshot;
+  return snapshot;
+}
+
+function getUiDebugSnapshotObject(snapshot = uiDebugState.snapshot) {
+  const result = {};
+  if (!(snapshot instanceof Map)) {
+    return result;
+  }
+  for (const entry of uiDebugRegistry) {
+    result[entry.name] = snapshot.get(entry.name);
+  }
+  return result;
+}
+
+function setUiDebugHighlight(active) {
+  uiDebugState.highlight = Boolean(active);
+  if (bodyElement?.classList?.toggle) {
+    bodyElement.classList.toggle('ui-debug-outlines', uiDebugState.highlight);
+  }
+  if (uiDebugHighlightToggle && uiDebugHighlightToggle.checked !== uiDebugState.highlight) {
+    uiDebugHighlightToggle.checked = uiDebugState.highlight;
+  }
+}
+
+function setUiDebugTracking(active) {
+  uiDebugState.track = Boolean(active);
+  if (uiDebugTrackToggle && uiDebugTrackToggle.checked !== uiDebugState.track) {
+    uiDebugTrackToggle.checked = uiDebugState.track;
+  }
+  if (uiDebugState.track) {
+    refreshUiDebugSnapshot();
+  }
+}
+
+function verifyCriticalUiElements() {
+  for (const entry of uiDebugRegistry) {
+    if (!entry.element) {
+      recordRuntimeIssue('error', 'ui', `No se encontró ${entry.label} (#${entry.id})`);
+    }
+  }
+}
+
+verifyCriticalUiElements();
+
 function showOverlayIssue(entry) {
   if (!overlay) {
     return;
@@ -394,21 +585,151 @@ function createShader(type, source) {
 const vertexSource = `
   attribute vec3 position;
   attribute vec3 color;
+
   uniform mat4 viewProjection;
+  uniform int renderMode;
+  uniform float waterTime;
+  uniform float waterSurfaceLevel;
+  uniform float waterPrimaryWaveFrequency;
+  uniform float waterSecondaryWaveFrequency;
+  uniform float waterPrimaryWaveSpeed;
+  uniform float waterSecondaryWaveSpeed;
+  uniform float waterPrimaryAmplitude;
+  uniform float waterSecondaryAmplitude;
+  uniform vec3 waterDeepColor;
+  uniform vec3 waterShallowColor;
+  uniform vec3 waterFoamColor;
+  uniform float waterColorQuantizeStep;
+
   varying vec3 vColor;
+  varying vec3 vPosition;
+
+  const float TAU = 6.2831853;
+
   void main() {
-    gl_Position = viewProjection * vec4(position, 1.0);
-    vColor = color;
+    vec3 finalPosition = position;
+    vec3 finalColor = color;
+
+    if (renderMode == 1) {
+      float foam = color.r;
+      float pattern = color.g;
+      float shallowMix = color.b;
+
+      float timePrimary = waterTime * waterPrimaryWaveSpeed;
+      float timeSecondary = waterTime * waterSecondaryWaveSpeed;
+
+      float primaryPhase = position.x * waterPrimaryWaveFrequency + position.z * 0.4 + timePrimary + pattern * TAU;
+      float secondaryPhase = (position.x - position.z) * waterSecondaryWaveFrequency + timeSecondary * 1.1 + pattern * 3.14159265;
+
+      float amplitudeFactor = 0.45 + (1.0 - foam) * 0.55;
+      float waveOffset =
+        sin(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor +
+        cos(secondaryPhase) * waterSecondaryAmplitude * (0.35 + (1.0 - foam) * 0.65);
+
+      finalPosition.y = waterSurfaceLevel + waveOffset;
+
+      vec3 baseColor = mix(waterDeepColor, waterShallowColor, shallowMix);
+      float sparkle = sin(waterTime * 1.3 + (position.x + position.z) * 0.18 + pattern * TAU) * 0.04;
+      baseColor.r = clamp(baseColor.r + sparkle * 0.8, 0.0, 1.0);
+      baseColor.g = clamp(baseColor.g + sparkle * 0.6, 0.0, 1.0);
+      baseColor.b = clamp(baseColor.b + sparkle, 0.0, 1.0);
+
+      float foamHighlight = pow(max(0.0, foam - 0.45), 1.5);
+      if (foamHighlight > 0.0) {
+        float foamBlend = clamp(foamHighlight + pattern * 0.15, 0.0, 1.0);
+        baseColor = mix(baseColor, waterFoamColor, foamBlend);
+      }
+
+      vec3 quantized = floor(baseColor / waterColorQuantizeStep + 0.5) * waterColorQuantizeStep;
+      finalColor = clamp(quantized, 0.0, 1.0);
+    }
+
+    vPosition = finalPosition;
+    gl_Position = viewProjection * vec4(finalPosition, 1.0);
+    vColor = finalColor;
   }
 `;
 
 const fragmentSource = `
   precision mediump float;
   varying vec3 vColor;
+  varying vec3 vPosition;
   uniform vec3 globalLightColor;
   uniform float terrainAlpha;
+  uniform float patternTime;
+
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+  }
+
+  float valueNoise(vec2 uv) {
+    vec2 i = floor(uv);
+    vec2 f = fract(uv);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+
+  float layeredNoise(vec2 uv) {
+    float amplitude = 0.55;
+    float frequency = 1.0;
+    float total = 0.0;
+    for (int i = 0; i < 3; i++) {
+      total += valueNoise(uv * frequency) * amplitude;
+      amplitude *= 0.55;
+      frequency *= 2.2;
+      uv = uv * 1.7 + 3.1;
+    }
+    return total;
+  }
+
   void main() {
-    gl_FragColor = vec4(vColor * globalLightColor, terrainAlpha);
+    vec3 baseColor = vColor;
+    float maxComponent = max(baseColor.r, max(baseColor.g, baseColor.b));
+    float minComponent = min(baseColor.r, min(baseColor.g, baseColor.b));
+    float saturation = maxComponent - minComponent;
+    float brightness = (baseColor.r + baseColor.g + baseColor.b) / 3.0;
+    float warmth = baseColor.r - baseColor.b;
+    float blueDominance = baseColor.b - (baseColor.r + baseColor.g) * 0.5;
+    float waterMask = smoothstep(0.05, 0.18, blueDominance);
+    float sandMask = smoothstep(0.15, 0.3, warmth + saturation * 0.5) * (1.0 - waterMask);
+    float rockMask = (1.0 - sandMask) * (1.0 - waterMask) * (1.0 - smoothstep(0.55, 0.8, brightness));
+
+    vec3 sandColor = baseColor;
+    if (sandMask > 0.001) {
+      vec2 sandCoords = vPosition.xz * 0.12;
+      float duneWave = sin(sandCoords.x * 4.1 + patternTime * 0.45) * 0.5 +
+        cos(sandCoords.y * 3.3 - patternTime * 0.32) * 0.5;
+      float grainNoise = layeredNoise(sandCoords * 2.3 + patternTime * 0.05);
+      float speckleNoise = layeredNoise(sandCoords * 5.0 - patternTime * 0.07);
+      float pattern = duneWave * 0.18 + (grainNoise - 0.5) * 0.22 + (speckleNoise - 0.5) * 0.12;
+      float sparkle = smoothstep(0.65, 1.0, speckleNoise) * 0.08;
+      sandColor = clamp(baseColor + pattern * vec3(0.14, 0.11, 0.05) + sparkle * vec3(0.16, 0.15, 0.1), 0.0, 1.0);
+    }
+
+    vec3 rockColor = baseColor;
+    if (rockMask > 0.001) {
+      vec2 rockCoords = vec2(
+        dot(vPosition.xz, vec2(0.68, 0.52)),
+        vPosition.y * 0.6 + vPosition.x * 0.15 - vPosition.z * 0.1
+      );
+      float strata = sin(rockCoords.x * 3.4 + patternTime * 0.35);
+      float contour = cos(rockCoords.y * 2.7 - patternTime * 0.22);
+      float coarseNoise = layeredNoise((vPosition.xz + rockCoords.xy) * 1.1 + patternTime * 0.03);
+      float fineNoise = layeredNoise(vPosition.xz * 4.8 + rockCoords.yx * 0.5);
+      float pattern = strata * 0.18 + contour * 0.12 + (coarseNoise - 0.5) * 0.28 + (fineNoise - 0.5) * 0.08;
+      float highlight = smoothstep(0.68, 1.0, fineNoise) * 0.06;
+      rockColor = clamp(baseColor + pattern * vec3(0.16, 0.14, 0.12) + highlight * vec3(0.12, 0.13, 0.14), 0.05, 1.0);
+    }
+
+    vec3 finalColor = baseColor;
+    finalColor = mix(finalColor, sandColor, clamp(sandMask, 0.0, 1.0));
+    finalColor = mix(finalColor, rockColor, clamp(rockMask, 0.0, 1.0));
+
+    gl_FragColor = vec4(finalColor * globalLightColor, terrainAlpha);
   }
 `;
 
@@ -436,6 +757,30 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
+const renderModeUniform = gl.getUniformLocation(program, 'renderMode');
+const waterTimeUniform = gl.getUniformLocation(program, 'waterTime');
+const waterSurfaceLevelUniform = gl.getUniformLocation(program, 'waterSurfaceLevel');
+const waterPrimaryWaveFrequencyUniform = gl.getUniformLocation(
+  program,
+  'waterPrimaryWaveFrequency',
+);
+const waterSecondaryWaveFrequencyUniform = gl.getUniformLocation(
+  program,
+  'waterSecondaryWaveFrequency',
+);
+const waterPrimaryWaveSpeedUniform = gl.getUniformLocation(program, 'waterPrimaryWaveSpeed');
+const waterSecondaryWaveSpeedUniform = gl.getUniformLocation(program, 'waterSecondaryWaveSpeed');
+const waterPrimaryAmplitudeUniform = gl.getUniformLocation(program, 'waterPrimaryAmplitude');
+const waterSecondaryAmplitudeUniform = gl.getUniformLocation(program, 'waterSecondaryAmplitude');
+const waterDeepColorUniform = gl.getUniformLocation(program, 'waterDeepColor');
+const waterShallowColorUniform = gl.getUniformLocation(program, 'waterShallowColor');
+const waterFoamColorUniform = gl.getUniformLocation(program, 'waterFoamColor');
+const waterColorQuantizeStepUniform = gl.getUniformLocation(program, 'waterColorQuantizeStep');
+
+const renderModes = {
+  terrain: 0,
+  water: 1,
+};
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -476,28 +821,106 @@ const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
-const seaLevel = 6;
+const waterSurfaceLevel = 19;
+const waterAlpha = 0.62;
+const waterDeepColor = [0.06, 0.32, 0.66];
+const waterShallowColor = [0.28, 0.74, 0.86];
+const waterFoamColor = [0.95, 0.97, 1.0];
+const waterFoamDepthStart = 0.35;
+const waterFoamDepthEnd = 4.5;
+const waterColorQuantizeStep = 0.04;
+const waterPrimaryWaveFrequency = 0.58;
+const waterSecondaryWaveFrequency = 0.32;
+const waterPrimaryWaveSpeed = 0.85;
+const waterSecondaryWaveSpeed = 0.55;
+const waterPrimaryAmplitude = 0.22;
+const waterSecondaryAmplitude = 0.12;
+
+if (renderModeUniform && typeof gl.uniform1i === 'function') {
+  gl.uniform1i(renderModeUniform, renderModes.terrain);
+}
+if (waterTimeUniform) {
+  gl.uniform1f(waterTimeUniform, 0);
+}
+if (waterSurfaceLevelUniform) {
+  gl.uniform1f(waterSurfaceLevelUniform, waterSurfaceLevel);
+}
+if (waterPrimaryWaveFrequencyUniform) {
+  gl.uniform1f(waterPrimaryWaveFrequencyUniform, waterPrimaryWaveFrequency);
+}
+if (waterSecondaryWaveFrequencyUniform) {
+  gl.uniform1f(waterSecondaryWaveFrequencyUniform, waterSecondaryWaveFrequency);
+}
+if (waterPrimaryWaveSpeedUniform) {
+  gl.uniform1f(waterPrimaryWaveSpeedUniform, waterPrimaryWaveSpeed);
+}
+if (waterSecondaryWaveSpeedUniform) {
+  gl.uniform1f(waterSecondaryWaveSpeedUniform, waterSecondaryWaveSpeed);
+}
+if (waterPrimaryAmplitudeUniform) {
+  gl.uniform1f(waterPrimaryAmplitudeUniform, waterPrimaryAmplitude);
+}
+if (waterSecondaryAmplitudeUniform) {
+  gl.uniform1f(waterSecondaryAmplitudeUniform, waterSecondaryAmplitude);
+}
+if (waterDeepColorUniform) {
+  gl.uniform3f(
+    waterDeepColorUniform,
+    waterDeepColor[0],
+    waterDeepColor[1],
+    waterDeepColor[2],
+  );
+}
+if (waterShallowColorUniform) {
+  gl.uniform3f(
+    waterShallowColorUniform,
+    waterShallowColor[0],
+    waterShallowColor[1],
+    waterShallowColor[2],
+  );
+}
+if (waterFoamColorUniform) {
+  gl.uniform3f(
+    waterFoamColorUniform,
+    waterFoamColor[0],
+    waterFoamColor[1],
+    waterFoamColor[2],
+  );
+}
+if (waterColorQuantizeStepUniform) {
+  gl.uniform1f(waterColorQuantizeStepUniform, waterColorQuantizeStep);
+}
+if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+  gl.uniform1f(terrainAlphaUniform, 1);
+}
 const selectionHighlightColor = [0.32, 0.78, 0.94];
 
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
 
+const waterBuffer = createBuffer(new Float32Array(0));
+
 const blockGridBuffer = createBuffer(new Float32Array(0));
 const chunkGridBuffer = createBuffer(new Float32Array(0));
 const selectionHighlightBuffer = createBuffer(new Float32Array(0));
 const rockBuffer = createBuffer(new Float32Array(0));
+const plantBuffer = createBuffer(new Float32Array(0));
 
 let blockGridVertexCount = 0;
 let chunkGridVertexCount = 0;
 let rockVertexCount = 0;
+let plantVertexCount = 0;
 let selectionHighlightVertexCount = 0;
+let waterVertexCount = 0;
+let waterVertexData = null;
+let waterNeedsUpload = false;
 
 let terrainHeightField = null;
 let terrainMaskField = null;
-let forceGridVisible = false;
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
+let simulationTime = 0;
 const terrainInfo = {
   seed: currentSeed,
   minHeight: 0,
@@ -506,13 +929,184 @@ const terrainInfo = {
   visibleVertices: 0,
   visibleVertexRatio: 0,
   rockCount: 0,
+  plantCount: 0,
+  featureStats: {
+    canyon: 0,
+    ravine: 0,
+    cliffs: 0,
+  },
 };
 let seeThroughTerrain = false;
 let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
 
-const defaultTerrainOpacity = 1;
-const seeThroughTerrainOpacity = 0.45;
+let waterAnimationTime = 0;
+
+const drawStats = {
+  terrain: 0,
+  water: 0,
+  rocks: 0,
+  plants: 0,
+  blockGrid: 0,
+  chunkGrid: 0,
+  selection: 0,
+  total: 0,
+};
+
+const plantSpeciesDefinitions = [
+  {
+    id: 'coral-bosque',
+    name: 'Bosque de coral abanico',
+    asset: 'Coral.usdz',
+    baseColor: [0.32, 0.7, 0.54],
+    tipColor: [0.68, 0.92, 0.74],
+    baseHeight: 0.6,
+    maxHeight: 2.4,
+    initialHeight: 0.4,
+    baseRadius: 0.18,
+    density: 360,
+    photosynthesisRate: 0.95,
+    growthConsumptionRate: 0.45,
+    growthEfficiency: 0.32,
+    energyCapacity: 5,
+    nightThreshold: 0.35,
+    clusterCount: 6,
+    clusterRadius: 5,
+    clusterSize: [6, 12],
+    minMask: 0.22,
+  },
+  {
+    id: 'coral-pradera',
+    name: 'Pradera de algas suaves',
+    asset: 'coral-piece.zip',
+    baseColor: [0.26, 0.8, 0.44],
+    tipColor: [0.58, 0.96, 0.62],
+    baseHeight: 0.35,
+    maxHeight: 1.45,
+    initialHeight: 0.25,
+    baseRadius: 0.12,
+    density: 280,
+    photosynthesisRate: 1.2,
+    growthConsumptionRate: 0.55,
+    growthEfficiency: 0.27,
+    energyCapacity: 3.2,
+    nightThreshold: 0.4,
+    clusterCount: 8,
+    clusterRadius: 3.8,
+    clusterSize: [8, 16],
+    minMask: 0.18,
+  },
+  {
+    id: 'coral-arbusto',
+    name: 'Colonia de alga arbustiva',
+    asset: 'coral.zip',
+    baseColor: [0.3, 0.64, 0.42],
+    tipColor: [0.76, 0.94, 0.58],
+    baseHeight: 0.5,
+    maxHeight: 1.9,
+    initialHeight: 0.32,
+    baseRadius: 0.14,
+    density: 330,
+    photosynthesisRate: 0.85,
+    growthConsumptionRate: 0.5,
+    growthEfficiency: 0.31,
+    energyCapacity: 4.2,
+    nightThreshold: 0.3,
+    clusterCount: 5,
+    clusterRadius: 4.6,
+    clusterSize: [5, 10],
+    minMask: 0.25,
+  },
+];
+
+function createEmptyPlantMetrics() {
+  return {
+    count: 0,
+    averageHeight: 0,
+    averageMass: 0,
+    averageEnergy: 0,
+    averageCapacity: 0,
+    matureCount: 0,
+    sproutCount: 0,
+    energyReserveRatio: 0,
+    energyAbsorbed: 0,
+    energyConsumed: 0,
+    growthEvents: 0,
+  };
+}
+
+function computePlantMetrics(instances) {
+  const metrics = createEmptyPlantMetrics();
+  if (!instances || instances.length === 0) {
+    return metrics;
+  }
+
+  let totalHeight = 0;
+  let totalMass = 0;
+  let totalEnergy = 0;
+  let totalCapacity = 0;
+  let matureCount = 0;
+  let sproutCount = 0;
+
+  for (const plant of instances) {
+    if (!plant) {
+      continue;
+    }
+    const species = plant.species ?? plantSimulation.speciesById.get(plant.speciesId);
+    if (!species) {
+      continue;
+    }
+    const height = Math.max(0, plant.currentHeight ?? 0);
+    totalHeight += height;
+    totalMass += computePlantMass(plant);
+    const energy = Math.max(0, plant.energy ?? 0);
+    totalEnergy += energy;
+    const capacity = Math.max(0, species.energyCapacity ?? 0);
+    totalCapacity += capacity;
+
+    const matureThreshold = Math.max(0, species.maxHeight * 0.8);
+    if (height >= matureThreshold) {
+      matureCount += 1;
+    } else {
+      const baseHeight = species.initialHeight ?? species.baseHeight ?? species.maxHeight * 0.25;
+      const sproutThreshold = Math.max(0, baseHeight * 1.1);
+      if (height <= sproutThreshold) {
+        sproutCount += 1;
+      }
+    }
+  }
+
+  const count = instances.length;
+  metrics.count = count;
+  metrics.averageHeight = count > 0 ? totalHeight / count : 0;
+  metrics.averageMass = count > 0 ? totalMass / count : 0;
+  metrics.averageEnergy = count > 0 ? totalEnergy / count : 0;
+  metrics.averageCapacity = count > 0 ? totalCapacity / count : 0;
+  metrics.matureCount = matureCount;
+  metrics.sproutCount = sproutCount;
+  metrics.energyReserveRatio = totalCapacity > 0 ? totalEnergy / totalCapacity : 0;
+
+  return metrics;
+}
+
+const plantPlanesPerInstance = 2;
+const plantVerticesPerPlane = 12;
+const plantVerticesPerInstance = plantPlanesPerInstance * plantVerticesPerPlane;
+const plantFloatsPerInstance = plantVerticesPerInstance * floatsPerVertex;
+
+const plantSimulation = {
+  species: plantSpeciesDefinitions.map((definition) => ({
+    ...definition,
+  })),
+  speciesById: new Map(),
+  instances: [],
+  geometryDirty: true,
+  metrics: createEmptyPlantMetrics(),
+};
+
+for (const species of plantSimulation.species) {
+  plantSimulation.speciesById.set(species.id, species);
+}
 
 if (typeof window !== 'undefined') {
   window.__terrainInfo = terrainInfo;
@@ -520,6 +1114,28 @@ if (typeof window !== 'undefined') {
   window.__selectBlockAt = (x, y) => selectBlockAtScreen(x, y);
   window.__clearSelection = () => clearSelection();
   window.__runtimeIssues = runtimeIssues;
+  window.__plantSimulation = plantSimulation;
+  window.__uiDebug = {
+    registry: uiDebugRegistry.map(({ id, name, label }) => ({ id, name, label })),
+    refresh() {
+      return getUiDebugSnapshotObject(refreshUiDebugSnapshot());
+    },
+    get state() {
+      return {
+        highlight: uiDebugState.highlight,
+        track: uiDebugState.track,
+        snapshot: getUiDebugSnapshotObject(),
+      };
+    },
+    highlight(active) {
+      setUiDebugHighlight(active);
+      return uiDebugState.highlight;
+    },
+    track(active) {
+      setUiDebugTracking(active);
+      return uiDebugState.track;
+    },
+  };
   if (debugTerrainToggle) {
     if (!('seeThroughToggle' in window)) {
       window.seeThroughToggle = debugTerrainToggle;
@@ -647,6 +1263,10 @@ function clamp(value, minValue, maxValue) {
   return value;
 }
 
+function fract(value) {
+  return value - Math.floor(value);
+}
+
 function mixColor(a, b, t) {
   return [
     lerp(a[0], b[0], t),
@@ -670,6 +1290,30 @@ const dayNightCycleState = {
   lightColor: [1, 1, 1],
   sunAngle: -Math.PI / 2,
 };
+
+const dayCyclePhaseLabels = {
+  midnight: 'Medianoche',
+  dawn: 'Amanecer',
+  midday: 'Mediodía',
+  dusk: 'Atardecer',
+};
+
+function getDayCyclePhase(normalizedTime) {
+  const normalized = ((normalizedTime % 1) + 1) % 1;
+  if (normalized >= 0.875 || normalized < 0.125) {
+    return 'midnight';
+  }
+  if (normalized < 0.375) {
+    return 'dawn';
+  }
+  if (normalized < 0.625) {
+    return 'midday';
+  }
+  if (normalized < 0.875) {
+    return 'dusk';
+  }
+  return 'midnight';
+}
 
 function updateDayNightCycleState(currentSimulationTime) {
   const duration = Math.max(1, dayNightCycleDuration);
@@ -706,7 +1350,6 @@ function applyTranslucentTerrainSetting(enabled) {
   terrainRenderState.translucent = active;
   terrainRenderState.alpha = active ? translucentTerrainAlpha : 1;
   seeThroughTerrain = active;
-  forceGridVisible = active;
 
   if (debugTerrainToggle && debugTerrainToggle.checked !== active) {
     debugTerrainToggle.checked = active;
@@ -799,39 +1442,7 @@ function createTerrainGridVertices(heightField, step, color, heightOffset) {
 }
 
 function createBlockGridVertices(heightField, color, heightOffset) {
-  if (!heightField) {
-    return new Float32Array(0);
-  }
-
-  const blocksPerSide = heightField.length - 1;
-  const half = baseplateSize / 2;
-  const totalLines = (blocksPerSide + 1) * 2;
-  const vertexData = new Float32Array(totalLines * 2 * floatsPerVertex);
-  let offset = 0;
-
-  const sample = (xIndex, zIndex) => {
-    const clampedX = Math.max(0, Math.min(blocksPerSide, xIndex));
-    const clampedZ = Math.max(0, Math.min(blocksPerSide, zIndex));
-    return heightField[clampedZ][clampedX] + heightOffset;
-  };
-
-  for (let xi = 0; xi <= blocksPerSide; xi++) {
-    const worldX = -half + xi * blockSize;
-    const startHeight = sample(xi, 0);
-    const endHeight = sample(xi, blocksPerSide);
-    offset = pushVertex(vertexData, offset, worldX, startHeight, -half, color);
-    offset = pushVertex(vertexData, offset, worldX, endHeight, half, color);
-  }
-
-  for (let zi = 0; zi <= blocksPerSide; zi++) {
-    const worldZ = -half + zi * blockSize;
-    const startHeight = sample(0, zi);
-    const endHeight = sample(blocksPerSide, zi);
-    offset = pushVertex(vertexData, offset, -half, startHeight, worldZ, color);
-    offset = pushVertex(vertexData, offset, half, endHeight, worldZ, color);
-  }
-
-  return offset === vertexData.length ? vertexData : vertexData.subarray(0, offset);
+  return createTerrainGridVertices(heightField, 1, color, heightOffset);
 }
 
 function updateGridBuffers(heightField) {
@@ -849,6 +1460,108 @@ function updateGridBuffers(heightField) {
   gl.bindBuffer(gl.ARRAY_BUFFER, chunkGridBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, chunkVertices, gl.STATIC_DRAW);
   chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
+}
+
+function clearWaterSurface() {
+  waterVertexCount = 0;
+  waterVertexData = null;
+  waterNeedsUpload = false;
+  gl.bindBuffer(gl.ARRAY_BUFFER, waterBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(0), gl.STATIC_DRAW);
+}
+
+function computeWaterFoamFactor(depth) {
+  if (!Number.isFinite(depth)) {
+    return 0;
+  }
+  if (depth <= waterFoamDepthStart) {
+    return 1;
+  }
+  if (depth >= waterFoamDepthEnd) {
+    return 0;
+  }
+  const normalized = 1 - (depth - waterFoamDepthStart) / (waterFoamDepthEnd - waterFoamDepthStart);
+  return clamp01(normalized);
+}
+
+function sampleWaterPattern(x, z) {
+  const hash = Math.sin((x + 37.2) * 12.9898 + (z - 91.7) * 78.233) * 43758.5453;
+  return fract(hash);
+}
+
+function pushWaterVertexData(vertexIndex, x, z, foam) {
+  if (!waterVertexData) {
+    return vertexIndex;
+  }
+  const baseIndex = vertexIndex * floatsPerVertex;
+  const pattern = sampleWaterPattern(x, z);
+  const shallowMix = Math.pow(clamp01(foam), 0.7);
+  waterVertexData[baseIndex + 0] = x;
+  waterVertexData[baseIndex + 1] = waterSurfaceLevel;
+  waterVertexData[baseIndex + 2] = z;
+  waterVertexData[baseIndex + 3] = clamp01(foam);
+  waterVertexData[baseIndex + 4] = pattern;
+  waterVertexData[baseIndex + 5] = shallowMix;
+  return vertexIndex + 1;
+}
+
+function rebuildWaterSurface(heightField) {
+  if (!heightField || heightField.length <= 1) {
+    clearWaterSurface();
+    return;
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  if (blocksPerSide <= 0) {
+    clearWaterSurface();
+    return;
+  }
+
+  const totalVertices = blocksPerSide * blocksPerSide * 6;
+  waterVertexData = new Float32Array(totalVertices * floatsPerVertex);
+
+  const half = baseplateSize / 2;
+  let vertexIndex = 0;
+
+  for (let z = 0; z < blocksPerSide; z++) {
+    const z0 = -half + z * blockSize;
+    const z1 = z0 + blockSize;
+    const row0 = heightField[z] ?? [];
+    const row1 = heightField[z + 1] ?? row0;
+    for (let x = 0; x < blocksPerSide; x++) {
+      const x0 = -half + x * blockSize;
+      const x1 = x0 + blockSize;
+      const h00 = row0[x] ?? 0;
+      const h10 = row0[x + 1] ?? h00;
+      const h01 = row1[x] ?? h00;
+      const h11 = row1[x + 1] ?? h10;
+
+      const foam00 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h00));
+      const foam10 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h10));
+      const foam01 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h01));
+      const foam11 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h11));
+
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z0, foam00);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z0, foam10);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z1, foam11);
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z0, foam00);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z1, foam11);
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z1, foam01);
+    }
+  }
+
+  waterVertexCount = vertexIndex;
+  waterNeedsUpload = true;
+  uploadWaterSurfaceBuffer();
+}
+
+function uploadWaterSurfaceBuffer() {
+  if (!waterNeedsUpload || !waterVertexData) {
+    return;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, waterBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, waterVertexData, gl.STATIC_DRAW);
+  waterNeedsUpload = false;
 }
 
 function sampleTerrain(worldX, worldZ) {
@@ -957,6 +1670,8 @@ function clearSelection() {
   if (selectionInfoPanel) {
     selectionInfoPanel.hidden = true;
   }
+  closeWaterInfo();
+  closePlantInfo();
 }
 
 function updateSelectionPanel(selection) {
@@ -989,6 +1704,292 @@ function updateSelectionPanel(selection) {
   }
 }
 
+function setDebugPanelExpanded(expanded) {
+  debugPanelExpanded = Boolean(expanded);
+
+  if (debugPanel && typeof debugPanel.classList?.toggle === 'function') {
+    debugPanel.classList.toggle('debug-panel--expanded', debugPanelExpanded);
+  }
+
+  if (debugToggleButton) {
+    debugToggleButton.setAttribute('aria-expanded', String(debugPanelExpanded));
+  }
+
+  if (debugConsole) {
+    debugConsole.hidden = !debugPanelExpanded;
+    if (typeof debugConsole.setAttribute === 'function') {
+      debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
+    }
+  }
+}
+
+function computeWaterTileVolume(selection) {
+  if (!selection) {
+    return 0;
+  }
+
+  const heights = selection.cornerHeights
+    ? [
+        selection.cornerHeights.h00,
+        selection.cornerHeights.h10,
+        selection.cornerHeights.h01,
+        selection.cornerHeights.h11,
+      ]
+    : [selection.height, selection.height, selection.height, selection.height];
+
+  let depthSum = 0;
+  let wetSamples = 0;
+  for (const height of heights) {
+    const depth = Math.max(0, waterSurfaceLevel - height);
+    if (depth > 0) {
+      wetSamples += 1;
+    }
+    depthSum += depth;
+  }
+
+  if (depthSum <= 0) {
+    return 0;
+  }
+
+  const averageDepth = depthSum / heights.length;
+  const coverage = wetSamples > 0 ? wetSamples / heights.length : 0;
+  const waveCompensation =
+    (waterPrimaryAmplitude * 0.5 + waterSecondaryAmplitude * 0.35) * coverage;
+  const area = blockSize * blockSize;
+  return Math.max(0, averageDepth + waveCompensation) * area;
+}
+
+function updateWaterInfoPanel(selection) {
+  if (!waterInfoPanel) {
+    return;
+  }
+
+  const volume = computeWaterTileVolume(selection);
+  if (waterInfoVolumeField) {
+    waterInfoVolumeField.textContent = `${volume.toFixed(2)} m³`;
+  }
+}
+
+function closeWaterInfo(options = {}) {
+  const { restoreCamera = false, event } = options;
+  activeWaterSelection = null;
+  ignoreNextWaterPointerDown = false;
+
+  if (waterInfoPanel) {
+    waterInfoPanel.hidden = true;
+    if (typeof waterInfoPanel.setAttribute === 'function') {
+      waterInfoPanel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  if (
+    waterInfoPointerHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('pointerdown', waterInfoPointerHandler, true);
+  }
+  if (
+    waterInfoKeyHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('keydown', waterInfoKeyHandler, true);
+  }
+
+  if (restoreCamera) {
+    requestCameraControl(event);
+  }
+}
+
+function openWaterInfo(selection, event) {
+  if (!waterInfoPanel) {
+    return;
+  }
+
+  if (!selection || !selection.underwater) {
+    closeWaterInfo();
+    return;
+  }
+
+  closePlantInfo();
+
+  activeWaterSelection = selection;
+  updateWaterInfoPanel(selection);
+  waterInfoPanel.hidden = false;
+  if (typeof waterInfoPanel.setAttribute === 'function') {
+    waterInfoPanel.setAttribute('aria-hidden', 'false');
+  }
+  ignoreNextWaterPointerDown = event?.type === 'pointerdown';
+
+  if (!waterInfoPointerHandler) {
+    waterInfoPointerHandler = (pointerEvent) => {
+      if (pointerEvent.button !== undefined && pointerEvent.button !== 0) {
+        return;
+      }
+      if (ignoreNextWaterPointerDown) {
+        ignoreNextWaterPointerDown = false;
+        return;
+      }
+      suppressNextSelectionPointerDown = true;
+      suppressNextSelectionClick = true;
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => {
+          suppressNextSelectionPointerDown = false;
+        }, 0);
+        setTimeout(() => {
+          suppressNextSelectionClick = false;
+        }, 0);
+      } else {
+        suppressNextSelectionPointerDown = false;
+        suppressNextSelectionClick = false;
+      }
+      closeWaterInfo({ restoreCamera: true, event: pointerEvent });
+    };
+  }
+
+  if (!waterInfoKeyHandler) {
+    waterInfoKeyHandler = (keyboardEvent) => {
+      if (keyboardEvent.key === 'Escape' || keyboardEvent.key === 'Esc') {
+        keyboardEvent.preventDefault();
+        closeWaterInfo({ restoreCamera: true, event: keyboardEvent });
+      }
+    };
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('pointerdown', waterInfoPointerHandler, true);
+    document.addEventListener('keydown', waterInfoKeyHandler, true);
+  }
+}
+
+function closePlantInfo(options = {}) {
+  const { restoreCamera = false, event } = options;
+  activePlantSelection = null;
+  pendingPlantSelection = null;
+  ignoreNextPlantPointerDown = false;
+
+  if (plantInfoPanel) {
+    plantInfoPanel.hidden = true;
+    if (typeof plantInfoPanel.setAttribute === 'function') {
+      plantInfoPanel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  if (
+    plantInfoPointerHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('pointerdown', plantInfoPointerHandler, true);
+  }
+
+  if (
+    plantInfoKeyHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('keydown', plantInfoKeyHandler, true);
+  }
+
+  if (restoreCamera) {
+    requestCameraControl(event);
+  }
+}
+
+function updatePlantInfoPanel(plant = activePlantSelection) {
+  const target = plant ?? activePlantSelection;
+  if (!target) {
+    return;
+  }
+
+  const species = target.species ?? plantSimulation.speciesById.get(target.speciesId);
+
+  if (plantInfoSpeciesField) {
+    plantInfoSpeciesField.textContent = species?.name ?? '—';
+  }
+
+  const ageSeconds = Math.max(0, simulationTime - (target.spawnSimulationTime ?? 0));
+  const loreYears = ageSeconds / dayNightCycleDuration;
+
+  if (plantInfoAgeLoreField) {
+    plantInfoAgeLoreField.textContent = `${loreYears.toFixed(1)} años`;
+  }
+
+  if (plantInfoAgeRealField) {
+    plantInfoAgeRealField.textContent = formatDurationHMS(ageSeconds);
+  }
+
+  if (plantInfoMassField) {
+    const mass = computePlantMass(target);
+    plantInfoMassField.textContent = `${mass.toFixed(2)} kg`;
+  }
+
+  if (plantInfoNutrientsField) {
+    plantInfoNutrientsField.textContent = '—';
+  }
+}
+
+function openPlantInfo(plantOrHit, event) {
+  if (!plantInfoPanel) {
+    return;
+  }
+
+  const plant = plantOrHit?.plant ?? plantOrHit;
+  if (!plant) {
+    closePlantInfo();
+    return;
+  }
+
+  activePlantSelection = plant;
+  updatePlantInfoPanel(plant);
+  plantInfoPanel.hidden = false;
+  if (typeof plantInfoPanel.setAttribute === 'function') {
+    plantInfoPanel.setAttribute('aria-hidden', 'false');
+  }
+  ignoreNextPlantPointerDown = event?.type === 'pointerdown';
+
+  if (!plantInfoPointerHandler) {
+    plantInfoPointerHandler = (pointerEvent) => {
+      if (pointerEvent.button !== undefined && pointerEvent.button !== 0) {
+        return;
+      }
+      if (ignoreNextPlantPointerDown) {
+        ignoreNextPlantPointerDown = false;
+        return;
+      }
+      suppressNextSelectionPointerDown = true;
+      suppressNextSelectionClick = true;
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => {
+          suppressNextSelectionPointerDown = false;
+        }, 0);
+        setTimeout(() => {
+          suppressNextSelectionClick = false;
+        }, 0);
+      } else {
+        suppressNextSelectionPointerDown = false;
+        suppressNextSelectionClick = false;
+      }
+      closePlantInfo({ restoreCamera: true, event: pointerEvent });
+    };
+  }
+
+  if (!plantInfoKeyHandler) {
+    plantInfoKeyHandler = (keyboardEvent) => {
+      if (keyboardEvent.key === 'Escape' || keyboardEvent.key === 'Esc') {
+        keyboardEvent.preventDefault();
+        closePlantInfo({ restoreCamera: true, event: keyboardEvent });
+      }
+    };
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('pointerdown', plantInfoPointerHandler, true);
+    document.addEventListener('keydown', plantInfoKeyHandler, true);
+  }
+}
+
 function applySelection(selection) {
   selectedBlock = selection;
   updateSelectionHighlight(selection.blockX, selection.blockZ);
@@ -1013,7 +2014,7 @@ function refreshSelectionAfterTerrain() {
   }
 
   const height = sample.height;
-  const waterDepth = Math.max(0, seaLevel - height);
+  const waterDepth = Math.max(0, waterSurfaceLevel - height);
   applySelection({
     blockX: sample.blockX,
     blockZ: sample.blockZ,
@@ -1021,9 +2022,10 @@ function refreshSelectionAfterTerrain() {
     chunkZ: sample.chunkZ,
     worldPosition: [sample.centerX, height, sample.centerZ],
     height,
-    waterLevel: seaLevel,
+    waterLevel: waterSurfaceLevel,
     waterDepth,
     underwater: waterDepth > 0,
+    cornerHeights: sample.cornerHeights,
   });
 }
 
@@ -1089,7 +2091,7 @@ function castTerrainRay(origin, direction) {
 
         const centerSample = sampleTerrain(finalSample.centerX, finalSample.centerZ) || finalSample;
         const height = centerSample.height;
-        const waterDepth = Math.max(0, seaLevel - height);
+        const waterDepth = Math.max(0, waterSurfaceLevel - height);
 
         return {
           blockX: centerSample.blockX,
@@ -1098,9 +2100,10 @@ function castTerrainRay(origin, direction) {
           chunkZ: centerSample.chunkZ,
           worldPosition: [centerSample.centerX, height, centerSample.centerZ],
           height,
-          waterLevel: seaLevel,
+          waterLevel: waterSurfaceLevel,
           waterDepth,
           underwater: waterDepth > 0,
+          cornerHeights: centerSample.cornerHeights,
         };
       }
 
@@ -1116,7 +2119,7 @@ function castTerrainRay(origin, direction) {
   return null;
 }
 
-function pickSelectionAt(pointerX, pointerY) {
+function createPointerRay(pointerX, pointerY) {
   if (!inverseViewProjectionMatrix) {
     return null;
   }
@@ -1143,7 +2146,118 @@ function pickSelectionAt(pointerX, pointerY) {
     return null;
   }
 
-  return castTerrainRay([cameraPosition[0], cameraPosition[1], cameraPosition[2]], direction);
+  return {
+    origin: [cameraPosition[0], cameraPosition[1], cameraPosition[2]],
+    direction,
+  };
+}
+
+function intersectPlant(origin, direction, plant) {
+  if (!plant) {
+    return null;
+  }
+
+  const baseY = plant.position?.[1] ?? 0;
+  const height = Math.max(0, plant.currentHeight ?? 0);
+  const topY = baseY + height;
+  if (topY <= baseY) {
+    return null;
+  }
+
+  const centerX = plant.position?.[0] ?? 0;
+  const centerZ = plant.position?.[2] ?? 0;
+  const radius = Math.max(0.04, plant.currentRadius ?? 0.12);
+  const tipRadius = Math.max(0.04, plant.tipRadius ?? radius * 0.6);
+  const effectiveRadius = Math.max(radius, tipRadius);
+
+  const dx = direction[0];
+  const dz = direction[2];
+  const relX = origin[0] - centerX;
+  const relZ = origin[2] - centerZ;
+
+  const a = dx * dx + dz * dz;
+  let tCandidate = null;
+
+  if (a > 1e-6) {
+    const b = 2 * (relX * dx + relZ * dz);
+    const c = relX * relX + relZ * relZ - effectiveRadius * effectiveRadius;
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant < 0) {
+      return null;
+    }
+    const sqrtDiscriminant = Math.sqrt(discriminant);
+    const t0 = (-b - sqrtDiscriminant) / (2 * a);
+    const t1 = (-b + sqrtDiscriminant) / (2 * a);
+    if (t0 >= 0) {
+      tCandidate = t0;
+    } else if (t1 >= 0) {
+      tCandidate = t1;
+    } else {
+      return null;
+    }
+  } else {
+    const distanceSq = relX * relX + relZ * relZ;
+    if (distanceSq > effectiveRadius * effectiveRadius) {
+      return null;
+    }
+    if (direction[1] === 0) {
+      return null;
+    }
+    const targetY = direction[1] > 0 ? baseY : topY;
+    tCandidate = (targetY - origin[1]) / direction[1];
+    if (tCandidate < 0) {
+      return null;
+    }
+  }
+
+  const hitY = origin[1] + direction[1] * tCandidate;
+  if (hitY < baseY - 0.2 || hitY > topY + 0.2) {
+    return null;
+  }
+
+  const hitPoint = [
+    origin[0] + direction[0] * tCandidate,
+    hitY,
+    origin[2] + direction[2] * tCandidate,
+  ];
+
+  return { distance: tCandidate, point: hitPoint };
+}
+
+function intersectPlants(origin, direction) {
+  if (!plantSimulation.instances || plantSimulation.instances.length === 0) {
+    return null;
+  }
+
+  let closest = null;
+  for (const plant of plantSimulation.instances) {
+    const hit = intersectPlant(origin, direction, plant);
+    if (!hit) {
+      continue;
+    }
+    if (!closest || hit.distance < closest.distance) {
+      closest = { plant, distance: hit.distance, point: hit.point };
+    }
+  }
+
+  return closest;
+}
+
+function pickPlantAt(pointerX, pointerY) {
+  const ray = createPointerRay(pointerX, pointerY);
+  if (!ray) {
+    return null;
+  }
+  return intersectPlants(ray.origin, ray.direction);
+}
+
+function pickSelectionAt(pointerX, pointerY) {
+  const ray = createPointerRay(pointerX, pointerY);
+  if (!ray) {
+    return null;
+  }
+
+  return castTerrainRay(ray.origin, ray.direction);
 }
 
 function selectBlockAtScreen(pointerX, pointerY) {
@@ -1414,6 +2528,13 @@ function generateTerrainVertices(seedString) {
     }
   }
 
+  const normalization = sampleCount > 0 ? sampleCount : 1;
+  const featureStats = {
+    canyon: clamp01(canyonTotal / normalization),
+    ravine: clamp01(ravineTotal / normalization),
+    cliffs: clamp01(cliffTotal / normalization),
+  };
+
   return {
     vertexData,
     minHeight,
@@ -1421,6 +2542,7 @@ function generateTerrainVertices(seedString) {
     visibleVertices,
     heightfield: heights,
     maskfield: islandMask,
+    featureStats,
   };
 }
 
@@ -1691,6 +2813,408 @@ function sampleTerrainNormal(x, z) {
   return normal;
 }
 
+function resetPlantGeometry() {
+  gl.bindBuffer(gl.ARRAY_BUFFER, plantBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(0), gl.STATIC_DRAW);
+  plantVertexCount = 0;
+  plantSimulation.geometryDirty = false;
+}
+
+function appendPlantPlane(
+  vertexData,
+  offset,
+  baseAx,
+  baseAz,
+  baseBx,
+  baseBz,
+  topAx,
+  topAz,
+  topBx,
+  topBz,
+  baseY,
+  topY,
+  baseColor,
+  tipColor
+) {
+  offset = pushVertex(vertexData, offset, baseAx, baseY, baseAz, baseColor);
+  offset = pushVertex(vertexData, offset, baseBx, baseY, baseBz, baseColor);
+  offset = pushVertex(vertexData, offset, topBx, topY, topBz, tipColor);
+
+  offset = pushVertex(vertexData, offset, baseAx, baseY, baseAz, baseColor);
+  offset = pushVertex(vertexData, offset, topBx, topY, topBz, tipColor);
+  offset = pushVertex(vertexData, offset, topAx, topY, topAz, tipColor);
+
+  offset = pushVertex(vertexData, offset, baseBx, baseY, baseBz, baseColor);
+  offset = pushVertex(vertexData, offset, baseAx, baseY, baseAz, baseColor);
+  offset = pushVertex(vertexData, offset, topAx, topY, topAz, tipColor);
+
+  offset = pushVertex(vertexData, offset, baseBx, baseY, baseBz, baseColor);
+  offset = pushVertex(vertexData, offset, topAx, topY, topAz, tipColor);
+  offset = pushVertex(vertexData, offset, topBx, topY, topBz, tipColor);
+
+  return offset;
+}
+
+function appendPlantInstanceVertices(vertexData, offset, plant) {
+  const position = plant.position || [0, 0, 0];
+  const baseY = position[1];
+  const height = Math.max(0, plant.currentHeight ?? 0);
+  const topY = baseY + height;
+  if (topY <= baseY) {
+    return offset;
+  }
+
+  const radius = Math.max(0.04, plant.currentRadius ?? 0.1);
+  const tipRadius = Math.max(0.02, plant.tipRadius ?? radius * 0.6);
+  const baseColor = plant.baseColor ?? [0.35, 0.78, 0.5];
+  const tipColor = plant.tipColor ?? [0.62, 0.92, 0.7];
+  const x = position[0];
+  const z = position[2];
+
+  offset = appendPlantPlane(
+    vertexData,
+    offset,
+    x - radius,
+    z,
+    x + radius,
+    z,
+    x - tipRadius,
+    z,
+    x + tipRadius,
+    z,
+    baseY,
+    topY,
+    baseColor,
+    tipColor
+  );
+
+  offset = appendPlantPlane(
+    vertexData,
+    offset,
+    x,
+    z - radius,
+    x,
+    z + radius,
+    x,
+    z - tipRadius,
+    x,
+    z + tipRadius,
+    baseY,
+    topY,
+    baseColor,
+    tipColor
+  );
+
+  return offset;
+}
+
+function rebuildPlantGeometry() {
+  const instances = plantSimulation.instances;
+  if (!instances || instances.length === 0) {
+    resetPlantGeometry();
+    return;
+  }
+
+  const vertexData = new Float32Array(instances.length * plantFloatsPerInstance);
+  let offset = 0;
+  for (const plant of instances) {
+    offset = appendPlantInstanceVertices(vertexData, offset, plant);
+  }
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, plantBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
+  plantVertexCount = vertexData.length / floatsPerVertex;
+  plantSimulation.geometryDirty = false;
+}
+
+function computePlantVolume(plant) {
+  const height = Math.max(0, plant?.currentHeight ?? 0);
+  const baseRadius = Math.max(0.01, plant?.currentRadius ?? 0.1);
+  const topRadius = Math.max(0.01, plant?.tipRadius ?? baseRadius * 0.6);
+  const averageRadius = (baseRadius + topRadius) / 2;
+  return Math.PI * averageRadius * averageRadius * height;
+}
+
+function computePlantMass(plant) {
+  if (!plant) {
+    return 0;
+  }
+  const species = plant.species ?? plantSimulation.speciesById.get(plant.speciesId);
+  const density = species?.density ?? 300;
+  return computePlantVolume(plant) * density;
+}
+
+function regeneratePlants(seedString, heightfield, maskfield) {
+  closePlantInfo();
+  plantSimulation.instances = [];
+  terrainInfo.plantCount = 0;
+  plantSimulation.metrics = createEmptyPlantMetrics();
+
+  if (!heightfield || !maskfield) {
+    resetPlantGeometry();
+    return;
+  }
+
+  const baseSeed = stringToSeed(`${seedString}-flora`);
+  const random = createRandomGenerator(baseSeed);
+  const half = baseplateSize / 2;
+
+  const attemptSpawn = (species, x, z, overrides = {}) => {
+    if (x < -half || x > half || z < -half || z > half) {
+      return false;
+    }
+
+    const mask = sampleTerrainMask(x, z);
+    const minMask = overrides.minMask ?? species.minMask ?? 0;
+    if (mask < minMask) {
+      return false;
+    }
+
+    const groundHeight = sampleTerrainHeight(x, z);
+    if (!Number.isFinite(groundHeight)) {
+      return false;
+    }
+
+    const maxElevation = overrides.maxElevation ?? waterSurfaceLevel - 0.2;
+    if (groundHeight >= maxElevation) {
+      return false;
+    }
+
+    const slopeNormal = sampleTerrainNormal(x, z);
+    const minSlope = overrides.minSlope ?? 0.35;
+    if (slopeNormal[1] < minSlope) {
+      return false;
+    }
+
+    const baseInitial =
+      species.initialHeight ?? species.baseHeight ?? Math.min(1.2, species.maxHeight * 0.35);
+    const jitterScale = overrides.heightJitterScale ?? 0.22;
+    const heightJitter = randomInRange(random, -baseInitial * 0.18, baseInitial * jitterScale);
+    const initialHeight = clamp(baseInitial + heightJitter, 0.18, species.maxHeight * 0.9);
+
+    const radiusJitter = Math.max(0.005, overrides.radiusJitter ?? 0.02);
+    const baseRadius = Math.max(
+      0.05,
+      (species.baseRadius ?? 0.12) + randomInRange(random, -radiusJitter, radiusJitter),
+    );
+
+    const energyCapacity = Math.max(0, species.energyCapacity ?? 1);
+    const initialEnergy = Math.max(
+      0,
+      randomInRange(random, 0, energyCapacity * (overrides.initialEnergyRatio ?? 0.35)),
+    );
+
+    const plant = {
+      id: `${species.id}-${plantSimulation.instances.length}`,
+      speciesId: species.id,
+      species,
+      position: [x, groundHeight, z],
+      currentHeight: initialHeight,
+      currentRadius: baseRadius,
+      tipRadius: Math.max(0.04, baseRadius * 0.6),
+      energy: initialEnergy,
+      spawnSimulationTime: simulationTime,
+      baseColor: species.baseColor,
+      tipColor: species.tipColor,
+    };
+
+    plantSimulation.instances.push(plant);
+    return true;
+  };
+
+  for (const species of plantSimulation.species) {
+    const clusterCount = Math.max(1, Math.floor(species.clusterCount ?? 1));
+    const cellsPerAxis = Math.max(1, Math.ceil(Math.sqrt(clusterCount)));
+    const cellWidth = baseplateSize / cellsPerAxis;
+    const cellHeight = baseplateSize / cellsPerAxis;
+
+    const centers = [];
+    for (let index = 0; index < clusterCount; index++) {
+      const gx = index % cellsPerAxis;
+      const gz = Math.floor(index / cellsPerAxis);
+      const baseX = -half + cellWidth * (gx + 0.5);
+      const baseZ = -half + cellHeight * (gz + 0.5);
+      const jitterX = randomInRange(random, -cellWidth * 0.35, cellWidth * 0.35);
+      const jitterZ = randomInRange(random, -cellHeight * 0.35, cellHeight * 0.35);
+      centers.push([baseX + jitterX, baseZ + jitterZ]);
+    }
+
+    for (let i = centers.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      const temp = centers[i];
+      centers[i] = centers[j];
+      centers[j] = temp;
+    }
+
+    const minMembers = Math.max(1, Math.floor(species.clusterSize?.[0] ?? 4));
+    const maxMembers = Math.max(minMembers, Math.floor(species.clusterSize?.[1] ?? minMembers + 2));
+    const clusterRadius = Math.max(1, species.clusterRadius ?? 3.5);
+    let speciesPlaced = 0;
+
+    for (const [centerX, centerZ] of centers) {
+      const targetMembers = Math.round(randomInRange(random, minMembers, maxMembers));
+      let attempts = 0;
+      let placed = 0;
+      const maxAttempts = Math.max(targetMembers * 12, 24);
+      while (placed < targetMembers && attempts < maxAttempts) {
+        attempts += 1;
+        const angle = randomInRange(random, 0, Math.PI * 2);
+        const distance = Math.sqrt(random()) * clusterRadius;
+        const x = centerX + Math.cos(angle) * distance;
+        const z = centerZ + Math.sin(angle) * distance;
+
+        if (attemptSpawn(species, x, z)) {
+          placed += 1;
+          speciesPlaced += 1;
+        }
+      }
+    }
+
+    if (speciesPlaced === 0) {
+      const fallbackTarget = Math.max(minMembers, 4);
+      const fallbackConstraints = [
+        {
+          minMask: Math.max(0, (species.minMask ?? 0) * 0.6),
+          minSlope: 0.28,
+          heightJitterScale: 0.18,
+          initialEnergyRatio: 0.4,
+          maxElevation: waterSurfaceLevel - 0.05,
+        },
+        {
+          minMask: 0.02,
+          minSlope: 0.12,
+          heightJitterScale: 0.24,
+          initialEnergyRatio: 0.5,
+          maxElevation: waterSurfaceLevel - 0.02,
+        },
+      ];
+
+      for (const constraints of fallbackConstraints) {
+        let fallbackAttempts = 0;
+        const fallbackLimit = fallbackTarget * 30;
+        while (speciesPlaced < fallbackTarget && fallbackAttempts < fallbackLimit) {
+          fallbackAttempts += 1;
+          const x = randomInRange(random, -half, half);
+          const z = randomInRange(random, -half, half);
+          if (attemptSpawn(species, x, z, constraints)) {
+            speciesPlaced += 1;
+          }
+        }
+        if (speciesPlaced >= fallbackTarget) {
+          break;
+        }
+      }
+
+      if (speciesPlaced === 0) {
+        let emergencyAttempts = 0;
+        const emergencyLimit = 240;
+        while (speciesPlaced === 0 && emergencyAttempts < emergencyLimit) {
+          emergencyAttempts += 1;
+          const x = randomInRange(random, -half, half);
+          const z = randomInRange(random, -half, half);
+          if (
+            attemptSpawn(species, x, z, {
+              minMask: 0,
+              minSlope: 0.05,
+              heightJitterScale: 0.25,
+              initialEnergyRatio: 0.65,
+              maxElevation: waterSurfaceLevel - 0.005,
+            })
+          ) {
+            speciesPlaced += 1;
+          }
+        }
+      }
+    }
+  }
+
+  terrainInfo.plantCount = plantSimulation.instances.length;
+  plantSimulation.geometryDirty = true;
+  plantSimulation.metrics = computePlantMetrics(plantSimulation.instances);
+  if (plantSimulation.instances.length === 0) {
+    resetPlantGeometry();
+  } else {
+    rebuildPlantGeometry();
+  }
+}
+
+function tickPlants(deltaTime) {
+  if (!plantSimulation.instances || plantSimulation.instances.length === 0) {
+    plantSimulation.metrics = createEmptyPlantMetrics();
+    return;
+  }
+
+  const daylight = clamp01(dayNightCycleState.daylight ?? 0);
+  const simulationDelta = baseSimulationStep;
+  let geometryNeedsUpdate = false;
+  let totalEnergyAbsorbed = 0;
+  let totalEnergyConsumed = 0;
+  let growthEvents = 0;
+
+  for (const plant of plantSimulation.instances) {
+    const species = plant.species ?? plantSimulation.speciesById.get(plant.speciesId);
+    if (!species) {
+      continue;
+    }
+
+    const absorptionRate = Math.max(0, species.photosynthesisRate ?? 0);
+    const capacity = Math.max(0, species.energyCapacity ?? 1);
+    const previousEnergy = Math.max(0, plant.energy ?? 0);
+    const absorbedPotential = Math.max(0, absorptionRate * daylight * simulationDelta);
+    const nextEnergy = Math.min(capacity, previousEnergy + absorbedPotential);
+    plant.energy = nextEnergy;
+    totalEnergyAbsorbed += Math.max(0, nextEnergy - previousEnergy);
+
+    const nightThreshold = species.nightThreshold ?? 0.35;
+    if (daylight <= nightThreshold && plant.energy > 0 && plant.currentHeight < species.maxHeight) {
+      const consumptionRate = Math.max(0, species.growthConsumptionRate ?? 0.4);
+      const available = Math.min(plant.energy, consumptionRate * simulationDelta);
+      if (available > 0) {
+        plant.energy -= available;
+        totalEnergyConsumed += available;
+        const efficiency = Math.max(0, species.growthEfficiency ?? 0.25);
+        const growthAmount = available * efficiency;
+        if (growthAmount > 0) {
+          const prevHeight = plant.currentHeight ?? 0;
+          const nextHeight = Math.min(species.maxHeight, prevHeight + growthAmount);
+          const grew = Math.abs(nextHeight - prevHeight) > 0.0005;
+          if (grew) {
+            plant.currentHeight = nextHeight;
+            const growthFactor = clamp01(nextHeight / species.maxHeight);
+            const baseRadius = species.baseRadius ?? plant.currentRadius ?? 0.12;
+            const nextRadius = Math.max(0.05, baseRadius * (0.75 + growthFactor * 0.45));
+            const nextTipRadius = Math.max(0.04, nextRadius * (0.55 + growthFactor * 0.25));
+            if (Math.abs(nextRadius - (plant.currentRadius ?? 0)) > 0.0005) {
+              plant.currentRadius = nextRadius;
+              geometryNeedsUpdate = true;
+            }
+            if (Math.abs(nextTipRadius - (plant.tipRadius ?? 0)) > 0.0005) {
+              plant.tipRadius = nextTipRadius;
+              geometryNeedsUpdate = true;
+            }
+            if (!geometryNeedsUpdate && grew) {
+              geometryNeedsUpdate = true;
+            }
+            growthEvents += 1;
+          }
+        }
+      }
+    }
+  }
+
+  if (geometryNeedsUpdate) {
+    plantSimulation.geometryDirty = true;
+  }
+
+  const metrics = computePlantMetrics(plantSimulation.instances);
+  metrics.energyAbsorbed = totalEnergyAbsorbed;
+  metrics.energyConsumed = totalEnergyConsumed;
+  metrics.growthEvents = growthEvents;
+  plantSimulation.metrics = metrics;
+
+  void deltaTime;
+}
+
 function regenerateRocks(seedString, heightfield, maskfield) {
   if (!heightfield || !maskfield) {
     gl.bindBuffer(gl.ARRAY_BUFFER, rockBuffer);
@@ -1791,14 +3315,22 @@ function regenerateRocks(seedString, heightfield, maskfield) {
 }
 
 function regenerateTerrain(seedString) {
-  const { vertexData, minHeight, maxHeight, visibleVertices, heightfield, maskfield } =
-    generateTerrainVertices(seedString);
+  const {
+    vertexData,
+    minHeight,
+    maxHeight,
+    visibleVertices,
+    heightfield,
+    maskfield,
+    featureStats,
+  } = generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
   baseplateVertexCount = vertexData.length / floatsPerVertex;
   terrainHeightField = heightfield;
   terrainMaskField = maskfield;
   updateGridBuffers(heightfield);
+  rebuildWaterSurface(heightfield);
   refreshSelectionAfterTerrain();
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
@@ -1808,7 +3340,9 @@ function regenerateTerrain(seedString) {
   terrainInfo.visibleVertexRatio = baseplateVertexCount
     ? visibleVertices / baseplateVertexCount
     : 0;
+  terrainInfo.featureStats = featureStats;
   regenerateRocks(seedString, heightfield, maskfield);
+  regeneratePlants(seedString, heightfield, maskfield);
 }
 
 function generateRandomSeed() {
@@ -2029,59 +3563,18 @@ function invertMatrix(a) {
 
 function multiplyMatrices(a, b) {
   const result = new Float32Array(16);
-  const a00 = a[0];
-  const a01 = a[1];
-  const a02 = a[2];
-  const a03 = a[3];
-  const a10 = a[4];
-  const a11 = a[5];
-  const a12 = a[6];
-  const a13 = a[7];
-  const a20 = a[8];
-  const a21 = a[9];
-  const a22 = a[10];
-  const a23 = a[11];
-  const a30 = a[12];
-  const a31 = a[13];
-  const a32 = a[14];
-  const a33 = a[15];
 
-  const b00 = b[0];
-  const b01 = b[1];
-  const b02 = b[2];
-  const b03 = b[3];
-  const b10 = b[4];
-  const b11 = b[5];
-  const b12 = b[6];
-  const b13 = b[7];
-  const b20 = b[8];
-  const b21 = b[9];
-  const b22 = b[10];
-  const b23 = b[11];
-  const b30 = b[12];
-  const b31 = b[13];
-  const b32 = b[14];
-  const b33 = b[15];
+  for (let column = 0; column < 4; column++) {
+    const b0 = b[column * 4 + 0];
+    const b1 = b[column * 4 + 1];
+    const b2 = b[column * 4 + 2];
+    const b3 = b[column * 4 + 3];
 
-  result[0] = b00 * a00 + b01 * a10 + b02 * a20 + b03 * a30;
-  result[1] = b00 * a01 + b01 * a11 + b02 * a21 + b03 * a31;
-  result[2] = b00 * a02 + b01 * a12 + b02 * a22 + b03 * a32;
-  result[3] = b00 * a03 + b01 * a13 + b02 * a23 + b03 * a33;
-
-  result[4] = b10 * a00 + b11 * a10 + b12 * a20 + b13 * a30;
-  result[5] = b10 * a01 + b11 * a11 + b12 * a21 + b13 * a31;
-  result[6] = b10 * a02 + b11 * a12 + b12 * a22 + b13 * a32;
-  result[7] = b10 * a03 + b11 * a13 + b12 * a23 + b13 * a33;
-
-  result[8] = b20 * a00 + b21 * a10 + b22 * a20 + b23 * a30;
-  result[9] = b20 * a01 + b21 * a11 + b22 * a21 + b23 * a31;
-  result[10] = b20 * a02 + b21 * a12 + b22 * a22 + b23 * a32;
-  result[11] = b20 * a03 + b21 * a13 + b22 * a23 + b23 * a33;
-
-  result[12] = b30 * a00 + b31 * a10 + b32 * a20 + b33 * a30;
-  result[13] = b30 * a01 + b31 * a11 + b32 * a21 + b33 * a31;
-  result[14] = b30 * a02 + b31 * a12 + b32 * a22 + b33 * a32;
-  result[15] = b30 * a03 + b31 * a13 + b32 * a23 + b33 * a33;
+    result[column * 4 + 0] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    result[column * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    result[column * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    result[column * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
 
   return result;
 }
@@ -2106,6 +3599,9 @@ function requestCameraControl(event) {
     }
     return;
   }
+  if (event?.detail >= 2) {
+    return;
+  }
   if (event) {
     event.preventDefault();
   }
@@ -2115,16 +3611,71 @@ function requestCameraControl(event) {
   }
 }
 
-canvas.addEventListener('click', requestCameraControl);
-canvas.addEventListener('pointerdown', (event) => {
+canvas.addEventListener('click', (event) => {
+  requestCameraControl(event);
   if (fatalRuntimeError) {
+    pendingSelectionForClick = null;
     return;
   }
   if (event.button !== 0) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (suppressNextSelectionClick) {
+    suppressNextSelectionClick = false;
+    pendingSelectionForClick = null;
     return;
   }
   const pointer = getPointerPosition(event);
-  selectBlockAtScreen(pointer.x, pointer.y);
+  const plantSelection = pendingPlantSelection ?? pickPlantAt(pointer.x, pointer.y);
+  pendingPlantSelection = null;
+  if (plantSelection && plantSelection.plant) {
+    selectedBlock = null;
+    selectionHighlightVertexCount = 0;
+    if (selectionInfoPanel) {
+      selectionInfoPanel.hidden = true;
+    }
+    if (typeof window !== 'undefined') {
+      window.__selectedSquare = null;
+    }
+    closeWaterInfo();
+    openPlantInfo(plantSelection.plant, event);
+    return;
+  }
+
+  const selection = pendingSelectionForClick ?? selectBlockAtScreen(pointer.x, pointer.y);
+  pendingSelectionForClick = null;
+  closePlantInfo();
+  if (selection && selection.underwater) {
+    openWaterInfo(selection, event);
+  } else {
+    closeWaterInfo();
+  }
+});
+
+canvas.addEventListener('pointerdown', (event) => {
+  if (fatalRuntimeError) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (event.button !== 0) {
+    pendingSelectionForClick = null;
+    return;
+  }
+  if (suppressNextSelectionPointerDown) {
+    suppressNextSelectionPointerDown = false;
+    pendingSelectionForClick = null;
+    return;
+  }
+  const pointer = getPointerPosition(event);
+  const plantSelection = pickPlantAt(pointer.x, pointer.y);
+  if (plantSelection && plantSelection.plant) {
+    pendingPlantSelection = plantSelection;
+    pendingSelectionForClick = null;
+    return;
+  }
+  pendingPlantSelection = null;
+  pendingSelectionForClick = selectBlockAtScreen(pointer.x, pointer.y);
 });
 
 if (startButton) {
@@ -2162,6 +3713,38 @@ if (randomSeedButton) {
   });
 }
 
+if (debugToggleButton) {
+  debugToggleButton.addEventListener('click', () => {
+    setDebugPanelExpanded(!debugPanelExpanded);
+    if (debugPanelExpanded && debugConsole) {
+      debugConsole.scrollTop = debugConsole.scrollHeight;
+    }
+  });
+}
+
+if (uiDebugHighlightToggle) {
+  uiDebugHighlightToggle.addEventListener('change', (event) => {
+    setUiDebugHighlight(event.target.checked);
+  });
+}
+
+if (uiDebugTrackToggle) {
+  uiDebugTrackToggle.addEventListener('change', (event) => {
+    setUiDebugTracking(event.target.checked);
+  });
+}
+
+if (uiDebugLogButton) {
+  uiDebugLogButton.addEventListener('click', () => {
+    const snapshot = refreshUiDebugSnapshot();
+    const summary = getUiDebugSnapshotObject(snapshot);
+    console.info('[UI DEBUG] instantánea de elementos', summary);
+    if (typeof console.table === 'function') {
+      console.table(summary);
+    }
+  });
+}
+
 function handleSimulationSpeedChange(value) {
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed)) {
@@ -2188,6 +3771,18 @@ if (debugTerrainToggle) {
 if (selectionCloseButton) {
   selectionCloseButton.addEventListener('click', () => {
     clearSelection();
+  });
+}
+
+if (waterInfoCloseButton) {
+  waterInfoCloseButton.addEventListener('click', (event) => {
+    closeWaterInfo({ restoreCamera: true, event });
+  });
+}
+
+if (plantInfoCloseButton) {
+  plantInfoCloseButton.addEventListener('click', (event) => {
+    closePlantInfo({ restoreCamera: true, event });
   });
 }
 
@@ -2308,7 +3903,6 @@ let tickStatsAccumulator = 0;
 let tickSamples = 0;
 let displayedTps = 0;
 let totalTicks = 0;
-let simulationTime = 0;
 let ticksLastFrame = 0;
 
 updateDayNightCycleState(simulationTime);
@@ -2374,6 +3968,14 @@ function formatSimulationTime(timeInSeconds) {
   return `${paddedMinutes}:${paddedSeconds}.${tenths}`;
 }
 
+function formatDurationHMS(totalSeconds) {
+  const clamped = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  const seconds = clamped % 60;
+  return `${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+}
+
 function updateSimulationHud() {
   if (simulationClock) {
     simulationClock.textContent = formatSimulationTime(simulationTime);
@@ -2387,11 +3989,41 @@ function updateSimulationHud() {
   if (simulationSpeedSettingsDisplay) {
     simulationSpeedSettingsDisplay.textContent = `${simulationSpeed.toFixed(1)}×`;
   }
+  updateDayCycleHud();
+  if (!plantInfoPanel?.hidden) {
+    updatePlantInfoPanel();
+  }
+}
+
+function updateDayCycleHud() {
+  const normalized = dayNightCycleState.normalizedTime ?? 0;
+  const hours = normalized * 24;
+  if (dayCycleProgressFill && dayCycleProgressFill.style) {
+    dayCycleProgressFill.style.width = `${Math.min(100, Math.max(0, normalized * 100))}%`;
+  }
+  if (dayCycleProgressTrack && typeof dayCycleProgressTrack.setAttribute === 'function') {
+    dayCycleProgressTrack.setAttribute('aria-valuenow', hours.toFixed(1));
+    const phase = getDayCyclePhase(normalized);
+    const label = dayCyclePhaseLabels[phase] ?? `${hours.toFixed(1)}h`;
+    dayCycleProgressTrack.setAttribute('aria-valuetext', label);
+  }
+  if (dayCyclePhaseIconMap.size > 0) {
+    const activePhase = getDayCyclePhase(normalized);
+    for (const [phase, element] of dayCyclePhaseIconMap) {
+      if (!element?.classList) {
+        continue;
+      }
+      if (phase === activePhase) {
+        element.classList.add('hud-daycycle__icon--active');
+      } else {
+        element.classList.remove('hud-daycycle__icon--active');
+      }
+    }
+  }
 }
 
 function tickSimulation(deltaTime) {
-  // Punto de extensión para futuros sistemas de simulación basados en ticks.
-  void deltaTime;
+  tickPlants(deltaTime);
 }
 
 function update(deltaTime) {
@@ -2427,6 +4059,10 @@ function update(deltaTime) {
     cameraPosition[1] -= moveSpeed * deltaTime;
   }
 
+  if (Number.isFinite(deltaTime)) {
+    waterAnimationTime += deltaTime;
+  }
+
   const target = add(cameraPosition, forwardDirection);
   const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 500);
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
@@ -2443,6 +4079,15 @@ function bindGeometry(buffer) {
 }
 
 function render() {
+  drawStats.terrain = 0;
+  drawStats.water = 0;
+  drawStats.rocks = 0;
+  drawStats.plants = 0;
+  drawStats.blockGrid = 0;
+  drawStats.chunkGrid = 0;
+  drawStats.selection = 0;
+  drawStats.total = 0;
+
   const skyColor = dayNightCycleState.skyColor;
   if (skyColor) {
     gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
@@ -2458,11 +4103,21 @@ function render() {
     );
   }
 
+  if (waterTimeUniform) {
+    gl.uniform1f(waterTimeUniform, waterAnimationTime);
+  }
+
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
+
+  if (renderModeUniform && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(renderModeUniform, renderModes.terrain);
+  }
+
+  uploadWaterSurfaceBuffer();
 
   if (typeof gl.enable === 'function' && typeof gl.disable === 'function') {
     if (terrainRenderState.translucent) {
@@ -2478,6 +4133,54 @@ function render() {
   if (baseplateVertexCount > 0) {
     bindGeometry(baseplateBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
+    drawStats.terrain += 1;
+    drawStats.total += 1;
+  }
+
+  if (waterVertexCount > 0) {
+    const blendingAlreadyActive = terrainRenderState.translucent;
+    let temporarilyEnabledBlend = false;
+    if (typeof gl.enable === 'function') {
+      if (!blendingAlreadyActive) {
+        gl.enable(gl.BLEND);
+        temporarilyEnabledBlend = true;
+      }
+      if (typeof gl.blendFunc === 'function') {
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      }
+    }
+
+    let depthMaskChanged = false;
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
+      depthMaskChanged = true;
+    }
+
+    if (renderModeUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(renderModeUniform, renderModes.water);
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, waterAlpha);
+    }
+
+    bindGeometry(waterBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
+    drawStats.water += 1;
+    drawStats.total += 1;
+
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (renderModeUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(renderModeUniform, renderModes.terrain);
+    }
+
+    if (depthMaskChanged) {
+      gl.depthMask(true);
+    }
+    if (temporarilyEnabledBlend && typeof gl.disable === 'function') {
+      gl.disable(gl.BLEND);
+    }
   }
 
   if (rockVertexCount > 0) {
@@ -2486,28 +4189,56 @@ function render() {
     }
     bindGeometry(rockBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
+    drawStats.rocks += 1;
+    drawStats.total += 1;
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
     }
   }
 
-  if (blockGridVertexCount > 0 || chunkGridVertexCount > 0) {
-    if (forceGridVisible && typeof gl.disable === 'function') {
-      gl.disable(gl.DEPTH_TEST);
+  if (plantSimulation.geometryDirty) {
+    rebuildPlantGeometry();
+  }
+
+  if (plantVertexCount > 0) {
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, 1);
+    }
+    bindGeometry(plantBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, plantVertexCount);
+    drawStats.plants += 1;
+    drawStats.total += 1;
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+  }
+
+  const hasGridGeometry = blockGridVertexCount > 0 || chunkGridVertexCount > 0;
+  if (hasGridGeometry) {
+    if (typeof gl.enable === 'function') {
+      gl.enable(gl.DEPTH_TEST);
+    }
+
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(false);
     }
 
     if (blockGridVertexCount > 0) {
       bindGeometry(blockGridBuffer);
       gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
+      drawStats.blockGrid += 1;
+      drawStats.total += 1;
     }
 
     if (chunkGridVertexCount > 0) {
       bindGeometry(chunkGridBuffer);
       gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+      drawStats.chunkGrid += 1;
+      drawStats.total += 1;
     }
 
-    if (forceGridVisible && typeof gl.enable === 'function') {
-      gl.enable(gl.DEPTH_TEST);
+    if (typeof gl.depthMask === 'function') {
+      gl.depthMask(true);
     }
   }
 
@@ -2517,6 +4248,8 @@ function render() {
     }
     bindGeometry(selectionHighlightBuffer);
     gl.drawArrays(gl.LINES, 0, selectionHighlightVertexCount);
+    drawStats.selection += 1;
+    drawStats.total += 1;
     if (typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
@@ -2529,7 +4262,7 @@ function render() {
 }
 
 function updateDebugConsole(deltaTime) {
-  if (!debugConsole && !settingsDebugLog) {
+  if (!debugConsole) {
     return;
   }
 
@@ -2555,6 +4288,20 @@ function updateDebugConsole(deltaTime) {
   const formatFeaturePercent = (value) =>
     Number.isFinite(value) ? (Math.max(0, value) * 100).toFixed(0) : '0';
 
+  const plantMetrics = plantSimulation.metrics ?? createEmptyPlantMetrics();
+  const formatMetric = (value, digits = 2) => {
+    const finite = Number.isFinite(value) ? value : 0;
+    return finite.toFixed(digits);
+  };
+  const reservePercent = formatMetric((plantMetrics.energyReserveRatio ?? 0) * 100, 0);
+  const avgHeightMetric = formatMetric(plantMetrics.averageHeight);
+  const avgMassMetric = formatMetric(plantMetrics.averageMass, 1);
+  const avgEnergyMetric = formatMetric(plantMetrics.averageEnergy);
+  const avgCapacityMetric = formatMetric(plantMetrics.averageCapacity);
+  const absorbedMetric = formatMetric(plantMetrics.energyAbsorbed);
+  const consumedMetric = formatMetric(plantMetrics.energyConsumed);
+  const growthEventsMetric = Math.max(0, plantMetrics.growthEvents ?? 0);
+
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
     : 'Ninguna';
@@ -2578,12 +4325,32 @@ function updateDebugConsole(deltaTime) {
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
 
   if (pointerLockErrors > 0) {
     info.push(`Pointer lock errores: ${pointerLockErrors}`);
+  }
+
+  if (uiDebugState.track) {
+    const snapshot = refreshUiDebugSnapshot();
+    info.push('', 'UI (depuración):');
+    for (const entry of uiDebugRegistry) {
+      const details = snapshot.get(entry.name);
+      if (!details || !details.present) {
+        info.push(`• ${entry.label}: no encontrado`);
+        continue;
+      }
+      const status = details.visible ? 'visible' : 'oculto';
+      const size = `${details.width}×${details.height}`;
+      info.push(
+        `• ${entry.label}: ${status} (hidden=${
+          details.hiddenAttribute ? 'sí' : 'no'
+        }, display=${details.display ?? 'n/d'}, tamaño=${size})`,
+      );
+    }
   }
 
   if (runtimeIssues.length > 0) {
@@ -2596,11 +4363,9 @@ function updateDebugConsole(deltaTime) {
 
   const output = info.join('\n');
 
-  if (debugConsole) {
-    debugConsole.textContent = output;
-  }
-  if (settingsDebugLog) {
-    settingsDebugLog.textContent = output;
+  debugConsole.textContent = output;
+  if (typeof debugConsole.setAttribute === 'function') {
+    debugConsole.setAttribute('aria-hidden', debugPanelExpanded ? 'false' : 'true');
   }
 }
 
