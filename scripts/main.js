@@ -1344,6 +1344,7 @@ function computePlantMetrics(instances) {
   let totalCapacity = 0;
   let matureCount = 0;
   let sproutCount = 0;
+  let validCount = 0;
 
   for (const plant of instances) {
     if (!plant) {
@@ -1353,6 +1354,9 @@ function computePlantMetrics(instances) {
     if (!species) {
       continue;
     }
+
+    validCount += 1;
+
     const height = Math.max(0, plant.currentHeight ?? 0);
     totalHeight += height;
     totalMass += computePlantMass(plant);
@@ -1373,12 +1377,15 @@ function computePlantMetrics(instances) {
     }
   }
 
-  const count = instances.length;
-  metrics.count = count;
-  metrics.averageHeight = count > 0 ? totalHeight / count : 0;
-  metrics.averageMass = count > 0 ? totalMass / count : 0;
-  metrics.averageEnergy = count > 0 ? totalEnergy / count : 0;
-  metrics.averageCapacity = count > 0 ? totalCapacity / count : 0;
+  if (validCount === 0) {
+    return metrics;
+  }
+
+  metrics.count = validCount;
+  metrics.averageHeight = totalHeight / validCount;
+  metrics.averageMass = totalMass / validCount;
+  metrics.averageEnergy = totalEnergy / validCount;
+  metrics.averageCapacity = totalCapacity / validCount;
   metrics.matureCount = matureCount;
   metrics.sproutCount = sproutCount;
   metrics.energyReserveRatio = totalCapacity > 0 ? totalEnergy / totalCapacity : 0;
