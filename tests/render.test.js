@@ -11,6 +11,7 @@ function createWebGLStub() {
     viewProjection: null,
     opacity: 1,
     depthMask: true,
+    uniformAssignments: [],
   };
 
   const gl = {
@@ -52,7 +53,7 @@ function createWebGLStub() {
       state.currentProgram = program || {};
     },
     getAttribLocation: () => 0,
-    getUniformLocation: () => ({}),
+    getUniformLocation: (program, name) => ({ program, name }),
     createBuffer: () => ({}),
     bindBuffer: (target, buffer) => {
       if (target === gl.ARRAY_BUFFER) {
@@ -73,6 +74,9 @@ function createWebGLStub() {
     uniform1f: (location, value) => {
       void location;
       state.opacity = value;
+    },
+    uniform1i: (location, value) => {
+      state.uniformAssignments.push({ location, value, name: location?.name ?? null });
     },
     blendFunc: () => {},
     depthMask: (flag) => {
@@ -104,9 +108,17 @@ function createWebGLStub() {
   return { gl, state };
 }
 
-function runGameScript() {
+
+function runGameScript(options = {}) {
+  const { disableGlobalThis = false } = options;
   const { gl, state } = createWebGLStub();
   const frameCallbacks = [];
+  const listeners = {
+    document: {},
+    window: {},
+  };
+
+  let documentStub;
 
   const canvas = {
     width: 0,
@@ -120,9 +132,9 @@ function runGameScript() {
     },
     addEventListener: () => {},
     requestPointerLock: () => {
-      document.pointerLockElement = canvas;
-      if (document._pointerLockChange) {
-        document._pointerLockChange();
+      documentStub.pointerLockElement = canvas;
+      if (documentStub._pointerLockChange) {
+        documentStub._pointerLockChange();
       }
     },
     getBoundingClientRect: () => ({ left: 0, top: 0, width: canvas.width, height: canvas.height }),
@@ -223,32 +235,28 @@ function runGameScript() {
     addEventListener: () => {},
   };
 
-  const listeners = {
-    document: {},
-    window: {},
+  const simulationHud = {
+    hidden: false,
+    setAttribute: () => {},
+    classList: { add: () => {}, remove: () => {}, toggle: () => {} },
   };
 
-  global.window = {
-    innerWidth: 1280,
-    innerHeight: 720,
-    addEventListener: (event, handler) => {
-      listeners.window[event] = handler;
-    },
-  };
-
-  global.document = {
+  documentStub = {
     pointerLockElement: null,
     _pointerLockChange: null,
     addEventListener: (event, handler) => {
       if (event === 'pointerlockchange') {
-        document._pointerLockChange = handler;
+        documentStub._pointerLockChange = handler;
       }
       listeners.document[event] = handler;
     },
+    removeEventListener: (event) => {
+      delete listeners.document[event];
+    },
     exitPointerLock: () => {
-      document.pointerLockElement = null;
-      if (document._pointerLockChange) {
-        document._pointerLockChange();
+      documentStub.pointerLockElement = null;
+      if (documentStub._pointerLockChange) {
+        documentStub._pointerLockChange();
       }
     },
     getElementById: (id) => {
@@ -263,6 +271,7 @@ function runGameScript() {
       if (id === 'debug-terrain-translucent') return debugTerrainToggle;
       if (id === 'day-cycle-progress-track') return dayCycleProgressTrack;
       if (id === 'day-cycle-progress-fill') return dayCycleProgressFill;
+      if (id === 'simulation-hud') return simulationHud;
       return null;
     },
     querySelectorAll: (selector) => {
@@ -271,38 +280,110 @@ function runGameScript() {
       }
       return [];
     },
+    body: null,
   };
 
-  global.window.document = global.document;
+  const windowStub = {
+    innerWidth: 1280,
+    innerHeight: 720,
+    addEventListener: (event, handler) => {
+      listeners.window[event] = handler;
+    },
+    removeEventListener: (event) => {
+      delete listeners.window[event];
+    },
+    document: documentStub,
+    navigator: { language: 'es-ES' },
+  };
 
-  global.performance = {
+  documentStub.defaultView = windowStub;
+
+  const performanceStub = {
     _now: 0,
     now() {
       return this._now;
     },
   };
 
-  global.requestAnimationFrame = (callback) => {
-    frameCallbacks.push(callback);
-    return frameCallbacks.length;
+  const sandbox = {
+    console,
+    setTimeout,
+    clearTimeout,
+    Math,
+    Date,
+    Array,
+    Float32Array,
+    Uint16Array,
+    Uint32Array,
+    Int32Array,
+    Map,
+    Set,
+    WeakMap,
+    WeakSet,
+    Number,
+    Boolean,
+    JSON,
+    String,
+    Object,
+    performance: performanceStub,
+    requestAnimationFrame: (callback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    },
+    cancelAnimationFrame: () => {},
+    window: windowStub,
+    document: documentStub,
   };
+
+  windowStub.performance = performanceStub;
+  windowStub.requestAnimationFrame = sandbox.requestAnimationFrame;
+  windowStub.cancelAnimationFrame = () => {};
+  windowStub.setTimeout = setTimeout;
+  windowStub.clearTimeout = clearTimeout;
+
+  if (!disableGlobalThis) {
+    sandbox.globalThis = sandbox;
+  }
+  sandbox.self = windowStub;
+  sandbox.global = sandbox;
 
   const scriptPath = path.resolve(__dirname, '..', 'scripts', 'main.js');
   const code = fs.readFileSync(scriptPath, 'utf8');
-  vm.runInThisContext(code, { filename: scriptPath });
+  vm.runInNewContext(code, sandbox, { filename: scriptPath });
 
   function stepFrames(count = 1) {
     let processed = 0;
     while (frameCallbacks.length > 0 && processed < count) {
       const callback = frameCallbacks.shift();
       processed += 1;
-      performance._now += 16;
-      callback(performance._now);
+      performanceStub._now += 16;
+      callback(performanceStub._now);
     }
     return processed;
   }
 
   stepFrames(3);
+
+  const runtimeStateRef =
+    (typeof sandbox.globalThis !== 'undefined' &&
+      sandbox.globalThis &&
+      sandbox.globalThis.__ARRECIFE_RUNTIME_STATE__) ||
+    sandbox.window.__ARRECIFE_RUNTIME_STATE__ ||
+    sandbox.__ARRECIFE_RUNTIME_STATE__ ||
+    null;
+
+  const seeThroughToggle =
+    (sandbox.globalThis && sandbox.globalThis.seeThroughToggle) ||
+    sandbox.window.seeThroughToggle ||
+    null;
+  const selectionInfoPanel =
+    (sandbox.globalThis && sandbox.globalThis.selectionInfoPanel) ||
+    sandbox.window.selectionInfoPanel ||
+    null;
+  const selectionBlockField =
+    (sandbox.globalThis && sandbox.globalThis.selectionBlockField) ||
+    sandbox.window.selectionBlockField ||
+    null;
 
   return {
     canvas,
@@ -310,12 +391,14 @@ function runGameScript() {
     debugConsole,
     glState: state,
     stepFrame: stepFrames,
-    seeThroughToggle: globalThis.seeThroughToggle,
-    selectionInfoPanel: globalThis.selectionInfoPanel,
-    selectionBlockField: globalThis.selectionBlockField,
+    seeThroughToggle,
+    selectionInfoPanel,
+    selectionBlockField,
     dayCycleProgressTrack,
     dayCycleProgressFill,
     dayCycleIcons,
+    runtimeState: runtimeStateRef,
+    windowApi: sandbox.window,
   };
 }
 
@@ -338,6 +421,8 @@ function runTests() {
     dayCycleProgressTrack,
     dayCycleProgressFill,
     dayCycleIcons,
+    runtimeState,
+    windowApi,
   } = runGameScript();
 
   const blocksPerChunk = 8;
@@ -347,11 +432,11 @@ function runTests() {
   const expectedBlockLineVertices = blocksPerSide * (blocksPerSide + 1) * 4;
   const expectedChunkLineVertices = (blocksPerSide / blocksPerChunk + 1) * blocksPerSide * 4;
 
-  assert(canvas.width === window.innerWidth, 'El canvas debe igualar el ancho de la ventana');
-  assert(canvas.height === window.innerHeight, 'El canvas debe igualar el alto de la ventana');
+  assert(canvas.width === windowApi.innerWidth, 'El canvas debe igualar el ancho de la ventana');
+  assert(canvas.height === windowApi.innerHeight, 'El canvas debe igualar el alto de la ventana');
 
-  assert(glState.viewport[2] === window.innerWidth, 'Viewport debe usar el ancho completo');
-  assert(glState.viewport[3] === window.innerHeight, 'Viewport debe usar el alto completo');
+  assert(glState.viewport[2] === windowApi.innerWidth, 'Viewport debe usar el ancho completo');
+  assert(glState.viewport[3] === windowApi.innerHeight, 'Viewport debe usar el alto completo');
 
   assert(Array.isArray(glState.viewProjection), 'La matriz viewProjection debe enviarse al shader');
   const viewProjectionW = glState.viewProjection[15];
@@ -367,6 +452,14 @@ function runTests() {
 
   const triangleDraws = glState.draws.filter((draw) => draw.mode === 0x0004);
   assert(triangleDraws.length >= 2, 'Debe haber draw calls de triángulos para terreno y rocas');
+
+  const terrainSurfaceDraws = triangleDraws.filter(
+    (draw) => draw.count === expectedTerrainVertices,
+  );
+  assert(
+    terrainSurfaceDraws.length >= 2,
+    'Debe haber draw calls de triángulos para el terreno base y el agua',
+  );
 
   const rockDraw = triangleDraws.find((draw) => draw.count !== expectedTerrainVertices);
   assert(rockDraw, 'Las rocas deben renderizarse en draw calls adicionales');
@@ -387,11 +480,24 @@ function runTests() {
 
   assert(glState.draws.length >= 4, 'Se esperan múltiples draw calls por cuadro incluyendo rocas');
 
+  const renderModeAssignments = glState.uniformAssignments.filter(
+    (entry) => entry.name === 'renderMode'
+  );
+  assert(renderModeAssignments.length >= 2, 'El render debe actualizar el uniform renderMode durante el cuadro');
+  const renderModeValues = new Set(renderModeAssignments.map((entry) => entry.value));
+  assert(renderModeValues.has(0), 'El modo de render debe forzar el valor 0 para dibujar el terreno');
+  assert(renderModeValues.has(1), 'El modo de render debe forzar el valor 1 para dibujar el agua');
+
   assert(glState.depthMask === true, 'El render debe restaurar la escritura en el depth buffer tras los grids');
 
   assert(
     debugConsole.textContent.includes('Draw calls'),
     'La consola de depuración debe reportar los draw calls'
+  );
+
+  assert(
+    debugConsole.textContent.includes('agua='),
+    'La consola de depuración debe reportar draw calls de agua'
   );
 
   assert(
@@ -441,8 +547,42 @@ function runTests() {
     'El panel de debug debe reflejar que el terreno inicia opaco'
   );
 
-  const terrainInfo = global.window.__terrainInfo;
-  assert(terrainInfo, 'La información del terreno debe exponerse en window.__terrainInfo');
+  assert(runtimeState && typeof runtimeState === 'object', 'El estado global de runtime debe inicializarse');
+  assert(
+    runtimeState.bootstrapAttempts === 1,
+    'El runtime debe registrar una única inicialización del script principal',
+  );
+  assert(
+    runtimeState.fallbackFactories &&
+      typeof runtimeState.fallbackFactories.debugPanel === 'function' &&
+      typeof runtimeState.fallbackFactories.infoPanel === 'function',
+    'Los factories de fallback deben almacenarse en el estado global',
+  );
+  assert(
+    Array.isArray(runtimeState.issues) && runtimeState.issues.length >= 1,
+    'Las incidencias de runtime deben registrarse en el estado global',
+  );
+  const debugPanelFallbackIssue = runtimeState.issues.find(
+    (issue) =>
+      issue &&
+      issue.context === 'ui' &&
+      typeof issue.message === 'string' &&
+      issue.message.includes('Se reconstruyó el panel de depuración'),
+  );
+  assert(
+    Boolean(debugPanelFallbackIssue),
+    'La reconstrucción del panel de depuración debe registrarse como incidencia',
+  );
+  assert(
+    runtimeState.issues.every(
+      (issue) =>
+        !(issue && issue.context === 'bootstrap' && issue.severity === 'fatal'),
+    ),
+    'Una sola inicialización no debe generar errores fatales de bootstrap',
+  );
+
+  const terrainInfo = windowApi.__terrainInfo;
+  assert(terrainInfo, 'La información del terreno debe exponerse en windowApi.__terrainInfo');
   assert(
     terrainInfo.vertexCount === expectedTerrainVertices,
     'El conteo de vértices del terreno debe coincidir con la malla completa'
@@ -504,7 +644,7 @@ function runTests() {
     'El panel de debug debe actualizar el estado translúcido tras activar la opción'
   );
 
-  const selectBlockAt = global.window.__selectBlockAt;
+  const selectBlockAt = windowApi.__selectBlockAt;
   assert(typeof selectBlockAt === 'function', 'Debe existir una API para seleccionar un bloque');
 
   const centerX = canvas.width / 2;
@@ -514,7 +654,7 @@ function runTests() {
 
   assert(selectionInfoPanel.hidden === false, 'La ventana de selección debe mostrarse tras hacer clic');
 
-  const selectedSquare = global.window.__selectedSquare;
+  const selectedSquare = windowApi.__selectedSquare;
   assert(selectedSquare, 'La selección debe exponer información del cuadro activo');
   assert(Number.isInteger(selectedSquare.blockX), 'La selección debe indicar el índice de bloque en X');
   assert(Number.isInteger(selectedSquare.blockZ), 'La selección debe indicar el índice de bloque en Z');
@@ -529,6 +669,34 @@ function runTests() {
 
   const highlightDraw = glState.draws.find((draw) => draw.mode === 0x0001 && draw.count === 8);
   assert(highlightDraw, 'Seleccionar un cuadro debe renderizar un contorno destacado sobre el terreno');
+
+  const {
+    debugConsole: fallbackDebugConsole,
+    runtimeState: fallbackRuntimeState,
+    windowApi: fallbackWindow,
+  } = runGameScript({ disableGlobalThis: true });
+
+  const resolvedFallbackState =
+    fallbackRuntimeState && typeof fallbackRuntimeState === 'object'
+      ? fallbackRuntimeState
+      : fallbackWindow.__ARRECIFE_RUNTIME_STATE__;
+
+  assert(
+    resolvedFallbackState && typeof resolvedFallbackState === 'object',
+    'El runtime debe inicializarse incluso cuando globalThis no está disponible',
+  );
+  assert(
+    resolvedFallbackState.bootstrapAttempts === 1,
+    'La inicialización sin globalThis debe registrarse como un único bootstrap',
+  );
+  assert(
+    Array.isArray(resolvedFallbackState.issues) && resolvedFallbackState.issues.length >= 1,
+    'Las incidencias de runtime deben registrarse aun sin soporte para globalThis',
+  );
+  assert(
+    fallbackDebugConsole.textContent.includes('Draw calls'),
+    'La consola de depuración debe seguir actualizándose aunque globalThis falte',
+  );
 
   console.log('✅ Todas las pruebas pasaron');
   return { canvas, overlay, debugConsole, glState };
