@@ -27,6 +27,81 @@ const dayCyclePhaseIconMap = new Map(
     .filter(([phase, element]) => phase && element),
 );
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
+const musicToggle = document.getElementById('audio-music-toggle');
+
+function createFallbackDebugPanel() {
+  const unsupportedEnvironment =
+    typeof document?.createElement !== 'function' || !document?.body;
+
+  if (unsupportedEnvironment) {
+    const fallbackClassList = { toggle: () => {} };
+    const panel = {
+      id: 'debug-panel',
+      classList: fallbackClassList,
+      appendChild: () => {},
+    };
+    const toggle = {
+      setAttribute: () => {},
+      addEventListener: () => {},
+      append: () => {},
+    };
+    const consoleElement = {
+      hidden: true,
+      textContent: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      setAttribute: () => {},
+    };
+
+    return { panel, toggle, console: consoleElement };
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'debug-panel';
+  panel.className = 'debug-panel';
+  panel.dataset.uiElement = 'debug-panel';
+
+  const toggle = document.createElement('button');
+  toggle.id = 'debug-toggle';
+  toggle.type = 'button';
+  toggle.className = 'debug-toggle';
+  toggle.setAttribute('aria-haspopup', 'true');
+  toggle.setAttribute('aria-controls', 'debug-console');
+  toggle.setAttribute('title', 'Panel de depuración');
+
+  const toggleLabel = document.createElement('span');
+  toggleLabel.className = 'debug-toggle__label';
+  toggleLabel.textContent = 'Panel de depuración';
+
+  toggle.append('🐞', toggleLabel);
+
+  const consoleElement = document.createElement('pre');
+  consoleElement.id = 'debug-console';
+  consoleElement.className = 'debug-console';
+  consoleElement.hidden = true;
+  consoleElement.setAttribute('aria-live', 'polite');
+  consoleElement.setAttribute('aria-hidden', 'true');
+  consoleElement.dataset.uiElement = 'debug-console';
+
+  panel.appendChild(toggle);
+  panel.appendChild(consoleElement);
+  document.body.appendChild(panel);
+
+  return { panel, toggle, console: consoleElement };
+}
+
+if (!debugPanel || !debugToggleButton || !debugConsole) {
+  const fallback = createFallbackDebugPanel();
+  if (!debugPanel) {
+    debugPanel = fallback.panel;
+  }
+  if (!debugToggleButton) {
+    debugToggleButton = fallback.toggle;
+  }
+  if (!debugConsole) {
+    debugConsole = fallback.console;
+  }
+}
 
 function createFallbackDebugPanel() {
   const unsupportedEnvironment =
@@ -446,6 +521,478 @@ function recordRuntimeIssue(severity, context, error) {
   }
   updateDiagnosticsToast();
   return entry;
+}
+
+const MUSIC_PREFERENCE_STORAGE_KEY = 'arrecife:audio:musicEnabled';
+const supportsWebAudio =
+  typeof window !== 'undefined' &&
+  (typeof window.AudioContext === 'function' || typeof window.webkitAudioContext === 'function');
+
+let storageWarningIssued = false;
+let ambientAudioWarningIssued = false;
+
+const ambientMusicState = {
+  preference: supportsWebAudio ? readAmbientMusicPreference() : false,
+  controller: null,
+};
+
+function readAmbientMusicPreference() {
+  if (typeof window === 'undefined') {
+    return true;
+  }
+  try {
+    const stored = window.localStorage?.getItem?.(MUSIC_PREFERENCE_STORAGE_KEY);
+    if (stored === 'true') {
+      return true;
+    }
+    if (stored === 'false') {
+      return false;
+    }
+  } catch (error) {
+    if (!storageWarningIssued) {
+      storageWarningIssued = true;
+      recordRuntimeIssue('warning', 'Preferencias locales', error);
+    }
+  }
+  return true;
+}
+
+function persistAmbientMusicPreference(value) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage?.setItem?.(MUSIC_PREFERENCE_STORAGE_KEY, String(Boolean(value)));
+  } catch (error) {
+    if (!storageWarningIssued) {
+      storageWarningIssued = true;
+      recordRuntimeIssue('warning', 'Preferencias locales', error);
+    }
+  }
+}
+
+function ensureAmbientMusicController() {
+  if (ambientMusicState.controller) {
+    return ambientMusicState.controller;
+  }
+  const controller = createAmbientMusicController();
+  ambientMusicState.controller = controller;
+  return controller;
+}
+
+function createAmbientMusicController() {
+  if (!supportsWebAudio) {
+    return null;
+  }
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (typeof AudioContextCtor !== 'function') {
+    return null;
+  }
+  let context;
+  try {
+    context = new AudioContextCtor();
+  } catch (error) {
+    if (!ambientAudioWarningIssued) {
+      ambientAudioWarningIssued = true;
+      recordRuntimeIssue('warning', 'Audio ambiental', error);
+    }
+    return null;
+  }
+
+  const masterGain = context.createGain();
+  masterGain.gain.value = 0;
+  masterGain.connect(context.destination);
+
+  const activeSources = new Set();
+  const activeTimers = new Set();
+
+  function registerSource(node) {
+    if (node && typeof node.start === 'function' && typeof node.stop === 'function') {
+      activeSources.add(node);
+    }
+    return node;
+  }
+
+  function registerTimer(timerId) {
+    if (typeof timerId === 'number') {
+      activeTimers.add(timerId);
+    }
+    return timerId;
+  }
+
+  function clearTimers() {
+    for (const timerId of activeTimers) {
+      clearTimeout(timerId);
+    }
+    activeTimers.clear();
+  }
+
+  const defaultGain = 0.18;
+  const startTime = context.currentTime + 0.05;
+
+  function schedulePadNotes(oscillator, frequencies, intervalRange = [12, 24], slideDuration = 6) {
+    if (!oscillator || !Array.isArray(frequencies) || frequencies.length === 0) {
+      return;
+    }
+    const usable = frequencies.filter((value) => Number.isFinite(value) && value > 0);
+    if (usable.length === 0) {
+      return;
+    }
+    const minInterval = Math.max(4, Number(intervalRange?.[0] ?? 12));
+    const maxInterval = Math.max(minInterval + 1, Number(intervalRange?.[1] ?? minInterval));
+
+    oscillator.frequency.setValueAtTime(usable[0], startTime);
+
+    function queueNextChange() {
+      const waitSeconds = minInterval + Math.random() * (maxInterval - minInterval);
+      const timerId = registerTimer(
+        setTimeout(() => {
+          activeTimers.delete(timerId);
+          const target = usable[Math.floor(Math.random() * usable.length)];
+          const now = context.currentTime;
+          try {
+            oscillator.frequency.cancelScheduledValues(now);
+            oscillator.frequency.linearRampToValueAtTime(target, now + slideDuration);
+          } catch (automationError) {
+            void automationError;
+            oscillator.frequency.setValueAtTime(target, now + slideDuration);
+          }
+          queueNextChange();
+        }, waitSeconds * 1000),
+      );
+    }
+
+    queueNextChange();
+  }
+
+  function addPadLayer(options) {
+    const {
+      type = 'sine',
+      baseFrequency = 220,
+      gain = 0.22,
+      lfoFrequency = 0.05,
+      lfoDepth = 0.1,
+      detuneRange = 0,
+      filterType = 'lowpass',
+      filterFrequency = 800,
+      filterQ = 0.9,
+      panDepth = 0,
+      panFrequency = 0.02,
+      noteFrequencies = null,
+      noteIntervalRange = [12, 24],
+      slideDuration = 6,
+    } = options || {};
+
+    const oscillator = context.createOscillator();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(baseFrequency, startTime);
+
+    const gainNode = context.createGain();
+    gainNode.gain.setValueAtTime(gain, startTime);
+
+    let lastNode = gainNode;
+
+    if (typeof context.createBiquadFilter === 'function') {
+      const filter = context.createBiquadFilter();
+      filter.type = filterType;
+      filter.frequency.setValueAtTime(filterFrequency, startTime);
+      if (typeof filter.Q?.setValueAtTime === 'function') {
+        filter.Q.setValueAtTime(filterQ, startTime);
+      }
+      oscillator.connect(filter);
+      filter.connect(gainNode);
+    } else {
+      oscillator.connect(gainNode);
+    }
+
+    let panner = null;
+    if (typeof context.createStereoPanner === 'function') {
+      panner = context.createStereoPanner();
+      panner.pan.setValueAtTime(0, startTime);
+      gainNode.connect(panner);
+      lastNode = panner;
+    }
+
+    (lastNode ?? gainNode).connect(masterGain);
+
+    if (lfoDepth > 0) {
+      const amplitudeLfo = context.createOscillator();
+      amplitudeLfo.type = 'sine';
+      amplitudeLfo.frequency.setValueAtTime(lfoFrequency, startTime);
+      const amplitudeGain = context.createGain();
+      amplitudeGain.gain.setValueAtTime(lfoDepth, startTime);
+      amplitudeLfo.connect(amplitudeGain);
+      amplitudeGain.connect(gainNode.gain);
+      registerSource(amplitudeLfo);
+      amplitudeLfo.start(startTime);
+    }
+
+    if (detuneRange > 0) {
+      const detuneLfo = context.createOscillator();
+      detuneLfo.type = 'sine';
+      detuneLfo.frequency.setValueAtTime(0.015 + Math.random() * 0.02, startTime);
+      const detuneGain = context.createGain();
+      detuneGain.gain.setValueAtTime(detuneRange, startTime);
+      detuneLfo.connect(detuneGain);
+      detuneGain.connect(oscillator.detune);
+      registerSource(detuneLfo);
+      detuneLfo.start(startTime);
+    }
+
+    if (panner && panDepth > 0) {
+      const panLfo = context.createOscillator();
+      panLfo.type = 'sine';
+      panLfo.frequency.setValueAtTime(panFrequency, startTime);
+      const panGain = context.createGain();
+      panGain.gain.setValueAtTime(panDepth, startTime);
+      panLfo.connect(panGain);
+      panGain.connect(panner.pan);
+      registerSource(panLfo);
+      panLfo.start(startTime);
+    }
+
+    if (Array.isArray(noteFrequencies) && noteFrequencies.length > 0) {
+      schedulePadNotes(oscillator, noteFrequencies, noteIntervalRange, slideDuration);
+    }
+
+    registerSource(oscillator);
+    oscillator.start(startTime);
+  }
+
+  addPadLayer({
+    type: 'sine',
+    baseFrequency: 110,
+    gain: 0.32,
+    lfoFrequency: 0.03,
+    lfoDepth: 0.18,
+    detuneRange: 6,
+    filterType: 'lowpass',
+    filterFrequency: 360,
+    filterQ: 0.8,
+    panDepth: 0.18,
+    panFrequency: 0.01,
+    noteFrequencies: [98, 110, 130.81, 146.83, 164.81],
+    noteIntervalRange: [18, 28],
+    slideDuration: 10,
+  });
+
+  addPadLayer({
+    type: 'triangle',
+    baseFrequency: 220,
+    gain: 0.22,
+    lfoFrequency: 0.055,
+    lfoDepth: 0.12,
+    detuneRange: 12,
+    filterType: 'bandpass',
+    filterFrequency: 640,
+    filterQ: 1.1,
+    panDepth: 0.28,
+    panFrequency: 0.017,
+    noteFrequencies: [196, 220, 246.94, 261.63, 293.66],
+    noteIntervalRange: [12, 22],
+    slideDuration: 7,
+  });
+
+  addPadLayer({
+    type: 'sawtooth',
+    baseFrequency: 440,
+    gain: 0.1,
+    lfoFrequency: 0.11,
+    lfoDepth: 0.08,
+    detuneRange: 16,
+    filterType: 'lowpass',
+    filterFrequency: 1150,
+    filterQ: 1.2,
+    panDepth: 0.4,
+    panFrequency: 0.026,
+    noteFrequencies: [392, 440, 493.88, 523.25, 587.33],
+    noteIntervalRange: [10, 16],
+    slideDuration: 6,
+  });
+
+  if (typeof context.createBuffer === 'function') {
+    const noiseBuffer = context.createBuffer(1, Math.max(1, Math.round(context.sampleRate * 4)), context.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let index = 0; index < data.length; index += 1) {
+      data[index] = (Math.random() * 2 - 1) * 0.35;
+    }
+    const noiseSource = context.createBufferSource();
+    noiseSource.buffer = noiseBuffer;
+    noiseSource.loop = true;
+
+    const noiseGain = context.createGain();
+    noiseGain.gain.setValueAtTime(0.08, startTime);
+
+    if (typeof context.createBiquadFilter === 'function') {
+      const noiseFilter = context.createBiquadFilter();
+      noiseFilter.type = 'lowpass';
+      noiseFilter.frequency.setValueAtTime(420, startTime);
+      if (typeof noiseFilter.Q?.setValueAtTime === 'function') {
+        noiseFilter.Q.setValueAtTime(0.7, startTime);
+      }
+      noiseSource.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+    } else {
+      noiseSource.connect(noiseGain);
+    }
+
+    let noiseDestination = noiseGain;
+    if (typeof context.createStereoPanner === 'function') {
+      const noisePanner = context.createStereoPanner();
+      noisePanner.pan.setValueAtTime(0, startTime);
+      noiseGain.connect(noisePanner);
+      noiseDestination = noisePanner;
+
+      const noisePanLfo = context.createOscillator();
+      noisePanLfo.type = 'sine';
+      noisePanLfo.frequency.setValueAtTime(0.012, startTime);
+      const noisePanGain = context.createGain();
+      noisePanGain.gain.setValueAtTime(0.32, startTime);
+      noisePanLfo.connect(noisePanGain);
+      noisePanGain.connect(noisePanner.pan);
+      registerSource(noisePanLfo);
+      noisePanLfo.start(startTime);
+    }
+
+    noiseDestination.connect(masterGain);
+
+    const noiseLfo = context.createOscillator();
+    noiseLfo.type = 'sine';
+    noiseLfo.frequency.setValueAtTime(0.045, startTime);
+    const noiseLfoGain = context.createGain();
+    noiseLfoGain.gain.setValueAtTime(0.06, startTime);
+    noiseLfo.connect(noiseLfoGain);
+    noiseLfoGain.connect(noiseGain.gain);
+    registerSource(noiseLfo);
+    noiseLfo.start(startTime);
+
+    registerSource(noiseSource);
+    noiseSource.start(startTime);
+  }
+
+  return {
+    context,
+    masterGain,
+    defaultGain,
+    stop() {
+      clearTimers();
+      for (const source of activeSources) {
+        try {
+          source.stop();
+        } catch (stopError) {
+          void stopError;
+        }
+      }
+      activeSources.clear();
+    },
+  };
+}
+
+function fadeAmbientMusic(controller, targetGain, options = {}) {
+  if (!controller || !controller.masterGain) {
+    return;
+  }
+  const { immediate = false } = options;
+  const gainParam = controller.masterGain.gain;
+  if (!gainParam) {
+    return;
+  }
+  const context = controller.context;
+  const now = context?.currentTime ?? 0;
+  try {
+    gainParam.cancelScheduledValues(now);
+    const currentValue = typeof gainParam.value === 'number' ? gainParam.value : gainParam.defaultValue;
+    gainParam.setValueAtTime(currentValue, now);
+    const rampDuration = immediate
+      ? Math.max(0.05, Number(options.duration ?? 0.12))
+      : Math.max(0.6, Number(options.duration ?? 3.2));
+    gainParam.linearRampToValueAtTime(targetGain, now + rampDuration);
+  } catch (automationError) {
+    void automationError;
+    gainParam.value = targetGain;
+  }
+}
+
+function resumeAmbientAudioContext(context) {
+  if (!context || typeof context.resume !== 'function') {
+    return;
+  }
+  if (context.state === 'suspended') {
+    context.resume().catch((error) => {
+      if (!ambientAudioWarningIssued) {
+        ambientAudioWarningIssued = true;
+        recordRuntimeIssue('warning', 'Audio ambiental', error);
+      }
+    });
+  }
+}
+
+function handleAmbientMusicUserGesture(options = {}) {
+  if (!ambientMusicState.preference) {
+    return;
+  }
+  const controller = ensureAmbientMusicController();
+  if (!controller) {
+    return;
+  }
+  resumeAmbientAudioContext(controller.context);
+  fadeAmbientMusic(controller, controller.defaultGain, options);
+}
+
+function setAmbientMusicPreference(enabled, options = {}) {
+  const value = Boolean(enabled);
+  ambientMusicState.preference = value;
+  persistAmbientMusicPreference(value);
+  const { immediate = false, duration } = options;
+  if (!value) {
+    if (ambientMusicState.controller) {
+      fadeAmbientMusic(ambientMusicState.controller, 0, {
+        immediate,
+        duration: duration ?? 1.4,
+      });
+    }
+    return;
+  }
+  handleAmbientMusicUserGesture({
+    immediate,
+    duration: duration ?? 2.6,
+  });
+}
+
+if (musicToggle) {
+  if (!supportsWebAudio) {
+    musicToggle.checked = false;
+    musicToggle.disabled = true;
+    if (typeof musicToggle.setAttribute === 'function') {
+      musicToggle.setAttribute('aria-disabled', 'true');
+    }
+    musicToggle.title = 'El navegador no es compatible con Web Audio.';
+  } else {
+    musicToggle.checked = ambientMusicState.preference;
+    musicToggle.addEventListener('change', (event) => {
+      setAmbientMusicPreference(event.target.checked);
+    });
+  }
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    const controller = ambientMusicState.controller;
+    if (!controller) {
+      return;
+    }
+    if (document.hidden) {
+      const quietTarget = ambientMusicState.preference
+        ? controller.defaultGain * 0.25
+        : 0;
+      fadeAmbientMusic(controller, quietTarget);
+      return;
+    }
+    if (ambientMusicState.preference) {
+      resumeAmbientAudioContext(controller.context);
+      fadeAmbientMusic(controller, controller.defaultGain);
+    }
+  });
 }
 
 function inspectUiElement(element) {
@@ -3672,7 +4219,11 @@ function requestCameraControl(event) {
     }
     return;
   }
+  const trustedInteraction = !event || Boolean(event.isTrusted);
   if (event?.detail >= 2) {
+    if (trustedInteraction) {
+      handleAmbientMusicUserGesture();
+    }
     return;
   }
   if (event) {
@@ -3681,6 +4232,9 @@ function requestCameraControl(event) {
   dismissTutorialOverlay();
   if (document.pointerLockElement !== canvas) {
     canvas.requestPointerLock();
+  }
+  if (trustedInteraction) {
+    handleAmbientMusicUserGesture();
   }
 }
 
@@ -4176,8 +4730,8 @@ function render() {
     );
   }
 
-  if (waterTimeUniform) {
-    gl.uniform1f(waterTimeUniform, waterAnimationTime);
+  if (patternTimeUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(patternTimeUniform, waterAnimationTime ?? 0);
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -4394,11 +4948,7 @@ function updateDebugConsole(deltaTime) {
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
-    `Plantas generadas: ${terrainInfo.plantCount}`,
-    `Plantas activas: ${plantMetrics.count} (maduras ${plantMetrics.matureCount} brotes ${plantMetrics.sproutCount})`,
-    `Biomasa vegetal media: altura=${avgHeightMetric}m masa=${avgMassMetric}kg`,
-    `Energía vegetal: media=${avgEnergyMetric} capacidad=${avgCapacityMetric} (${reservePercent}% reserva) absorción=${absorbedMetric} consumo=${consumedMetric} crecimientos=${growthEventsMetric}`,
-    `Terreno características: cañones=${formatFeaturePercent(featureStats.canyon)}% barrancos=${formatFeaturePercent(featureStats.ravine)}% acantilados=${formatFeaturePercent(featureStats.cliffs)}%`,
+    `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
