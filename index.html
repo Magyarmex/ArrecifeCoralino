@@ -239,6 +239,82 @@
         </div>
       </dl>
     </aside>
+    <aside
+      id="water-info"
+      class="water-info"
+      hidden
+      data-ui-element="water-panel"
+    >
+      <div class="water-info__content">
+        <header class="water-info__header">
+          <h2>Información del agua</h2>
+          <button
+            type="button"
+            id="water-info-close"
+            class="water-info__close"
+            aria-label="Cerrar información de agua"
+          >
+            ×
+          </button>
+        </header>
+        <p class="water-info__description">
+          Detalles de la columna de agua sobre el bloque seleccionado.
+        </p>
+        <dl class="water-info__stats">
+          <div>
+            <dt>Volumen estimado</dt>
+            <dd id="water-info-volume">—</dd>
+          </div>
+        </dl>
+        <p class="water-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
+    <aside
+      id="plant-info"
+      class="plant-info"
+      hidden
+      data-ui-element="plant-panel"
+    >
+      <div class="plant-info__content">
+        <header class="plant-info__header">
+          <h2>Organismo seleccionado</h2>
+          <button
+            type="button"
+            id="plant-info-close"
+            class="plant-info__close"
+            aria-label="Cerrar información del organismo"
+          >
+            ×
+          </button>
+        </header>
+        <p class="plant-info__description">
+          Datos generales del organismo resaltado en el arrecife.
+        </p>
+        <dl class="plant-info__stats">
+          <div>
+            <dt>Especie</dt>
+            <dd id="plant-info-species">—</dd>
+          </div>
+          <div>
+            <dt>Edad simulada</dt>
+            <dd id="plant-info-age-lore">—</dd>
+          </div>
+          <div>
+            <dt>Tiempo real</dt>
+            <dd id="plant-info-age-real">—</dd>
+          </div>
+          <div>
+            <dt>Masa estimada</dt>
+            <dd id="plant-info-mass">—</dd>
+          </div>
+          <div>
+            <dt>Nutrientes</dt>
+            <dd id="plant-info-nutrients">—</dd>
+          </div>
+        </dl>
+        <p class="plant-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
     <script type="module" src="scripts/models-library.mjs"></script>
     <script src="scripts/main.js" type="module"></script>
   </body>
