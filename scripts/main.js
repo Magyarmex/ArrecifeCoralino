@@ -63,6 +63,9 @@ function createFallbackDebugPanel() {
       scrollHeight: 0,
       setAttribute: () => {},
     };
+    return { panel, toggle, console: consoleElement };
+  }
+}
 
 const runtimeState =
   (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ =
@@ -86,6 +89,9 @@ const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   : (runtimeState.pendingIssues = []);
 
 const MAX_UI_FALLBACK_EVENTS = 12;
+const modelLibrary = Array.isArray(runtimeGlobal.modelLibrary)
+  ? runtimeGlobal.modelLibrary
+  : [];
 const reportedFallbacks =
   runtimeState.reportedFallbacks && typeof runtimeState.reportedFallbacks === 'object'
     ? runtimeState.reportedFallbacks
@@ -1058,6 +1064,7 @@ const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
 const uniformLocations = {
   renderMode: gl.getUniformLocation(program, 'renderMode'),
 };
+const patternTimeUniform = gl.getUniformLocation(program, 'patternTime');
 const waterTimeUniform = gl.getUniformLocation(program, 'waterTime');
 const waterSurfaceLevelUniform = gl.getUniformLocation(program, 'waterSurfaceLevel');
 const waterPrimaryWaveFrequencyUniform = gl.getUniformLocation(
@@ -4631,6 +4638,9 @@ function updateDebugConsole(deltaTime) {
     `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
+    `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
+      featureStats.ravine,
+    )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
     `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
