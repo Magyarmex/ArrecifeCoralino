@@ -664,11 +664,26 @@ const lightDirection = (() => {
   const length = Math.hypot(0.37, 0.84, 0.4) || 1;
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
-const waterSurfaceLevel = 20;
+const waterSurfaceLevel = 19;
+const waterAlpha = 0.62;
+const waterDeepColor = [0.06, 0.32, 0.66];
+const waterShallowColor = [0.28, 0.74, 0.86];
+const waterFoamColor = [0.95, 0.97, 1.0];
+const waterFoamDepthStart = 0.35;
+const waterFoamDepthEnd = 4.5;
+const waterColorQuantizeStep = 0.04;
+const waterPrimaryWaveFrequency = 0.58;
+const waterSecondaryWaveFrequency = 0.32;
+const waterPrimaryWaveSpeed = 0.85;
+const waterSecondaryWaveSpeed = 0.55;
+const waterPrimaryAmplitude = 0.22;
+const waterSecondaryAmplitude = 0.12;
 const selectionHighlightColor = [0.32, 0.78, 0.94];
 
 const baseplateBuffer = createBuffer(new Float32Array(0));
 let baseplateVertexCount = 0;
+
+const waterBuffer = createBuffer(new Float32Array(0));
 
 const blockGridBuffer = createBuffer(new Float32Array(0));
 const chunkGridBuffer = createBuffer(new Float32Array(0));
@@ -681,6 +696,11 @@ let chunkGridVertexCount = 0;
 let rockVertexCount = 0;
 let plantVertexCount = 0;
 let selectionHighlightVertexCount = 0;
+let waterVertexCount = 0;
+let waterVertexData = null;
+let waterFoamData = null;
+let waterPatternData = null;
+let waterNeedsUpload = false;
 
 let terrainHeightField = null;
 let terrainMaskField = null;
@@ -706,6 +726,8 @@ const terrainInfo = {
 let seeThroughTerrain = false;
 let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
+
+let waterAnimationTime = 0;
 
 const drawStats = {
   terrain: 0,
@@ -956,6 +978,10 @@ function clamp(value, minValue, maxValue) {
   return value;
 }
 
+function fract(value) {
+  return value - Math.floor(value);
+}
+
 function mixColor(a, b, t) {
   return [
     lerp(a[0], b[0], t),
@@ -1151,6 +1177,164 @@ function updateGridBuffers(heightField) {
   chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
 }
 
+function clearWaterSurface() {
+  waterVertexCount = 0;
+  waterVertexData = null;
+  waterFoamData = null;
+  waterPatternData = null;
+  waterNeedsUpload = false;
+  gl.bindBuffer(gl.ARRAY_BUFFER, waterBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(0), gl.DYNAMIC_DRAW);
+}
+
+function computeWaterFoamFactor(depth) {
+  if (!Number.isFinite(depth)) {
+    return 0;
+  }
+  if (depth <= waterFoamDepthStart) {
+    return 1;
+  }
+  if (depth >= waterFoamDepthEnd) {
+    return 0;
+  }
+  const normalized = 1 - (depth - waterFoamDepthStart) / (waterFoamDepthEnd - waterFoamDepthStart);
+  return clamp01(normalized);
+}
+
+function sampleWaterPattern(x, z) {
+  const hash = Math.sin((x + 37.2) * 12.9898 + (z - 91.7) * 78.233) * 43758.5453;
+  return fract(hash);
+}
+
+function pushWaterVertexData(vertexIndex, x, z, foam) {
+  if (!waterVertexData || !waterFoamData || !waterPatternData) {
+    return vertexIndex;
+  }
+  const baseIndex = vertexIndex * floatsPerVertex;
+  waterVertexData[baseIndex + 0] = x;
+  waterVertexData[baseIndex + 1] = waterSurfaceLevel;
+  waterVertexData[baseIndex + 2] = z;
+  waterVertexData[baseIndex + 3] = 0;
+  waterVertexData[baseIndex + 4] = 0;
+  waterVertexData[baseIndex + 5] = 0;
+  waterFoamData[vertexIndex] = foam;
+  waterPatternData[vertexIndex] = sampleWaterPattern(x, z);
+  return vertexIndex + 1;
+}
+
+function rebuildWaterSurface(heightField) {
+  if (!heightField || heightField.length <= 1) {
+    clearWaterSurface();
+    return;
+  }
+
+  const blocksPerSide = heightField.length - 1;
+  if (blocksPerSide <= 0) {
+    clearWaterSurface();
+    return;
+  }
+
+  const totalVertices = blocksPerSide * blocksPerSide * 6;
+  waterVertexData = new Float32Array(totalVertices * floatsPerVertex);
+  waterFoamData = new Float32Array(totalVertices);
+  waterPatternData = new Float32Array(totalVertices);
+
+  const half = baseplateSize / 2;
+  let vertexIndex = 0;
+
+  for (let z = 0; z < blocksPerSide; z++) {
+    const z0 = -half + z * blockSize;
+    const z1 = z0 + blockSize;
+    const row0 = heightField[z] ?? [];
+    const row1 = heightField[z + 1] ?? row0;
+    for (let x = 0; x < blocksPerSide; x++) {
+      const x0 = -half + x * blockSize;
+      const x1 = x0 + blockSize;
+      const h00 = row0[x] ?? 0;
+      const h10 = row0[x + 1] ?? h00;
+      const h01 = row1[x] ?? h00;
+      const h11 = row1[x + 1] ?? h10;
+
+      const foam00 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h00));
+      const foam10 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h10));
+      const foam01 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h01));
+      const foam11 = computeWaterFoamFactor(Math.max(0, waterSurfaceLevel - h11));
+
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z0, foam00);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z0, foam10);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z1, foam11);
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z0, foam00);
+      vertexIndex = pushWaterVertexData(vertexIndex, x1, z1, foam11);
+      vertexIndex = pushWaterVertexData(vertexIndex, x0, z1, foam01);
+    }
+  }
+
+  waterVertexCount = vertexIndex;
+  waterNeedsUpload = true;
+  updateWaterSurfaceGeometry(waterAnimationTime);
+  uploadWaterSurfaceBuffer();
+}
+
+function updateWaterSurfaceGeometry(timeSeconds) {
+  if (!waterVertexData || !waterFoamData || !waterPatternData || waterVertexCount === 0) {
+    return;
+  }
+
+  const timePrimary = timeSeconds * waterPrimaryWaveSpeed;
+  const timeSecondary = timeSeconds * waterSecondaryWaveSpeed;
+
+  for (let i = 0; i < waterVertexCount; i++) {
+    const baseIndex = i * floatsPerVertex;
+    const x = waterVertexData[baseIndex];
+    const z = waterVertexData[baseIndex + 2];
+    const foam = clamp01(waterFoamData[i] ?? 0);
+    const pattern = waterPatternData[i] ?? 0;
+
+    const amplitudeFactor = 0.45 + (1 - foam) * 0.55;
+    const primaryPhase = x * waterPrimaryWaveFrequency + z * 0.4 + timePrimary + pattern * Math.PI * 2;
+    const secondaryPhase = (x - z) * waterSecondaryWaveFrequency + timeSecondary * 1.1 + pattern * Math.PI;
+    const waveOffset =
+      Math.sin(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor +
+      Math.cos(secondaryPhase) * waterSecondaryAmplitude * (0.35 + (1 - foam) * 0.65);
+    waterVertexData[baseIndex + 1] = waterSurfaceLevel + waveOffset;
+
+    const shallowMix = Math.pow(foam, 0.7);
+    let color = mixColor(waterDeepColor, waterShallowColor, shallowMix);
+
+    const sparkle = Math.sin(timeSeconds * 1.3 + (x + z) * 0.18 + pattern * 6.283) * 0.04;
+    color = [
+      clamp01(color[0] + sparkle * 0.8),
+      clamp01(color[1] + sparkle * 0.6),
+      clamp01(color[2] + sparkle),
+    ];
+
+    const foamHighlight = Math.pow(Math.max(0, foam - 0.45), 1.5);
+    if (foamHighlight > 0) {
+      const foamBlend = clamp01(foamHighlight + pattern * 0.15);
+      color = mixColor(color, waterFoamColor, foamBlend);
+    }
+
+    color = color.map((component) =>
+      clamp01(Math.round(component / waterColorQuantizeStep) * waterColorQuantizeStep)
+    );
+
+    waterVertexData[baseIndex + 3] = color[0];
+    waterVertexData[baseIndex + 4] = color[1];
+    waterVertexData[baseIndex + 5] = color[2];
+  }
+
+  waterNeedsUpload = true;
+}
+
+function uploadWaterSurfaceBuffer() {
+  if (!waterNeedsUpload || !waterVertexData) {
+    return;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, waterBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, waterVertexData, gl.DYNAMIC_DRAW);
+  waterNeedsUpload = false;
+}
+
 function sampleTerrain(worldX, worldZ) {
   if (!terrainHeightField) {
     return null;
@@ -1325,13 +1509,25 @@ function computeWaterTileVolume(selection) {
     : [selection.height, selection.height, selection.height, selection.height];
 
   let depthSum = 0;
+  let wetSamples = 0;
   for (const height of heights) {
-    depthSum += Math.max(0, waterSurfaceLevel - height);
+    const depth = Math.max(0, waterSurfaceLevel - height);
+    if (depth > 0) {
+      wetSamples += 1;
+    }
+    depthSum += depth;
+  }
+
+  if (depthSum <= 0) {
+    return 0;
   }
 
   const averageDepth = depthSum / heights.length;
+  const coverage = wetSamples > 0 ? wetSamples / heights.length : 0;
+  const waveCompensation =
+    (waterPrimaryAmplitude * 0.5 + waterSecondaryAmplitude * 0.35) * coverage;
   const area = blockSize * blockSize;
-  return averageDepth * area;
+  return Math.max(0, averageDepth + waveCompensation) * area;
 }
 
 function updateWaterInfoPanel(selection) {
@@ -2801,6 +2997,7 @@ function regenerateTerrain(seedString) {
   terrainHeightField = heightfield;
   terrainMaskField = maskfield;
   updateGridBuffers(heightfield);
+  rebuildWaterSurface(heightfield);
   refreshSelectionAfterTerrain();
   terrainInfo.seed = seedString;
   terrainInfo.minHeight = Math.max(0, minHeight);
@@ -3529,6 +3726,11 @@ function update(deltaTime) {
     cameraPosition[1] -= moveSpeed * deltaTime;
   }
 
+  if (Number.isFinite(deltaTime)) {
+    waterAnimationTime += deltaTime;
+  }
+  updateWaterSurfaceGeometry(waterAnimationTime);
+
   const target = add(cameraPosition, forwardDirection);
   const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 500);
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
@@ -3573,6 +3775,8 @@ function render() {
   if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
+
+  uploadWaterSurfaceBuffer();
 
   if (typeof gl.enable === 'function' && typeof gl.disable === 'function') {
     if (terrainRenderState.translucent) {
