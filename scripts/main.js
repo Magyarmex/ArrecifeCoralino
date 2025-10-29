@@ -940,7 +940,7 @@ let waterAnimationTime = 0;
 const drawStats = {
   terrain: 0,
   rocks: 0,
-  water: 0,
+  plants: 0,
   blockGrid: 0,
   chunkGrid: 0,
   selection: 0,
@@ -1013,6 +1013,76 @@ const plantSpeciesDefinitions = [
   },
 ];
 
+function createEmptyPlantMetrics() {
+  return {
+    count: 0,
+    averageHeight: 0,
+    averageMass: 0,
+    averageEnergy: 0,
+    averageCapacity: 0,
+    matureCount: 0,
+    sproutCount: 0,
+    energyReserveRatio: 0,
+    energyAbsorbed: 0,
+    energyConsumed: 0,
+    growthEvents: 0,
+  };
+}
+
+function computePlantMetrics(instances) {
+  const metrics = createEmptyPlantMetrics();
+  if (!instances || instances.length === 0) {
+    return metrics;
+  }
+
+  let totalHeight = 0;
+  let totalMass = 0;
+  let totalEnergy = 0;
+  let totalCapacity = 0;
+  let matureCount = 0;
+  let sproutCount = 0;
+
+  for (const plant of instances) {
+    if (!plant) {
+      continue;
+    }
+    const species = plant.species ?? plantSimulation.speciesById.get(plant.speciesId);
+    if (!species) {
+      continue;
+    }
+    const height = Math.max(0, plant.currentHeight ?? 0);
+    totalHeight += height;
+    totalMass += computePlantMass(plant);
+    const energy = Math.max(0, plant.energy ?? 0);
+    totalEnergy += energy;
+    const capacity = Math.max(0, species.energyCapacity ?? 0);
+    totalCapacity += capacity;
+
+    const matureThreshold = Math.max(0, species.maxHeight * 0.8);
+    if (height >= matureThreshold) {
+      matureCount += 1;
+    } else {
+      const baseHeight = species.initialHeight ?? species.baseHeight ?? species.maxHeight * 0.25;
+      const sproutThreshold = Math.max(0, baseHeight * 1.1);
+      if (height <= sproutThreshold) {
+        sproutCount += 1;
+      }
+    }
+  }
+
+  const count = instances.length;
+  metrics.count = count;
+  metrics.averageHeight = count > 0 ? totalHeight / count : 0;
+  metrics.averageMass = count > 0 ? totalMass / count : 0;
+  metrics.averageEnergy = count > 0 ? totalEnergy / count : 0;
+  metrics.averageCapacity = count > 0 ? totalCapacity / count : 0;
+  metrics.matureCount = matureCount;
+  metrics.sproutCount = sproutCount;
+  metrics.energyReserveRatio = totalCapacity > 0 ? totalEnergy / totalCapacity : 0;
+
+  return metrics;
+}
+
 const plantPlanesPerInstance = 2;
 const plantVerticesPerPlane = 12;
 const plantVerticesPerInstance = plantPlanesPerInstance * plantVerticesPerPlane;
@@ -1025,6 +1095,7 @@ const plantSimulation = {
   speciesById: new Map(),
   instances: [],
   geometryDirty: true,
+  metrics: createEmptyPlantMetrics(),
 };
 
 for (const species of plantSimulation.species) {
@@ -2871,6 +2942,7 @@ function regeneratePlants(seedString, heightfield, maskfield) {
   closePlantInfo();
   plantSimulation.instances = [];
   terrainInfo.plantCount = 0;
+  plantSimulation.metrics = createEmptyPlantMetrics();
 
   if (!heightfield || !maskfield) {
     resetPlantGeometry();
@@ -2880,6 +2952,69 @@ function regeneratePlants(seedString, heightfield, maskfield) {
   const baseSeed = stringToSeed(`${seedString}-flora`);
   const random = createRandomGenerator(baseSeed);
   const half = baseplateSize / 2;
+
+  const attemptSpawn = (species, x, z, overrides = {}) => {
+    if (x < -half || x > half || z < -half || z > half) {
+      return false;
+    }
+
+    const mask = sampleTerrainMask(x, z);
+    const minMask = overrides.minMask ?? species.minMask ?? 0;
+    if (mask < minMask) {
+      return false;
+    }
+
+    const groundHeight = sampleTerrainHeight(x, z);
+    if (!Number.isFinite(groundHeight)) {
+      return false;
+    }
+
+    const maxElevation = overrides.maxElevation ?? waterSurfaceLevel - 0.2;
+    if (groundHeight >= maxElevation) {
+      return false;
+    }
+
+    const slopeNormal = sampleTerrainNormal(x, z);
+    const minSlope = overrides.minSlope ?? 0.35;
+    if (slopeNormal[1] < minSlope) {
+      return false;
+    }
+
+    const baseInitial =
+      species.initialHeight ?? species.baseHeight ?? Math.min(1.2, species.maxHeight * 0.35);
+    const jitterScale = overrides.heightJitterScale ?? 0.22;
+    const heightJitter = randomInRange(random, -baseInitial * 0.18, baseInitial * jitterScale);
+    const initialHeight = clamp(baseInitial + heightJitter, 0.18, species.maxHeight * 0.9);
+
+    const radiusJitter = Math.max(0.005, overrides.radiusJitter ?? 0.02);
+    const baseRadius = Math.max(
+      0.05,
+      (species.baseRadius ?? 0.12) + randomInRange(random, -radiusJitter, radiusJitter),
+    );
+
+    const energyCapacity = Math.max(0, species.energyCapacity ?? 1);
+    const initialEnergy = Math.max(
+      0,
+      randomInRange(random, 0, energyCapacity * (overrides.initialEnergyRatio ?? 0.35)),
+    );
+
+    const plant = {
+      id: `${species.id}-${plantSimulation.instances.length}`,
+      speciesId: species.id,
+      species,
+      position: [x, groundHeight, z],
+      currentHeight: initialHeight,
+      currentRadius: baseRadius,
+      tipRadius: Math.max(0.04, baseRadius * 0.6),
+      energy: initialEnergy,
+      spawnSimulationTime: simulationTime,
+      baseColor: species.baseColor,
+      tipColor: species.tipColor,
+    };
+
+    plantSimulation.instances.push(plant);
+    return true;
+  };
 
   for (const species of plantSimulation.species) {
     const clusterCount = Math.max(1, Math.floor(species.clusterCount ?? 1));
@@ -2908,6 +3043,7 @@ function regeneratePlants(seedString, heightfield, maskfield) {
     const minMembers = Math.max(1, Math.floor(species.clusterSize?.[0] ?? 4));
     const maxMembers = Math.max(minMembers, Math.floor(species.clusterSize?.[1] ?? minMembers + 2));
     const clusterRadius = Math.max(1, species.clusterRadius ?? 3.5);
+    let speciesPlaced = 0;
 
     for (const [centerX, centerZ] of centers) {
       const targetMembers = Math.round(randomInRange(random, minMembers, maxMembers));
@@ -2921,67 +3057,93 @@ function regeneratePlants(seedString, heightfield, maskfield) {
         const x = centerX + Math.cos(angle) * distance;
         const z = centerZ + Math.sin(angle) * distance;
 
-        if (x < -half || x > half || z < -half || z > half) {
-          continue;
+        if (attemptSpawn(species, x, z)) {
+          placed += 1;
+          speciesPlaced += 1;
         }
+      }
+    }
 
-        const mask = sampleTerrainMask(x, z);
-        if (mask < (species.minMask ?? 0)) {
-          continue;
+    if (speciesPlaced === 0) {
+      const fallbackTarget = Math.max(minMembers, 4);
+      const fallbackConstraints = [
+        {
+          minMask: Math.max(0, (species.minMask ?? 0) * 0.6),
+          minSlope: 0.28,
+          heightJitterScale: 0.18,
+          initialEnergyRatio: 0.4,
+          maxElevation: waterSurfaceLevel - 0.05,
+        },
+        {
+          minMask: 0.02,
+          minSlope: 0.12,
+          heightJitterScale: 0.24,
+          initialEnergyRatio: 0.5,
+          maxElevation: waterSurfaceLevel - 0.02,
+        },
+      ];
+
+      for (const constraints of fallbackConstraints) {
+        let fallbackAttempts = 0;
+        const fallbackLimit = fallbackTarget * 30;
+        while (speciesPlaced < fallbackTarget && fallbackAttempts < fallbackLimit) {
+          fallbackAttempts += 1;
+          const x = randomInRange(random, -half, half);
+          const z = randomInRange(random, -half, half);
+          if (attemptSpawn(species, x, z, constraints)) {
+            speciesPlaced += 1;
+          }
         }
-
-        const groundHeight = sampleTerrainHeight(x, z);
-        if (!Number.isFinite(groundHeight)) {
-          continue;
+        if (speciesPlaced >= fallbackTarget) {
+          break;
         }
+      }
 
-        if (groundHeight >= waterSurfaceLevel - 0.2) {
-          continue;
+      if (speciesPlaced === 0) {
+        let emergencyAttempts = 0;
+        const emergencyLimit = 240;
+        while (speciesPlaced === 0 && emergencyAttempts < emergencyLimit) {
+          emergencyAttempts += 1;
+          const x = randomInRange(random, -half, half);
+          const z = randomInRange(random, -half, half);
+          if (
+            attemptSpawn(species, x, z, {
+              minMask: 0,
+              minSlope: 0.05,
+              heightJitterScale: 0.25,
+              initialEnergyRatio: 0.65,
+              maxElevation: waterSurfaceLevel - 0.005,
+            })
+          ) {
+            speciesPlaced += 1;
+          }
         }
-
-        const slopeNormal = sampleTerrainNormal(x, z);
-        if (slopeNormal[1] < 0.35) {
-          continue;
-        }
-
-        const baseInitial = species.initialHeight ?? species.baseHeight ?? Math.min(1.2, species.maxHeight * 0.35);
-        const jitter = randomInRange(random, -baseInitial * 0.18, baseInitial * 0.22);
-        const initialHeight = clamp(baseInitial + jitter, 0.2, species.maxHeight * 0.85);
-        const baseRadius = Math.max(0.05, (species.baseRadius ?? 0.12) + randomInRange(random, -0.02, 0.02));
-
-        const plant = {
-          id: `${species.id}-${plantSimulation.instances.length}`,
-          speciesId: species.id,
-          species,
-          position: [x, groundHeight, z],
-          currentHeight: initialHeight,
-          currentRadius: baseRadius,
-          tipRadius: Math.max(0.04, baseRadius * 0.6),
-          energy: Math.max(0, randomInRange(random, 0, (species.energyCapacity ?? 1) * 0.35)),
-          spawnSimulationTime: simulationTime,
-          baseColor: species.baseColor,
-          tipColor: species.tipColor,
-        };
-
-        plantSimulation.instances.push(plant);
-        placed += 1;
       }
     }
   }
 
   terrainInfo.plantCount = plantSimulation.instances.length;
   plantSimulation.geometryDirty = true;
-  rebuildPlantGeometry();
+  plantSimulation.metrics = computePlantMetrics(plantSimulation.instances);
+  if (plantSimulation.instances.length === 0) {
+    resetPlantGeometry();
+  } else {
+    rebuildPlantGeometry();
+  }
 }
 
 function tickPlants(deltaTime) {
   if (!plantSimulation.instances || plantSimulation.instances.length === 0) {
+    plantSimulation.metrics = createEmptyPlantMetrics();
     return;
   }
 
   const daylight = clamp01(dayNightCycleState.daylight ?? 0);
   const simulationDelta = baseSimulationStep;
   let geometryNeedsUpdate = false;
+  let totalEnergyAbsorbed = 0;
+  let totalEnergyConsumed = 0;
+  let growthEvents = 0;
 
   for (const plant of plantSimulation.instances) {
     const species = plant.species ?? plantSimulation.speciesById.get(plant.speciesId);
@@ -2990,37 +3152,44 @@ function tickPlants(deltaTime) {
     }
 
     const absorptionRate = Math.max(0, species.photosynthesisRate ?? 0);
-    plant.energy = Math.min(
-      species.energyCapacity ?? 1,
-      Math.max(0, plant.energy ?? 0) + absorptionRate * daylight * simulationDelta,
-    );
+    const capacity = Math.max(0, species.energyCapacity ?? 1);
+    const previousEnergy = Math.max(0, plant.energy ?? 0);
+    const absorbedPotential = Math.max(0, absorptionRate * daylight * simulationDelta);
+    const nextEnergy = Math.min(capacity, previousEnergy + absorbedPotential);
+    plant.energy = nextEnergy;
+    totalEnergyAbsorbed += Math.max(0, nextEnergy - previousEnergy);
 
     const nightThreshold = species.nightThreshold ?? 0.35;
     if (daylight <= nightThreshold && plant.energy > 0 && plant.currentHeight < species.maxHeight) {
       const consumptionRate = Math.max(0, species.growthConsumptionRate ?? 0.4);
       const available = Math.min(plant.energy, consumptionRate * simulationDelta);
-      plant.energy -= available;
-      const efficiency = Math.max(0, species.growthEfficiency ?? 0.25);
-      const growthAmount = available * efficiency;
-      if (growthAmount > 0) {
-        const prevHeight = plant.currentHeight ?? 0;
-        const nextHeight = Math.min(species.maxHeight, prevHeight + growthAmount);
-        if (Math.abs(nextHeight - prevHeight) > 0.0005) {
-          plant.currentHeight = nextHeight;
-          const growthFactor = clamp01(nextHeight / species.maxHeight);
-          const baseRadius = species.baseRadius ?? plant.currentRadius ?? 0.12;
-          const nextRadius = Math.max(0.05, baseRadius * (0.75 + growthFactor * 0.45));
-          const nextTipRadius = Math.max(0.04, nextRadius * (0.55 + growthFactor * 0.25));
-          if (Math.abs(nextRadius - (plant.currentRadius ?? 0)) > 0.0005) {
-            plant.currentRadius = nextRadius;
-            geometryNeedsUpdate = true;
-          }
-          if (Math.abs(nextTipRadius - (plant.tipRadius ?? 0)) > 0.0005) {
-            plant.tipRadius = nextTipRadius;
-            geometryNeedsUpdate = true;
-          }
-          if (!geometryNeedsUpdate) {
-            geometryNeedsUpdate = Math.abs(nextHeight - prevHeight) > 0.0005;
+      if (available > 0) {
+        plant.energy -= available;
+        totalEnergyConsumed += available;
+        const efficiency = Math.max(0, species.growthEfficiency ?? 0.25);
+        const growthAmount = available * efficiency;
+        if (growthAmount > 0) {
+          const prevHeight = plant.currentHeight ?? 0;
+          const nextHeight = Math.min(species.maxHeight, prevHeight + growthAmount);
+          const grew = Math.abs(nextHeight - prevHeight) > 0.0005;
+          if (grew) {
+            plant.currentHeight = nextHeight;
+            const growthFactor = clamp01(nextHeight / species.maxHeight);
+            const baseRadius = species.baseRadius ?? plant.currentRadius ?? 0.12;
+            const nextRadius = Math.max(0.05, baseRadius * (0.75 + growthFactor * 0.45));
+            const nextTipRadius = Math.max(0.04, nextRadius * (0.55 + growthFactor * 0.25));
+            if (Math.abs(nextRadius - (plant.currentRadius ?? 0)) > 0.0005) {
+              plant.currentRadius = nextRadius;
+              geometryNeedsUpdate = true;
+            }
+            if (Math.abs(nextTipRadius - (plant.tipRadius ?? 0)) > 0.0005) {
+              plant.tipRadius = nextTipRadius;
+              geometryNeedsUpdate = true;
+            }
+            if (!geometryNeedsUpdate && grew) {
+              geometryNeedsUpdate = true;
+            }
+            growthEvents += 1;
           }
         }
       }
@@ -3030,6 +3199,12 @@ function tickPlants(deltaTime) {
   if (geometryNeedsUpdate) {
     plantSimulation.geometryDirty = true;
   }
+
+  const metrics = computePlantMetrics(plantSimulation.instances);
+  metrics.energyAbsorbed = totalEnergyAbsorbed;
+  metrics.energyConsumed = totalEnergyConsumed;
+  metrics.growthEvents = growthEvents;
+  plantSimulation.metrics = metrics;
 
   void deltaTime;
 }
@@ -3900,7 +4075,7 @@ function bindGeometry(buffer) {
 function render() {
   drawStats.terrain = 0;
   drawStats.rocks = 0;
-  drawStats.water = 0;
+  drawStats.plants = 0;
   drawStats.blockGrid = 0;
   drawStats.chunkGrid = 0;
   drawStats.selection = 0;
@@ -3968,38 +4143,20 @@ function render() {
     }
   }
 
-  if (waterVertexCount > 0) {
-    const blendingWasEnabled = terrainRenderState.translucent;
-    if (!blendingWasEnabled && typeof gl.enable === 'function') {
-      gl.enable(gl.BLEND);
-    }
-    if (typeof gl.blendFunc === 'function') {
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    }
-    if (typeof gl.depthMask === 'function') {
-      gl.depthMask(false);
-    }
-    if (renderModeUniform && typeof gl.uniform1i === 'function') {
-      gl.uniform1i(renderModeUniform, renderModes.water);
-    }
+  if (plantSimulation.geometryDirty) {
+    rebuildPlantGeometry();
+  }
+
+  if (plantVertexCount > 0) {
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
-      gl.uniform1f(terrainAlphaUniform, waterAlpha);
+      gl.uniform1f(terrainAlphaUniform, 1);
     }
-    bindGeometry(waterBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
-    drawStats.water += 1;
+    bindGeometry(plantBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, plantVertexCount);
+    drawStats.plants += 1;
     drawStats.total += 1;
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
-    }
-    if (renderModeUniform && typeof gl.uniform1i === 'function') {
-      gl.uniform1i(renderModeUniform, renderModes.terrain);
-    }
-    if (typeof gl.depthMask === 'function') {
-      gl.depthMask(true);
-    }
-    if (!blendingWasEnabled && typeof gl.disable === 'function') {
-      gl.disable(gl.BLEND);
     }
   }
 
@@ -4078,6 +4235,20 @@ function updateDebugConsole(deltaTime) {
   const formatFeaturePercent = (value) =>
     Number.isFinite(value) ? (Math.max(0, value) * 100).toFixed(0) : '0';
 
+  const plantMetrics = plantSimulation.metrics ?? createEmptyPlantMetrics();
+  const formatMetric = (value, digits = 2) => {
+    const finite = Number.isFinite(value) ? value : 0;
+    return finite.toFixed(digits);
+  };
+  const reservePercent = formatMetric((plantMetrics.energyReserveRatio ?? 0) * 100, 0);
+  const avgHeightMetric = formatMetric(plantMetrics.averageHeight);
+  const avgMassMetric = formatMetric(plantMetrics.averageMass, 1);
+  const avgEnergyMetric = formatMetric(plantMetrics.averageEnergy);
+  const avgCapacityMetric = formatMetric(plantMetrics.averageCapacity);
+  const absorbedMetric = formatMetric(plantMetrics.energyAbsorbed);
+  const consumedMetric = formatMetric(plantMetrics.energyConsumed);
+  const growthEventsMetric = Math.max(0, plantMetrics.growthEvents ?? 0);
+
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
     : 'Ninguna';
@@ -4098,11 +4269,14 @@ function updateDebugConsole(deltaTime) {
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
     `Plantas generadas: ${terrainInfo.plantCount}`,
+    `Plantas activas: ${plantMetrics.count} (maduras ${plantMetrics.matureCount} brotes ${plantMetrics.sproutCount})`,
+    `Biomasa vegetal media: altura=${avgHeightMetric}m masa=${avgMassMetric}kg`,
+    `Energía vegetal: media=${avgEnergyMetric} capacidad=${avgCapacityMetric} (${reservePercent}% reserva) absorción=${absorbedMetric} consumo=${consumedMetric} crecimientos=${growthEventsMetric}`,
     `Terreno características: cañones=${formatFeaturePercent(featureStats.canyon)}% barrancos=${formatFeaturePercent(featureStats.ravine)}% acantilados=${formatFeaturePercent(featureStats.cliffs)}%`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} agua=${drawStats.water} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
