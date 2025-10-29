@@ -560,19 +560,95 @@ const vertexSource = `
   attribute vec3 color;
   uniform mat4 viewProjection;
   varying vec3 vColor;
+  varying vec3 vPosition;
   void main() {
-    gl_Position = viewProjection * vec4(position, 1.0);
+    vec4 worldPosition = vec4(position, 1.0);
+    gl_Position = viewProjection * worldPosition;
     vColor = color;
+    vPosition = worldPosition.xyz;
   }
 `;
 
 const fragmentSource = `
   precision mediump float;
   varying vec3 vColor;
+  varying vec3 vPosition;
   uniform vec3 globalLightColor;
   uniform float terrainAlpha;
+  uniform float patternTime;
+
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+  }
+
+  float valueNoise(vec2 uv) {
+    vec2 i = floor(uv);
+    vec2 f = fract(uv);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+
+  float layeredNoise(vec2 uv) {
+    float amplitude = 0.55;
+    float frequency = 1.0;
+    float total = 0.0;
+    for (int i = 0; i < 3; i++) {
+      total += valueNoise(uv * frequency) * amplitude;
+      amplitude *= 0.55;
+      frequency *= 2.2;
+      uv = uv * 1.7 + 3.1;
+    }
+    return total;
+  }
+
   void main() {
-    gl_FragColor = vec4(vColor * globalLightColor, terrainAlpha);
+    vec3 baseColor = vColor;
+    float maxComponent = max(baseColor.r, max(baseColor.g, baseColor.b));
+    float minComponent = min(baseColor.r, min(baseColor.g, baseColor.b));
+    float saturation = maxComponent - minComponent;
+    float brightness = (baseColor.r + baseColor.g + baseColor.b) / 3.0;
+    float warmth = baseColor.r - baseColor.b;
+    float blueDominance = baseColor.b - (baseColor.r + baseColor.g) * 0.5;
+    float waterMask = smoothstep(0.05, 0.18, blueDominance);
+    float sandMask = smoothstep(0.15, 0.3, warmth + saturation * 0.5) * (1.0 - waterMask);
+    float rockMask = (1.0 - sandMask) * (1.0 - waterMask) * (1.0 - smoothstep(0.55, 0.8, brightness));
+
+    vec3 sandColor = baseColor;
+    if (sandMask > 0.001) {
+      vec2 sandCoords = vPosition.xz * 0.12;
+      float duneWave = sin(sandCoords.x * 4.1 + patternTime * 0.45) * 0.5 +
+        cos(sandCoords.y * 3.3 - patternTime * 0.32) * 0.5;
+      float grainNoise = layeredNoise(sandCoords * 2.3 + patternTime * 0.05);
+      float speckleNoise = layeredNoise(sandCoords * 5.0 - patternTime * 0.07);
+      float pattern = duneWave * 0.18 + (grainNoise - 0.5) * 0.22 + (speckleNoise - 0.5) * 0.12;
+      float sparkle = smoothstep(0.65, 1.0, speckleNoise) * 0.08;
+      sandColor = clamp(baseColor + pattern * vec3(0.14, 0.11, 0.05) + sparkle * vec3(0.16, 0.15, 0.1), 0.0, 1.0);
+    }
+
+    vec3 rockColor = baseColor;
+    if (rockMask > 0.001) {
+      vec2 rockCoords = vec2(
+        dot(vPosition.xz, vec2(0.68, 0.52)),
+        vPosition.y * 0.6 + vPosition.x * 0.15 - vPosition.z * 0.1
+      );
+      float strata = sin(rockCoords.x * 3.4 + patternTime * 0.35);
+      float contour = cos(rockCoords.y * 2.7 - patternTime * 0.22);
+      float coarseNoise = layeredNoise((vPosition.xz + rockCoords.xy) * 1.1 + patternTime * 0.03);
+      float fineNoise = layeredNoise(vPosition.xz * 4.8 + rockCoords.yx * 0.5);
+      float pattern = strata * 0.18 + contour * 0.12 + (coarseNoise - 0.5) * 0.28 + (fineNoise - 0.5) * 0.08;
+      float highlight = smoothstep(0.68, 1.0, fineNoise) * 0.06;
+      rockColor = clamp(baseColor + pattern * vec3(0.16, 0.14, 0.12) + highlight * vec3(0.12, 0.13, 0.14), 0.05, 1.0);
+    }
+
+    vec3 finalColor = baseColor;
+    finalColor = mix(finalColor, sandColor, clamp(sandMask, 0.0, 1.0));
+    finalColor = mix(finalColor, rockColor, clamp(rockMask, 0.0, 1.0));
+
+    gl_FragColor = vec4(finalColor * globalLightColor, terrainAlpha);
   }
 `;
 
@@ -600,6 +676,7 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
+const patternTimeUniform = gl.getUniformLocation(program, 'patternTime');
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -3076,6 +3153,10 @@ function render() {
       lightColor[1],
       lightColor[2],
     );
+  }
+
+  if (patternTimeUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(patternTimeUniform, waterAnimationTime ?? 0);
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
