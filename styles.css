@@ -586,11 +586,17 @@ body.tutorial-active #simulation-hud {
   color: rgba(204, 234, 255, 0.72);
 }
 
-.water-info {
+
+.water-info,
+.rock-info,
+.plant-info {
   position: fixed;
   top: 24px;
   right: 24px;
   display: block;
+}
+
+.water-info {
   z-index: 48;
 }
 
@@ -684,11 +690,7 @@ body.tutorial-active #simulation-hud {
 }
 
 .rock-info {
-  position: fixed;
-  top: 24px;
-  right: 744px;
-  display: block;
-  z-index: 46;
+  z-index: 47;
 }
 
 .rock-info[hidden] {
@@ -827,11 +829,7 @@ body.tutorial-active #simulation-hud {
 }
 
 .plant-info {
-  position: fixed;
-  top: 24px;
-  right: 384px;
-  display: block;
-  z-index: 47;
+  z-index: 46;
 }
 
 .plant-info[hidden] {

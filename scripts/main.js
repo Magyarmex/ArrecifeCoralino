@@ -3653,6 +3653,20 @@ const rockTraceMineralDefinitions = [
   { id: 'manganese', name: 'Manganeso' },
 ];
 
+const sulfurContentProfiles = [
+  { label: 'trace', min: 0, max: 0.004, weight: 0.44 },
+  { label: 'minor', min: 0.004, max: 0.028, weight: 0.33 },
+  { label: 'vein', min: 0.028, max: 0.14, weight: 0.17 },
+  { label: 'massive', min: 0.72, max: 0.9, weight: 0.06 },
+];
+
+const phosphorusContentProfiles = [
+  { label: 'trace', min: 0, max: 0.006, weight: 0.46 },
+  { label: 'minor', min: 0.006, max: 0.038, weight: 0.32 },
+  { label: 'nodule', min: 0.038, max: 0.16, weight: 0.16 },
+  { label: 'massive', min: 0.72, max: 0.88, weight: 0.06 },
+];
+
 const rockTopologyCache = new Map();
 
 function createBaseIcosahedron() {
@@ -3772,6 +3786,41 @@ function createRockMesh(random, type) {
   });
 
   return { vertices, faces: topology.faces };
+}
+
+function tintRockBaseColor(baseColor, composition) {
+  const tinted = Array.isArray(baseColor) ? baseColor.slice() : [0.4, 0.4, 0.4];
+  while (tinted.length < 3) {
+    tinted.push(0.4);
+  }
+
+  if (!composition) {
+    return tinted;
+  }
+
+  const sulfurPercent = clamp01(composition.sulfurPercent ?? 0);
+  const phosphorusPercent = clamp01(composition.phosphorusPercent ?? 0);
+
+  const sulfurInfluence = sulfurPercent >= 0.7 ? 1 : clamp01(sulfurPercent / 0.14);
+  const phosphorusInfluence = phosphorusPercent >= 0.7 ? 1 : clamp01(phosphorusPercent / 0.16);
+
+  if (sulfurInfluence > 0) {
+    tinted[0] = clamp(tinted[0] + 0.5 * sulfurInfluence, 0, 1);
+    tinted[1] = clamp(tinted[1] + 0.28 * sulfurInfluence, 0, 1);
+    tinted[2] = clamp(tinted[2] - 0.24 * sulfurInfluence, 0, 1);
+  }
+
+  if (phosphorusInfluence > 0) {
+    tinted[0] = clamp(tinted[0] - 0.12 * phosphorusInfluence, 0, 1);
+    tinted[1] = clamp(tinted[1] + 0.52 * phosphorusInfluence, 0, 1);
+    tinted[2] = clamp(tinted[2] - 0.08 * phosphorusInfluence, 0, 1);
+  }
+
+  return [
+    clamp(tinted[0], 0.05, 0.98),
+    clamp(tinted[1], 0.05, 0.98),
+    clamp(tinted[2], 0.05, 0.98),
+  ];
 }
 
 function rotateVector(vertex, rotation) {
@@ -4342,30 +4391,134 @@ function tickPlants(deltaTime) {
   void deltaTime;
 }
 
+function pickSpecialContent(random, profiles, maxPercent = 0.92) {
+  const cappedMax = clamp01(maxPercent);
+  if (cappedMax <= 0) {
+    return { percent: 0, label: 'none' };
+  }
+
+  const totalWeight = profiles.reduce((sum, profile) => sum + profile.weight, 0) || 1;
+  let selection = random() * totalWeight;
+  let chosenProfile = profiles[profiles.length - 1];
+  for (const profile of profiles) {
+    selection -= profile.weight;
+    if (selection <= 0) {
+      chosenProfile = profile;
+      break;
+    }
+  }
+
+  const min = clamp(chosenProfile.min, 0, cappedMax);
+  const max = clamp(chosenProfile.max, min, cappedMax);
+  if (max <= 0) {
+    return { percent: 0, label: chosenProfile.label };
+  }
+
+  const percent = max <= min ? min : clamp(randomInRange(random, min, max), min, max);
+  return { percent, label: chosenProfile.label };
+}
+
+function classifyRockByComposition({ sulfurPercent, phosphorusPercent }) {
+  const highSulfur = sulfurPercent >= 0.7;
+  const notableSulfur = !highSulfur && sulfurPercent >= 0.12;
+  const faintSulfur = !highSulfur && !notableSulfur && sulfurPercent >= 0.01;
+  const highPhosphorus = phosphorusPercent >= 0.7;
+  const notablePhosphorus = !highPhosphorus && phosphorusPercent >= 0.12;
+  const faintPhosphorus = !highPhosphorus && !notablePhosphorus && phosphorusPercent >= 0.01;
+
+  if (highSulfur && highPhosphorus) {
+    return 'Depósito sulfurado-fosfático';
+  }
+  if (highSulfur) {
+    return 'Depósito sulfurado masivo';
+  }
+  if (highPhosphorus) {
+    return 'Fosforita masiva';
+  }
+  if (notableSulfur && notablePhosphorus) {
+    return 'Estrato mixto de azufre y fosfatos';
+  }
+  if (notableSulfur) {
+    return 'Roca con vetas de azufre';
+  }
+  if (notablePhosphorus) {
+    return 'Fosforita nodular';
+  }
+  if (faintSulfur && faintPhosphorus) {
+    return 'Sedimento con trazas sulfuradas-fosfáticas';
+  }
+  if (faintSulfur) {
+    return 'Arenisca con trazas de azufre';
+  }
+  if (faintPhosphorus) {
+    return 'Sedimento fosfático disperso';
+  }
+  return null;
+}
+
 function createRockComposition(random, totalMass) {
   const entries = [];
   const available = rockTraceMineralDefinitions.slice();
-  const traceCount = Math.max(1, Math.floor(randomInRange(random, 2, 4)));
-  const targetTracePercent = clamp(randomInRange(random, 0.08, 0.2), 0.02, 0.45);
-  let remainingPercent = targetTracePercent;
-  let assignedTracePercent = 0;
 
-  for (let i = 0; i < traceCount && available.length > 0 && remainingPercent > 0.001; i++) {
+  const sulfur = pickSpecialContent(random, sulfurContentProfiles, 0.9);
+  let sulfurPercent = clamp01(sulfur.percent);
+
+  const phosphorusProfiles = sulfurPercent >= 0.5
+    ? phosphorusContentProfiles.map((profile) =>
+        profile.label === 'massive'
+          ? { ...profile, max: Math.min(profile.max, 0.28), weight: profile.weight * 0.2 }
+          : profile,
+      )
+    : phosphorusContentProfiles;
+  const phosphorus = pickSpecialContent(random, phosphorusProfiles, clamp01(0.92 - sulfurPercent));
+  let phosphorusPercent = clamp01(phosphorus.percent);
+
+  if (sulfurPercent + phosphorusPercent > 0.94) {
+    const scale = 0.94 / (sulfurPercent + phosphorusPercent);
+    sulfurPercent *= scale;
+    phosphorusPercent *= scale;
+  }
+
+  let assignedPercent = sulfurPercent + phosphorusPercent;
+
+  if (sulfurPercent > 0) {
+    entries.push({
+      name: 'Azufre elemental',
+      percent: sulfurPercent,
+      mass: sulfurPercent * totalMass,
+      primary: false,
+    });
+  }
+
+  if (phosphorusPercent > 0) {
+    entries.push({
+      name: 'Fosfatos marinos',
+      percent: phosphorusPercent,
+      mass: phosphorusPercent * totalMass,
+      primary: false,
+    });
+  }
+
+  const traceBudget = clamp(randomInRange(random, 0.05, 0.22), 0, 0.96);
+  let remainingTraceBudget = Math.max(0, Math.min(traceBudget, 0.96 - assignedPercent));
+  const traceCount = remainingTraceBudget > 0 ? Math.max(1, Math.floor(randomInRange(random, 2, 4))) : 0;
+
+  for (let i = 0; i < traceCount && available.length > 0 && remainingTraceBudget > 0.001; i++) {
     const index = Math.min(available.length - 1, Math.floor(random() * available.length));
     const mineral = available.splice(index, 1)[0];
     const slotsLeft = traceCount - i - 1;
-    const minShare = 0.01;
-    const maxShare = Math.max(minShare, remainingPercent - slotsLeft * minShare);
+    const minShare = 0.008;
+    const maxShare = Math.max(minShare, remainingTraceBudget - slotsLeft * minShare);
     const share =
       slotsLeft <= 0
-        ? remainingPercent
+        ? remainingTraceBudget
         : Math.min(maxShare, randomInRange(random, minShare, maxShare));
-    const clampedShare = Math.max(0, Math.min(remainingPercent, share));
+    const clampedShare = Math.max(0, Math.min(remainingTraceBudget, share));
     if (clampedShare <= 0) {
       continue;
     }
-    remainingPercent -= clampedShare;
-    assignedTracePercent += clampedShare;
+    remainingTraceBudget -= clampedShare;
+    assignedPercent += clampedShare;
     entries.push({
       name: mineral.name,
       percent: clampedShare,
@@ -4374,7 +4527,7 @@ function createRockComposition(random, totalMass) {
     });
   }
 
-  const matrixPercent = clamp01(1 - assignedTracePercent);
+  const matrixPercent = clamp01(1 - assignedPercent);
   const matrixMass = matrixPercent * totalMass;
   entries.unshift({
     name: 'Matriz rocosa',
@@ -4390,9 +4543,19 @@ function createRockComposition(random, totalMass) {
       entry.percent = clamp01(entry.percent * normalization);
       entry.mass = entry.percent * totalMass;
     }
+    sulfurPercent = clamp01(sulfurPercent * normalization);
+    phosphorusPercent = clamp01(phosphorusPercent * normalization);
   }
 
-  return { entries, matrixMass };
+  const classification = classifyRockByComposition({ sulfurPercent, phosphorusPercent });
+
+  return {
+    entries,
+    matrixMass,
+    sulfurPercent,
+    phosphorusPercent,
+    classification,
+  };
 }
 
 function regenerateRocks(seedString, heightfield, maskfield) {
@@ -4471,7 +4634,7 @@ function regenerateRocks(seedString, heightfield, maskfield) {
 
     const baseColorValue = randomInRange(random, 0.36, 0.6);
     const colorOffset = randomInRange(random, -0.06, 0.06);
-    const baseColor = [
+    const baseTone = [
       clamp(baseColorValue + colorOffset * 0.35, 0.1, 0.9),
       clamp(baseColorValue + colorOffset * 0.15, 0.1, 0.9),
       clamp(baseColorValue - colorOffset * 0.2, 0.1, 0.9),
@@ -4481,20 +4644,25 @@ function regenerateRocks(seedString, heightfield, maskfield) {
     const embedFactor = randomInRange(random, -0.25, 0.12);
     const position = [x, groundHeight + scale[1] * embedFactor, z];
 
-    const rockVertices = createRockGeometry(random, type, scale, rotation, position, baseColor);
-    if (rockVertices.length === 0) {
-      continue;
-    }
-
     const volume = Math.max(0, ((4 / 3) * Math.PI * scale[0] * scale[1] * scale[2]) || 0);
     const density = randomInRange(random, 2200, 2800);
     const totalMass = Math.max(0, volume * density);
     const composition = createRockComposition(random, totalMass);
+    const tintedColor = tintRockBaseColor(baseTone, composition);
+
+    const rockVertices = createRockGeometry(random, type, scale, rotation, position, tintedColor);
+    if (rockVertices.length === 0) {
+      continue;
+    }
+
     const boundingRadius = Math.max(scale[0], scale[1], scale[2]) * 1.05;
+    const typeLabel = composition.classification
+      ? `${composition.classification} (${type.name ?? 'formación rocosa'})`
+      : type.name ?? 'Roca';
 
     generatedRocks.push({
       id: `rock-${generatedRocks.length + 1}`,
-      typeName: type.name ?? 'Roca',
+      typeName: typeLabel,
       position,
       rotation,
       scale,
@@ -4505,6 +4673,8 @@ function regenerateRocks(seedString, heightfield, maskfield) {
       density,
       volume,
       boundingRadius,
+      sulfurPercent: composition.sulfurPercent,
+      phosphorusPercent: composition.phosphorusPercent,
     });
 
     vertices.push(...rockVertices);
