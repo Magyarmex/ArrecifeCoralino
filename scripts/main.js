@@ -5040,15 +5040,37 @@ document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
   if (locked) {
     dismissTutorialOverlay();
+    pointerCanvasPosition.x = canvas.width / 2;
+    pointerCanvasPosition.y = canvas.height / 2;
   } else if (!overlayDismissed) {
     showTutorialOverlay();
+    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
   } else {
     applyTutorialState(false);
+    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
   }
 });
 
 document.addEventListener('mousemove', (event) => {
   if (document.pointerLockElement === canvas) {
+    const scaleX = Number.isFinite(pointerLockCursorScale.x)
+      ? pointerLockCursorScale.x
+      : 1;
+    const scaleY = Number.isFinite(pointerLockCursorScale.y)
+      ? pointerLockCursorScale.y
+      : 1;
+    pointerCanvasPosition.x = clamp(
+      pointerCanvasPosition.x + (event.movementX || 0) * scaleX,
+      0,
+      canvas.width,
+    );
+    pointerCanvasPosition.y = clamp(
+      pointerCanvasPosition.y + (event.movementY || 0) * scaleY,
+      0,
+      canvas.height,
+    );
     yaw += event.movementX * pointerSensitivity;
     pitch -= event.movementY * pointerSensitivity;
     const limit = Math.PI / 2 - 0.01;
