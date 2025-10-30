@@ -1200,19 +1200,34 @@ const vertexSource = `
       float timePrimary = waterTime * waterPrimaryWaveSpeed;
       float timeSecondary = waterTime * waterSecondaryWaveSpeed;
 
-      float primaryPhase = position.x * waterPrimaryWaveFrequency + position.z * 0.4 + timePrimary + pattern * TAU;
+      vec2 primaryDir = normalize(vec2(0.9, 0.35));
+      vec2 secondaryDir = normalize(vec2(-0.45, 1.0));
+      float primaryPhase =
+        dot(position.xz, primaryDir) * waterPrimaryWaveFrequency + timePrimary + pattern * TAU;
       float secondaryPhase =
-        (position.x - position.z) * waterSecondaryWaveFrequency + timeSecondary * 1.1 + pattern * 3.14159265;
+        dot(position.xz, secondaryDir) * waterSecondaryWaveFrequency + timeSecondary * 1.3 + pattern * 3.14159265;
 
       float foamAdjusted = clamp(foam, 0.0, 1.0);
       float amplitudeFactor = 0.45 + (1.0 - foamAdjusted) * 0.55;
-      float waveOffset =
-        sin(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor +
-        cos(secondaryPhase) * waterSecondaryAmplitude * (0.35 + (1.0 - foamAdjusted) * 0.65);
+      float primaryWave = sin(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor;
+      float secondaryWave =
+        cos(secondaryPhase) *
+        waterSecondaryAmplitude *
+        (0.35 + (1.0 - foamAdjusted) * 0.65);
+      float waveOffset = primaryWave + secondaryWave;
+
+      vec2 horizontalOffset =
+        primaryDir * cos(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor * 0.18 +
+        secondaryDir *
+          sin(secondaryPhase) *
+          waterSecondaryAmplitude *
+          (0.25 + (1.0 - foamAdjusted) * 0.45) *
+          0.14;
 
       float swellOffset = 0.0;
       float swellFoamBoost = 0.0;
       float swellSplash = 0.0;
+      vec2 swellSlide = vec2(0.0);
 
       for (int i = 0; i < MAX_SWELLS; i++) {
         if (i >= waterSwellCount) {
@@ -1261,23 +1276,26 @@ const vertexSource = `
         swellOffset += amplitude * energy;
         swellFoamBoost = max(swellFoamBoost, foamBoost * energy);
         swellSplash = max(swellSplash, splashHeight * energy);
+        swellSlide += direction * amplitude * energy * 0.16;
       }
 
-      float foamLevel = clamp(foamAdjusted + swellFoamBoost, 0.0, 1.0);
+      float foamPulse = sin(waterTime * 2.1 + pattern * TAU * 1.5) * 0.08;
+      float foamLevel = clamp(foamAdjusted + swellFoamBoost + foamPulse, 0.0, 1.0);
       waveOffset += swellOffset;
       float splashRaise = swellSplash * smoothstep(0.55, 1.0, foamLevel);
 
+      finalPosition.xz += horizontalOffset + swellSlide;
       finalPosition.y = waterSurfaceLevel + waveOffset + splashRaise;
 
       vec3 baseColor = mix(waterDeepColor, waterShallowColor, shallowMix);
-      float sparkle = sin(waterTime * 1.3 + (position.x + position.z) * 0.18 + pattern * TAU) * 0.04;
+      float sparkle = sin(waterTime * 1.3 + dot(position.xz, vec2(0.18, 0.23)) + pattern * TAU) * 0.04;
       baseColor.r = clamp(baseColor.r + sparkle * 0.8, 0.0, 1.0);
       baseColor.g = clamp(baseColor.g + sparkle * 0.6, 0.0, 1.0);
       baseColor.b = clamp(baseColor.b + sparkle, 0.0, 1.0);
 
       float foamHighlight = pow(max(0.0, foamLevel - 0.45), 1.5);
       if (foamHighlight > 0.0 || swellFoamBoost > 0.0) {
-        float foamBlend = clamp(foamHighlight + pattern * 0.15 + swellFoamBoost, 0.0, 1.0);
+        float foamBlend = clamp(foamHighlight + pattern * 0.12 + swellFoamBoost * 0.85, 0.0, 1.0);
         baseColor = mix(baseColor, waterFoamColor, foamBlend);
       }
 
@@ -1603,6 +1621,7 @@ let rockInfoPointerHandler = null;
 let rockInfoKeyHandler = null;
 let ignoreNextRockPointerDown = false;
 let pendingRockSelection = null;
+const pointerCanvasPosition = { x: 0, y: 0 };
 
 const drawStats = {
   terrain: 0,
@@ -1880,17 +1899,20 @@ function scheduleNextWaterSwell(currentTime) {
 function resetWaterSwells(seed) {
   const baseSeed = stringToSeed(seed ?? currentSeed);
   const random = createRandomGenerator(baseSeed ^ 0x3f2a9d17);
+  const startTime = waterAnimationTime ?? 0;
   waterSwellState = {
     active: [],
     random,
-    minInterval: 9,
-    maxInterval: 22,
-    nextSpawnTime: randomInRange(random, 4, 11),
+    minInterval: 7,
+    maxInterval: 16,
+    nextSpawnTime: startTime + randomInRange(random, 5, 9),
   };
   waterSwellActiveCount = 0;
   waterSwellUniformBuffers.origins.fill(0);
   waterSwellUniformBuffers.params.fill(0);
   waterSwellUniformBuffers.state.fill(0);
+  spawnWaterSwell(startTime);
+  scheduleNextWaterSwell(startTime);
 }
 
 function spawnWaterSwell(currentTime) {
@@ -3000,20 +3022,23 @@ function refreshSelectionAfterTerrain() {
 }
 
 function getPointerPosition(event) {
-  if (document.pointerLockElement === canvas) {
-    return {
-      x: canvas.width / 2,
-      y: canvas.height / 2,
-    };
+  if (!canvas) {
+    return { x: 0, y: 0 };
   }
 
-  const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
-  const clientX = event?.clientX ?? 0;
-  const clientY = event?.clientY ?? 0;
-  return {
-    x: clientX - rect.left,
-    y: clientY - rect.top,
-  };
+  if (document.pointerLockElement === canvas) {
+    return { x: pointerCanvasPosition.x, y: pointerCanvasPosition.y };
+  }
+
+  if (event) {
+    const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+    const x = (event.clientX ?? rect.left) - rect.left;
+    const y = (event.clientY ?? rect.top) - rect.top;
+    pointerCanvasPosition.x = clamp(x, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(y, 0, canvas.height);
+  }
+
+  return { x: pointerCanvasPosition.x, y: pointerCanvasPosition.y };
 }
 
 function castTerrainRay(origin, direction) {
@@ -4765,6 +4790,12 @@ function updateCanvasSize() {
     canvas.width = width;
     canvas.height = height;
     gl.viewport(0, 0, width, height);
+    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, width);
+    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, height);
+    if (document.pointerLockElement !== canvas) {
+      pointerCanvasPosition.x = width / 2;
+      pointerCanvasPosition.y = height / 2;
+    }
   }
 }
 
@@ -5017,19 +5048,33 @@ document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
   if (locked) {
     dismissTutorialOverlay();
+    pointerCanvasPosition.x = canvas.width / 2;
+    pointerCanvasPosition.y = canvas.height / 2;
   } else if (!overlayDismissed) {
     showTutorialOverlay();
+    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
   } else {
     applyTutorialState(false);
+    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
   }
 });
 
 document.addEventListener('mousemove', (event) => {
   if (document.pointerLockElement === canvas) {
+    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x + event.movementX, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y + event.movementY, 0, canvas.height);
     yaw += event.movementX * pointerSensitivity;
     pitch -= event.movementY * pointerSensitivity;
     const limit = Math.PI / 2 - 0.01;
     pitch = clamp(pitch, -limit, limit);
+  } else {
+    const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+    const x = (event.clientX ?? rect.left) - rect.left;
+    const y = (event.clientY ?? rect.top) - rect.top;
+    pointerCanvasPosition.x = clamp(x, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(y, 0, canvas.height);
   }
 });
 
