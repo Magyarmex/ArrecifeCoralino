@@ -683,6 +683,149 @@ body.tutorial-active #simulation-hud {
   color: rgba(217, 240, 255, 0.62);
 }
 
+.rock-info {
+  position: fixed;
+  top: 24px;
+  right: 744px;
+  display: block;
+  z-index: 46;
+}
+
+.rock-info[hidden] {
+  display: none !important;
+}
+
+.rock-info__content {
+  width: min(340px, calc(100vw - 48px));
+  padding: 20px 24px;
+  border-radius: 16px;
+  background: rgba(20, 18, 28, 0.95);
+  border: 1px solid rgba(170, 150, 255, 0.45);
+  box-shadow: 0 20px 42px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: #efe9ff;
+  backdrop-filter: blur(4px);
+}
+
+.rock-info__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rock-info__header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: 0.04em;
+}
+
+.rock-info__close {
+  appearance: none;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 1.45rem;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f2ebff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.rock-info__close:hover,
+.rock-info__close:focus-visible {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.rock-info__description {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(239, 233, 255, 0.82);
+}
+
+.rock-info__stats {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.92rem;
+}
+
+.rock-info__stats dt {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(210, 198, 255, 0.8);
+}
+
+.rock-info__stats dd {
+  margin: 2px 0 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.rock-info__composition {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rock-info__composition h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(224, 214, 255, 0.86);
+}
+
+.rock-info__minerals {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.85rem;
+}
+
+.rock-info__mineral {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(200, 182, 255, 0.18);
+}
+
+.rock-info__mineral--matrix {
+  border-color: rgba(255, 230, 170, 0.35);
+  background: rgba(255, 230, 170, 0.12);
+  color: #fbe7bb;
+}
+
+.rock-info__mineral--empty {
+  text-align: center;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.rock-info__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(224, 214, 255, 0.62);
+}
+
 .plant-info {
   position: fixed;
   top: 24px;
