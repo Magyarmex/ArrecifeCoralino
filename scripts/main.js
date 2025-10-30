@@ -3801,19 +3801,34 @@ function tintRockBaseColor(baseColor, composition) {
   const sulfurPercent = clamp01(composition.sulfurPercent ?? 0);
   const phosphorusPercent = clamp01(composition.phosphorusPercent ?? 0);
 
-  const sulfurInfluence = sulfurPercent >= 0.7 ? 1 : clamp01(sulfurPercent / 0.14);
-  const phosphorusInfluence = phosphorusPercent >= 0.7 ? 1 : clamp01(phosphorusPercent / 0.16);
+  let sulfurInfluence = 0;
+  if (sulfurPercent >= 0.7) {
+    sulfurInfluence = 1;
+  } else if (sulfurPercent > 0.005) {
+    const normalized = clamp01((sulfurPercent - 0.005) / 0.32);
+    sulfurInfluence = Math.pow(normalized, 1.35);
+  }
+
+  let phosphorusInfluence = 0;
+  if (phosphorusPercent >= 0.7) {
+    phosphorusInfluence = 1;
+  } else if (phosphorusPercent > 0.005) {
+    const normalized = clamp01((phosphorusPercent - 0.005) / 0.34);
+    phosphorusInfluence = Math.pow(normalized, 1.25);
+  }
 
   if (sulfurInfluence > 0) {
-    tinted[0] = clamp(tinted[0] + 0.5 * sulfurInfluence, 0, 1);
-    tinted[1] = clamp(tinted[1] + 0.28 * sulfurInfluence, 0, 1);
-    tinted[2] = clamp(tinted[2] - 0.24 * sulfurInfluence, 0, 1);
+    const subtleScale = lerp(0.18, 0.45, sulfurInfluence);
+    tinted[0] = clamp(tinted[0] + subtleScale, 0, 1);
+    tinted[1] = clamp(tinted[1] + subtleScale * 0.55, 0, 1);
+    tinted[2] = clamp(tinted[2] - subtleScale * 0.6, 0, 1);
   }
 
   if (phosphorusInfluence > 0) {
-    tinted[0] = clamp(tinted[0] - 0.12 * phosphorusInfluence, 0, 1);
-    tinted[1] = clamp(tinted[1] + 0.52 * phosphorusInfluence, 0, 1);
-    tinted[2] = clamp(tinted[2] - 0.08 * phosphorusInfluence, 0, 1);
+    const subtleScale = lerp(0.14, 0.36, phosphorusInfluence);
+    tinted[0] = clamp(tinted[0] - subtleScale * 0.35, 0, 1);
+    tinted[1] = clamp(tinted[1] + subtleScale, 0, 1);
+    tinted[2] = clamp(tinted[2] - subtleScale * 0.28, 0, 1);
   }
 
   return [
