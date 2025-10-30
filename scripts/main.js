@@ -477,9 +477,37 @@ const plantInfoNutrientsField =
 const plantInfoCloseButton =
   document.getElementById('plant-info-close') ?? fallbackFactories.button();
 
+const rockInfoPanel = document.getElementById('rock-info') ?? fallbackFactories.infoPanel();
+const rockInfoTypeField =
+  document.getElementById('rock-info-type') ?? fallbackFactories.textField();
+const rockInfoMatrixMassField =
+  document.getElementById('rock-info-matrix-mass') ?? fallbackFactories.textField();
+const rockInfoMassField =
+  document.getElementById('rock-info-total-mass') ?? fallbackFactories.textField();
+const rockInfoAgeField =
+  document.getElementById('rock-info-age') ?? fallbackFactories.textField();
+const rockInfoErosionField =
+  document.getElementById('rock-info-erosion') ?? fallbackFactories.textField();
+const rockInfoMineralsList =
+  document.getElementById('rock-info-minerals') ?? fallbackFactories.list();
+const rockInfoCloseButton =
+  document.getElementById('rock-info-close') ?? fallbackFactories.button();
+
 function ensureFallbackFactories() {
   if (runtimeState.fallbackFactories) {
-    return runtimeState.fallbackFactories;
+    const factories = runtimeState.fallbackFactories;
+    if (typeof factories.list !== 'function') {
+      factories.list = () => ({
+        innerHTML: '',
+        textContent: '',
+        appendChild: () => {},
+        removeChild: () => {},
+        querySelectorAll: () => [],
+        firstChild: null,
+        replaceChildren: () => {},
+      });
+    }
+    return factories;
   }
 
   function createDebugPanelFallback() {
@@ -512,11 +540,24 @@ function ensureFallbackFactories() {
     };
   }
 
+  function createListFallback() {
+    return {
+      innerHTML: '',
+      textContent: '',
+      appendChild: () => {},
+      removeChild: () => {},
+      querySelectorAll: () => [],
+      firstChild: null,
+      replaceChildren: () => {},
+    };
+  }
+
   runtimeState.fallbackFactories = {
     debugPanel: createDebugPanelFallback,
     infoPanel: createInfoPanelFallback,
     textField: createTextFieldFallback,
     button: createButtonFallback,
+    list: createListFallback,
   };
 
   return runtimeState.fallbackFactories;
@@ -1121,6 +1162,8 @@ const vertexSource = `
   attribute vec3 position;
   attribute vec3 color;
 
+  const int MAX_SWELLS = 4;
+
   uniform mat4 viewProjection;
   uniform int renderMode;
   uniform float waterTime;
@@ -1135,6 +1178,10 @@ const vertexSource = `
   uniform vec3 waterShallowColor;
   uniform vec3 waterFoamColor;
   uniform float waterColorQuantizeStep;
+  uniform int waterSwellCount;
+  uniform vec4 waterSwellOrigins[MAX_SWELLS];
+  uniform vec4 waterSwellParams[MAX_SWELLS];
+  uniform vec4 waterSwellState[MAX_SWELLS];
 
   varying vec3 vColor;
   varying vec3 vPosition;
@@ -1154,14 +1201,73 @@ const vertexSource = `
       float timeSecondary = waterTime * waterSecondaryWaveSpeed;
 
       float primaryPhase = position.x * waterPrimaryWaveFrequency + position.z * 0.4 + timePrimary + pattern * TAU;
-      float secondaryPhase = (position.x - position.z) * waterSecondaryWaveFrequency + timeSecondary * 1.1 + pattern * 3.14159265;
+      float secondaryPhase =
+        (position.x - position.z) * waterSecondaryWaveFrequency + timeSecondary * 1.1 + pattern * 3.14159265;
 
-      float amplitudeFactor = 0.45 + (1.0 - foam) * 0.55;
+      float foamAdjusted = clamp(foam, 0.0, 1.0);
+      float amplitudeFactor = 0.45 + (1.0 - foamAdjusted) * 0.55;
       float waveOffset =
         sin(primaryPhase) * waterPrimaryAmplitude * amplitudeFactor +
-        cos(secondaryPhase) * waterSecondaryAmplitude * (0.35 + (1.0 - foam) * 0.65);
+        cos(secondaryPhase) * waterSecondaryAmplitude * (0.35 + (1.0 - foamAdjusted) * 0.65);
 
-      finalPosition.y = waterSurfaceLevel + waveOffset;
+      float swellOffset = 0.0;
+      float swellFoamBoost = 0.0;
+      float swellSplash = 0.0;
+
+      for (int i = 0; i < MAX_SWELLS; i++) {
+        if (i >= waterSwellCount) {
+          break;
+        }
+        vec4 originData = waterSwellOrigins[i];
+        vec4 paramData = waterSwellParams[i];
+        vec4 stateData = waterSwellState[i];
+        vec2 origin = originData.xy;
+        vec2 direction = originData.zw;
+        float dirLength = length(direction);
+        if (dirLength < 0.0001) {
+          continue;
+        }
+        direction /= dirLength;
+        float amplitude = paramData.x;
+        float crestLength = max(0.25, paramData.y);
+        float lateralSpread = max(0.25, paramData.z);
+        float foamBoost = max(0.0, paramData.w);
+        float startTime = stateData.x;
+        float speed = max(0.01, stateData.y);
+        float decayDistance = max(crestLength, stateData.z);
+        float splashHeight = max(0.0, stateData.w);
+
+        float elapsed = waterTime - startTime;
+        if (elapsed < 0.0) {
+          continue;
+        }
+        float traveled = elapsed * speed;
+        vec2 toPoint = position.xz - origin;
+        float along = dot(toPoint, direction);
+        float aheadLimit = traveled + decayDistance;
+        if (along < -crestLength || along > aheadLimit) {
+          continue;
+        }
+        vec2 lateral = toPoint - direction * along;
+        float lateralDistance = length(lateral);
+        float lateralFactor = exp(-pow(lateralDistance / lateralSpread, 2.0));
+        float crestOffset = traveled - along;
+        float crestFactor = exp(-pow(crestOffset / crestLength, 2.0));
+        float decayFactor = exp(-max(0.0, crestOffset) / decayDistance);
+        float energy = crestFactor * lateralFactor * decayFactor;
+        if (energy <= 0.0001) {
+          continue;
+        }
+        swellOffset += amplitude * energy;
+        swellFoamBoost = max(swellFoamBoost, foamBoost * energy);
+        swellSplash = max(swellSplash, splashHeight * energy);
+      }
+
+      float foamLevel = clamp(foamAdjusted + swellFoamBoost, 0.0, 1.0);
+      waveOffset += swellOffset;
+      float splashRaise = swellSplash * smoothstep(0.55, 1.0, foamLevel);
+
+      finalPosition.y = waterSurfaceLevel + waveOffset + splashRaise;
 
       vec3 baseColor = mix(waterDeepColor, waterShallowColor, shallowMix);
       float sparkle = sin(waterTime * 1.3 + (position.x + position.z) * 0.18 + pattern * TAU) * 0.04;
@@ -1169,9 +1275,9 @@ const vertexSource = `
       baseColor.g = clamp(baseColor.g + sparkle * 0.6, 0.0, 1.0);
       baseColor.b = clamp(baseColor.b + sparkle, 0.0, 1.0);
 
-      float foamHighlight = pow(max(0.0, foam - 0.45), 1.5);
-      if (foamHighlight > 0.0) {
-        float foamBlend = clamp(foamHighlight + pattern * 0.15, 0.0, 1.0);
+      float foamHighlight = pow(max(0.0, foamLevel - 0.45), 1.5);
+      if (foamHighlight > 0.0 || swellFoamBoost > 0.0) {
+        float foamBlend = clamp(foamHighlight + pattern * 0.15 + swellFoamBoost, 0.0, 1.0);
         baseColor = mix(baseColor, waterFoamColor, foamBlend);
       }
 
@@ -1314,6 +1420,10 @@ const waterDeepColorUniform = gl.getUniformLocation(program, 'waterDeepColor');
 const waterShallowColorUniform = gl.getUniformLocation(program, 'waterShallowColor');
 const waterFoamColorUniform = gl.getUniformLocation(program, 'waterFoamColor');
 const waterColorQuantizeStepUniform = gl.getUniformLocation(program, 'waterColorQuantizeStep');
+const waterSwellCountUniform = gl.getUniformLocation(program, 'waterSwellCount');
+const waterSwellOriginsUniform = gl.getUniformLocation(program, 'waterSwellOrigins[0]');
+const waterSwellParamsUniform = gl.getUniformLocation(program, 'waterSwellParams[0]');
+const waterSwellStateUniform = gl.getUniformLocation(program, 'waterSwellState[0]');
 
 const renderModes = {
   terrain: 0,
@@ -1373,6 +1483,14 @@ const waterPrimaryWaveSpeed = 0.85;
 const waterSecondaryWaveSpeed = 0.55;
 const waterPrimaryAmplitude = 0.22;
 const waterSecondaryAmplitude = 0.12;
+const MAX_WATER_SWELLS = 4;
+const waterSwellUniformBuffers = {
+  origins: new Float32Array(MAX_WATER_SWELLS * 4),
+  params: new Float32Array(MAX_WATER_SWELLS * 4),
+  state: new Float32Array(MAX_WATER_SWELLS * 4),
+};
+let waterSwellActiveCount = 0;
+let waterSwellState = null;
 
 if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
   gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
@@ -1455,6 +1573,7 @@ let waterNeedsUpload = false;
 
 let terrainHeightField = null;
 let terrainMaskField = null;
+let rockInstances = [];
 
 const defaultSeed = 'coral-dunas';
 let currentSeed = defaultSeed;
@@ -1479,6 +1598,11 @@ let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
 
 let waterAnimationTime = 0;
+let activeRockSelection = null;
+let rockInfoPointerHandler = null;
+let rockInfoKeyHandler = null;
+let ignoreNextRockPointerDown = false;
+let pendingRockSelection = null;
 
 const drawStats = {
   terrain: 0,
@@ -1737,6 +1861,135 @@ function randomChoice(random, options) {
   }
   const index = Math.min(options.length - 1, Math.floor(random() * options.length));
   return options[index];
+}
+
+function scheduleNextWaterSwell(currentTime) {
+  if (!waterSwellState) {
+    return;
+  }
+  const random = waterSwellState.random;
+  const minInterval = waterSwellState.minInterval ?? 9;
+  const maxInterval = waterSwellState.maxInterval ?? 22;
+  const interval =
+    typeof random === 'function'
+      ? randomInRange(random, minInterval, maxInterval)
+      : minInterval + Math.random() * (maxInterval - minInterval);
+  waterSwellState.nextSpawnTime = currentTime + interval;
+}
+
+function resetWaterSwells(seed) {
+  const baseSeed = stringToSeed(seed ?? currentSeed);
+  const random = createRandomGenerator(baseSeed ^ 0x3f2a9d17);
+  waterSwellState = {
+    active: [],
+    random,
+    minInterval: 9,
+    maxInterval: 22,
+    nextSpawnTime: randomInRange(random, 4, 11),
+  };
+  waterSwellActiveCount = 0;
+  waterSwellUniformBuffers.origins.fill(0);
+  waterSwellUniformBuffers.params.fill(0);
+  waterSwellUniformBuffers.state.fill(0);
+}
+
+function spawnWaterSwell(currentTime) {
+  if (!waterSwellState) {
+    resetWaterSwells(currentSeed);
+  }
+  const random = waterSwellState?.random;
+  const randomBetween = (min, max) =>
+    typeof random === 'function' ? randomInRange(random, min, max) : min + Math.random() * (max - min);
+
+  const half = baseplateSize / 2;
+  const spawnRadius = half + randomBetween(6, 14);
+  const angle = randomBetween(0, Math.PI * 2);
+  const originX = Math.cos(angle) * spawnRadius;
+  const originZ = Math.sin(angle) * spawnRadius;
+  const baseDirection = [-originX, -originZ];
+  const baseLength = Math.hypot(baseDirection[0], baseDirection[1]) || 1;
+  let dirX = baseDirection[0] / baseLength;
+  let dirZ = baseDirection[1] / baseLength;
+  const jitter = randomBetween(-Math.PI / 6, Math.PI / 6);
+  const cosJ = Math.cos(jitter);
+  const sinJ = Math.sin(jitter);
+  const rotatedX = dirX * cosJ - dirZ * sinJ;
+  const rotatedZ = dirX * sinJ + dirZ * cosJ;
+  const dirLength = Math.hypot(rotatedX, rotatedZ) || 1;
+  const direction = [rotatedX / dirLength, rotatedZ / dirLength];
+
+  const amplitude = randomBetween(0.35, 0.5);
+  const crestLength = randomBetween(5, 12);
+  const lateralSpread = randomBetween(8, 18);
+  const speed = randomBetween(6, 10);
+  const decayDistance = randomBetween(18, 36);
+  const foamBoost = randomBetween(0.35, 0.65);
+  const splashHeight = randomBetween(0.18, 0.32);
+  const lifespan =
+    (baseplateSize + decayDistance + crestLength + spawnRadius) / Math.max(0.1, speed) + 6;
+
+  waterSwellState.active.push({
+    origin: [originX, originZ],
+    direction,
+    amplitude,
+    crestLength,
+    lateralSpread,
+    foamBoost,
+    startTime: currentTime,
+    speed,
+    decayDistance,
+    splashHeight,
+    lifespan,
+  });
+
+  if (waterSwellState.active.length > MAX_WATER_SWELLS) {
+    waterSwellState.active.shift();
+  }
+}
+
+function updateWaterSwells(deltaTime) {
+  void deltaTime;
+  if (!waterSwellState) {
+    return;
+  }
+
+  const now = waterAnimationTime;
+  const active = waterSwellState.active.filter((swell) => now - swell.startTime <= swell.lifespan);
+  waterSwellState.active = active;
+
+  const spawnThreshold = waterSwellState.nextSpawnTime ?? now + 8;
+  if (active.length < MAX_WATER_SWELLS) {
+    if (now >= spawnThreshold) {
+      spawnWaterSwell(now);
+      scheduleNextWaterSwell(now);
+    }
+  } else if (now >= spawnThreshold) {
+    scheduleNextWaterSwell(now + 3);
+  }
+
+  waterSwellUniformBuffers.origins.fill(0);
+  waterSwellUniformBuffers.params.fill(0);
+  waterSwellUniformBuffers.state.fill(0);
+
+  waterSwellActiveCount = Math.min(active.length, MAX_WATER_SWELLS);
+  for (let i = 0; i < waterSwellActiveCount; i++) {
+    const swell = active[i];
+    const baseIndex = i * 4;
+    waterSwellUniformBuffers.origins[baseIndex + 0] = swell.origin[0];
+    waterSwellUniformBuffers.origins[baseIndex + 1] = swell.origin[1];
+    waterSwellUniformBuffers.origins[baseIndex + 2] = swell.direction[0];
+    waterSwellUniformBuffers.origins[baseIndex + 3] = swell.direction[1];
+
+    waterSwellUniformBuffers.params[baseIndex + 0] = swell.amplitude;
+    waterSwellUniformBuffers.params[baseIndex + 1] = swell.crestLength;
+    waterSwellUniformBuffers.params[baseIndex + 2] = swell.lateralSpread;
+    waterSwellUniformBuffers.params[baseIndex + 3] = swell.foamBoost;
+
+    waterSwellUniformBuffers.state[baseIndex + 0] = swell.startTime;
+    waterSwellUniformBuffers.state[baseIndex + 1] = swell.speed;
+    waterSwellUniformBuffers.state[baseIndex + 2] = swell.decayDistance;
+    waterSwellUniformBuffers.state[baseIndex + 3] = swell.splashHeight;
+  }
 }
 
 function hashCoords(x, z, seed) {
@@ -2221,6 +2474,7 @@ function clearSelection() {
   }
   closeWaterInfo();
   closePlantInfo();
+  closeRockInfo();
 }
 
 function updateSelectionPanel(selection) {
@@ -2361,6 +2615,7 @@ function openWaterInfo(selection, event) {
     return;
   }
 
+  closeRockInfo();
   closePlantInfo();
 
   activeWaterSelection = selection;
@@ -2490,6 +2745,7 @@ function openPlantInfo(plantOrHit, event) {
     return;
   }
 
+  closeRockInfo();
   activePlantSelection = plant;
   updatePlantInfoPanel(plant);
   plantInfoPanel.hidden = false;
@@ -2536,6 +2792,171 @@ function openPlantInfo(plantOrHit, event) {
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('pointerdown', plantInfoPointerHandler, true);
     document.addEventListener('keydown', plantInfoKeyHandler, true);
+  }
+}
+
+function updateRockInfoPanel(rock = activeRockSelection) {
+  if (!rockInfoPanel || !rock) {
+    return;
+  }
+
+  const totalMass = Number.isFinite(rock.totalMass) ? Math.max(0, rock.totalMass) : 0;
+  const matrixMass = Number.isFinite(rock.matrixMass) ? Math.max(0, rock.matrixMass) : totalMass;
+  const ageSeconds = Math.max(0, simulationTime - (rock.formationSimulationTime ?? 0));
+
+  if (rockInfoTypeField) {
+    rockInfoTypeField.textContent = rock.typeName ?? 'Roca sin clasificar';
+  }
+  if (rockInfoMatrixMassField) {
+    rockInfoMatrixMassField.textContent = `${matrixMass.toFixed(2)} kg`;
+  }
+  if (rockInfoMassField) {
+    rockInfoMassField.textContent = `${totalMass.toFixed(2)} kg`;
+  }
+  if (rockInfoAgeField) {
+    rockInfoAgeField.textContent = formatDurationHMS(ageSeconds);
+  }
+  if (rockInfoErosionField) {
+    rockInfoErosionField.textContent = '—';
+  }
+
+  if (!rockInfoMineralsList) {
+    return;
+  }
+
+  const entries = Array.isArray(rock.compositionEntries) ? rock.compositionEntries : [];
+  const hasDom = typeof document?.createElement === 'function';
+
+  if (typeof rockInfoMineralsList.replaceChildren === 'function' && hasDom) {
+    const fragment = document.createDocumentFragment();
+    if (entries.length === 0) {
+      const emptyItem = document.createElement('li');
+      emptyItem.className = 'rock-info__mineral rock-info__mineral--empty';
+      emptyItem.textContent = 'Sin datos de composición';
+      fragment.appendChild(emptyItem);
+    } else {
+      for (const entry of entries) {
+        const item = document.createElement('li');
+        item.className = entry.primary
+          ? 'rock-info__mineral rock-info__mineral--matrix'
+          : 'rock-info__mineral';
+        const percent = (entry.percent * 100).toFixed(1);
+        const massValue = entry.mass.toFixed(2);
+        item.textContent = `${entry.name}: ${percent}% (${massValue} kg)`;
+        fragment.appendChild(item);
+      }
+    }
+    rockInfoMineralsList.replaceChildren(fragment);
+    return;
+  }
+
+  if (entries.length === 0) {
+    rockInfoMineralsList.textContent = 'Sin datos de composición';
+    return;
+  }
+
+  const summary = entries
+    .map((entry) => {
+      const percent = (entry.percent * 100).toFixed(1);
+      const massValue = entry.mass.toFixed(2);
+      return `${entry.name}: ${percent}% (${massValue} kg)`;
+    })
+    .join('\n');
+  rockInfoMineralsList.textContent = summary;
+}
+
+function closeRockInfo(options = {}) {
+  const { restoreCamera = false, event } = options;
+  activeRockSelection = null;
+  ignoreNextRockPointerDown = false;
+
+  if (rockInfoPanel) {
+    rockInfoPanel.hidden = true;
+    if (typeof rockInfoPanel.setAttribute === 'function') {
+      rockInfoPanel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  if (
+    rockInfoPointerHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('pointerdown', rockInfoPointerHandler, true);
+  }
+  if (
+    rockInfoKeyHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('keydown', rockInfoKeyHandler, true);
+  }
+
+  if (restoreCamera) {
+    requestCameraControl(event);
+  }
+}
+
+function openRockInfo(rockOrHit, event) {
+  if (!rockInfoPanel) {
+    return;
+  }
+
+  const rock = rockOrHit?.rock ?? rockOrHit;
+  if (!rock) {
+    closeRockInfo();
+    return;
+  }
+
+  closeWaterInfo();
+  closePlantInfo();
+  activeRockSelection = rock;
+  updateRockInfoPanel(rock);
+  rockInfoPanel.hidden = false;
+  if (typeof rockInfoPanel.setAttribute === 'function') {
+    rockInfoPanel.setAttribute('aria-hidden', 'false');
+  }
+
+  ignoreNextRockPointerDown = event?.type === 'pointerdown';
+
+  if (!rockInfoPointerHandler) {
+    rockInfoPointerHandler = (pointerEvent) => {
+      if (pointerEvent.button !== undefined && pointerEvent.button !== 0) {
+        return;
+      }
+      if (ignoreNextRockPointerDown) {
+        ignoreNextRockPointerDown = false;
+        return;
+      }
+      suppressNextSelectionPointerDown = true;
+      suppressNextSelectionClick = true;
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => {
+          suppressNextSelectionPointerDown = false;
+        }, 0);
+        setTimeout(() => {
+          suppressNextSelectionClick = false;
+        }, 0);
+      } else {
+        suppressNextSelectionPointerDown = false;
+        suppressNextSelectionClick = false;
+      }
+      closeRockInfo({ restoreCamera: true, event: pointerEvent });
+    };
+  }
+
+  if (!rockInfoKeyHandler) {
+    rockInfoKeyHandler = (keyboardEvent) => {
+      if (keyboardEvent.key === 'Escape' || keyboardEvent.key === 'Esc') {
+        keyboardEvent.preventDefault();
+        closeRockInfo({ restoreCamera: true, event: keyboardEvent });
+      }
+    };
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('pointerdown', rockInfoPointerHandler, true);
+    document.addEventListener('keydown', rockInfoKeyHandler, true);
   }
 }
 
@@ -2798,6 +3219,101 @@ function pickPlantAt(pointerX, pointerY) {
     return null;
   }
   return intersectPlants(ray.origin, ray.direction);
+}
+
+function intersectRock(origin, direction, rock) {
+  if (!rock) {
+    return null;
+  }
+
+  const position = rock.position ?? [0, 0, 0];
+  const rotation = rock.rotation ?? [0, 0, 0];
+  const scale = rock.scale ?? [1, 1, 1];
+  const safeScale = [
+    Math.max(0.001, scale[0] ?? 1),
+    Math.max(0.001, scale[1] ?? 1),
+    Math.max(0.001, scale[2] ?? 1),
+  ];
+
+  const toCenter = subtract(origin, position);
+  const radius = Math.max(rock.boundingRadius ?? 0, safeScale[0], safeScale[1], safeScale[2]);
+  const sphereA = dot(direction, direction);
+  const sphereB = 2 * dot(toCenter, direction);
+  const sphereC = dot(toCenter, toCenter) - radius * radius;
+  const sphereDisc = sphereB * sphereB - 4 * sphereA * sphereC;
+  if (sphereDisc < 0) {
+    return null;
+  }
+
+  const localOrigin = subtract(origin, position);
+  const rotatedOrigin = inverseRotateVector(localOrigin, rotation);
+  const rotatedDirection = inverseRotateVector(direction, rotation);
+  const scaledOrigin = [
+    rotatedOrigin[0] / safeScale[0],
+    rotatedOrigin[1] / safeScale[1],
+    rotatedOrigin[2] / safeScale[2],
+  ];
+  const scaledDirection = [
+    rotatedDirection[0] / safeScale[0],
+    rotatedDirection[1] / safeScale[1],
+    rotatedDirection[2] / safeScale[2],
+  ];
+
+  const a = dot(scaledDirection, scaledDirection);
+  if (a <= 1e-6) {
+    return null;
+  }
+  const b = 2 * dot(scaledOrigin, scaledDirection);
+  const c = dot(scaledOrigin, scaledOrigin) - 1;
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < 0) {
+    return null;
+  }
+  const sqrtDiscriminant = Math.sqrt(discriminant);
+  const t0 = (-b - sqrtDiscriminant) / (2 * a);
+  const t1 = (-b + sqrtDiscriminant) / (2 * a);
+  let t = null;
+  if (t0 >= 0) {
+    t = t0;
+  } else if (t1 >= 0) {
+    t = t1;
+  }
+  if (t === null) {
+    return null;
+  }
+
+  return {
+    distance: t,
+    point: [
+      origin[0] + direction[0] * t,
+      origin[1] + direction[1] * t,
+      origin[2] + direction[2] * t,
+    ],
+  };
+}
+
+function pickRockAt(pointerX, pointerY) {
+  if (!rockInstances || rockInstances.length === 0) {
+    return null;
+  }
+
+  const ray = createPointerRay(pointerX, pointerY);
+  if (!ray) {
+    return null;
+  }
+
+  let closest = null;
+  for (const rock of rockInstances) {
+    const hit = intersectRock(ray.origin, ray.direction, rock);
+    if (!hit) {
+      continue;
+    }
+    if (!closest || hit.distance < closest.distance) {
+      closest = { rock, distance: hit.distance, point: hit.point };
+    }
+  }
+
+  return closest;
 }
 
 function pickSelectionAt(pointerX, pointerY) {
@@ -3100,6 +3616,15 @@ const rockTypeDefinitions = [
   { name: 'jagged', subdivisions: 1, roughness: 0.48, jaggedness: 0.55, smoothing: 0.04 },
   { name: 'smooth', subdivisions: 1, roughness: 0.22, jaggedness: 0.12, smoothing: 0.4 },
 ];
+const rockTraceMineralDefinitions = [
+  { id: 'calcite', name: 'Carbonato de calcio' },
+  { id: 'aragonite', name: 'Aragonita' },
+  { id: 'magnesium', name: 'Magnesio' },
+  { id: 'iron', name: 'Óxidos de hierro' },
+  { id: 'silica', name: 'Sílice' },
+  { id: 'strontium', name: 'Estroncio' },
+  { id: 'manganese', name: 'Manganeso' },
+];
 
 const rockTopologyCache = new Map();
 
@@ -3247,6 +3772,32 @@ function rotateVector(vertex, rotation) {
   const zFinal = z;
 
   return [x2, y2, zFinal];
+}
+
+function inverseRotateVector(vertex, rotation) {
+  const [rx, ry, rz] = rotation;
+  let [x, y, z] = vertex;
+
+  const cosZ = Math.cos(-rz);
+  const sinZ = Math.sin(-rz);
+  const xZ = x * cosZ - y * sinZ;
+  const yZ = x * sinZ + y * cosZ;
+  x = xZ;
+  y = yZ;
+
+  const cosY = Math.cos(-ry);
+  const sinY = Math.sin(-ry);
+  const xY = x * cosY + z * sinY;
+  const zY = -x * sinY + z * cosY;
+  x = xY;
+  z = zY;
+
+  const cosX = Math.cos(-rx);
+  const sinX = Math.sin(-rx);
+  const yX = y * cosX - z * sinX;
+  const zX = y * sinX + z * cosX;
+
+  return [x, yX, zX];
 }
 
 function transformRockVertex(vertex, scale, rotation, position) {
@@ -3764,7 +4315,62 @@ function tickPlants(deltaTime) {
   void deltaTime;
 }
 
+function createRockComposition(random, totalMass) {
+  const entries = [];
+  const available = rockTraceMineralDefinitions.slice();
+  const traceCount = Math.max(1, Math.floor(randomInRange(random, 2, 4)));
+  const targetTracePercent = clamp(randomInRange(random, 0.08, 0.2), 0.02, 0.45);
+  let remainingPercent = targetTracePercent;
+  let assignedTracePercent = 0;
+
+  for (let i = 0; i < traceCount && available.length > 0 && remainingPercent > 0.001; i++) {
+    const index = Math.min(available.length - 1, Math.floor(random() * available.length));
+    const mineral = available.splice(index, 1)[0];
+    const slotsLeft = traceCount - i - 1;
+    const minShare = 0.01;
+    const maxShare = Math.max(minShare, remainingPercent - slotsLeft * minShare);
+    const share =
+      slotsLeft <= 0
+        ? remainingPercent
+        : Math.min(maxShare, randomInRange(random, minShare, maxShare));
+    const clampedShare = Math.max(0, Math.min(remainingPercent, share));
+    if (clampedShare <= 0) {
+      continue;
+    }
+    remainingPercent -= clampedShare;
+    assignedTracePercent += clampedShare;
+    entries.push({
+      name: mineral.name,
+      percent: clampedShare,
+      mass: clampedShare * totalMass,
+      primary: false,
+    });
+  }
+
+  const matrixPercent = clamp01(1 - assignedTracePercent);
+  const matrixMass = matrixPercent * totalMass;
+  entries.unshift({
+    name: 'Matriz rocosa',
+    percent: matrixPercent,
+    mass: matrixMass,
+    primary: true,
+  });
+
+  const totalPercent = entries.reduce((sum, entry) => sum + entry.percent, 0);
+  if (totalPercent > 0 && Math.abs(totalPercent - 1) > 0.001) {
+    const normalization = 1 / totalPercent;
+    for (const entry of entries) {
+      entry.percent = clamp01(entry.percent * normalization);
+      entry.mass = entry.percent * totalMass;
+    }
+  }
+
+  return { entries, matrixMass };
+}
+
 function regenerateRocks(seedString, heightfield, maskfield) {
+  closeRockInfo();
+  rockInstances = [];
   if (!heightfield || !maskfield) {
     gl.bindBuffer(gl.ARRAY_BUFFER, rockBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(0), gl.STATIC_DRAW);
@@ -3803,6 +4409,7 @@ function regenerateRocks(seedString, heightfield, maskfield) {
   );
   const half = baseplateSize / 2;
   const vertices = [];
+  const generatedRocks = [];
   const maxAttempts = baseCount * 6;
   let attempts = 0;
   let placed = 0;
@@ -3852,6 +4459,27 @@ function regenerateRocks(seedString, heightfield, maskfield) {
       continue;
     }
 
+    const volume = Math.max(0, ((4 / 3) * Math.PI * scale[0] * scale[1] * scale[2]) || 0);
+    const density = randomInRange(random, 2200, 2800);
+    const totalMass = Math.max(0, volume * density);
+    const composition = createRockComposition(random, totalMass);
+    const boundingRadius = Math.max(scale[0], scale[1], scale[2]) * 1.05;
+
+    generatedRocks.push({
+      id: `rock-${generatedRocks.length + 1}`,
+      typeName: type.name ?? 'Roca',
+      position,
+      rotation,
+      scale,
+      totalMass,
+      matrixMass: composition.matrixMass,
+      compositionEntries: composition.entries,
+      formationSimulationTime: simulationTime,
+      density,
+      volume,
+      boundingRadius,
+    });
+
     vertices.push(...rockVertices);
     placed += 1;
   }
@@ -3860,7 +4488,8 @@ function regenerateRocks(seedString, heightfield, maskfield) {
   gl.bindBuffer(gl.ARRAY_BUFFER, rockBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexArray, gl.STATIC_DRAW);
   rockVertexCount = vertexArray.length / floatsPerVertex;
-  terrainInfo.rockCount = placed;
+  rockInstances = generatedRocks;
+  terrainInfo.rockCount = generatedRocks.length;
 }
 
 function regenerateTerrain(seedString) {
@@ -3890,6 +4519,7 @@ function regenerateTerrain(seedString) {
     ? visibleVertices / baseplateVertexCount
     : 0;
   terrainInfo.featureStats = featureStats;
+  resetWaterSwells(seedString);
   regenerateRocks(seedString, heightfield, maskfield);
   regeneratePlants(seedString, heightfield, maskfield);
 }
@@ -4199,8 +4829,24 @@ canvas.addEventListener('click', (event) => {
     return;
   }
 
+  const rockSelection = pendingRockSelection ?? pickRockAt(pointer.x, pointer.y);
+  pendingRockSelection = null;
+  if (rockSelection && rockSelection.rock) {
+    selectedBlock = null;
+    selectionHighlightVertexCount = 0;
+    if (selectionInfoPanel) {
+      selectionInfoPanel.hidden = true;
+    }
+    if (typeof window !== 'undefined') {
+      window.__selectedSquare = null;
+    }
+    openRockInfo(rockSelection.rock, event);
+    return;
+  }
+
   const selection = pendingSelectionForClick ?? selectBlockAtScreen(pointer.x, pointer.y);
   pendingSelectionForClick = null;
+  closeRockInfo();
   closePlantInfo();
   if (selection && selection.underwater) {
     openWaterInfo(selection, event);
@@ -4227,10 +4873,18 @@ canvas.addEventListener('pointerdown', (event) => {
   const plantSelection = pickPlantAt(pointer.x, pointer.y);
   if (plantSelection && plantSelection.plant) {
     pendingPlantSelection = plantSelection;
+    pendingRockSelection = null;
     pendingSelectionForClick = null;
     return;
   }
   pendingPlantSelection = null;
+  const rockSelection = pickRockAt(pointer.x, pointer.y);
+  if (rockSelection && rockSelection.rock) {
+    pendingRockSelection = rockSelection;
+    pendingSelectionForClick = null;
+    return;
+  }
+  pendingRockSelection = null;
   pendingSelectionForClick = selectBlockAtScreen(pointer.x, pointer.y);
 });
 
@@ -4339,6 +4993,12 @@ if (waterInfoCloseButton) {
 if (plantInfoCloseButton) {
   plantInfoCloseButton.addEventListener('click', (event) => {
     closePlantInfo({ restoreCamera: true, event });
+  });
+}
+
+if (rockInfoCloseButton) {
+  rockInfoCloseButton.addEventListener('click', (event) => {
+    closeRockInfo({ restoreCamera: true, event });
   });
 }
 
@@ -4549,6 +5209,9 @@ function updateSimulationHud() {
   if (!plantInfoPanel?.hidden) {
     updatePlantInfoPanel();
   }
+  if (!rockInfoPanel?.hidden) {
+    updateRockInfoPanel();
+  }
 }
 
 function updateDayCycleHud() {
@@ -4617,6 +5280,9 @@ function update(deltaTime) {
 
   if (Number.isFinite(deltaTime)) {
     waterAnimationTime += deltaTime;
+    updateWaterSwells(deltaTime);
+  } else {
+    updateWaterSwells(0);
   }
 
   const target = add(cameraPosition, forwardDirection);
@@ -4661,6 +5327,21 @@ function render() {
 
   if (patternTimeUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(patternTimeUniform, waterAnimationTime ?? 0);
+  }
+  if (waterTimeUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(waterTimeUniform, waterAnimationTime ?? 0);
+  }
+  if (waterSwellCountUniform && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(waterSwellCountUniform, waterSwellActiveCount);
+  }
+  if (waterSwellOriginsUniform && typeof gl.uniform4fv === 'function') {
+    gl.uniform4fv(waterSwellOriginsUniform, waterSwellUniformBuffers.origins);
+  }
+  if (waterSwellParamsUniform && typeof gl.uniform4fv === 'function') {
+    gl.uniform4fv(waterSwellParamsUniform, waterSwellUniformBuffers.params);
+  }
+  if (waterSwellStateUniform && typeof gl.uniform4fv === 'function') {
+    gl.uniform4fv(waterSwellStateUniform, waterSwellUniformBuffers.state);
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
