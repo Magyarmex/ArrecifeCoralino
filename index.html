@@ -269,6 +269,53 @@
         <p class="water-info__hint">Haz clic fuera para cerrar</p>
       </div>
     </aside>
+    <aside id="rock-info" class="rock-info" hidden data-ui-element="rock-panel">
+      <div class="rock-info__content">
+        <header class="rock-info__header">
+          <h2>Roca seleccionada</h2>
+          <button
+            type="button"
+            id="rock-info-close"
+            class="rock-info__close"
+            aria-label="Cerrar información de la roca"
+          >
+            ×
+          </button>
+        </header>
+        <p class="rock-info__description">
+          Detalles geológicos de la formación rocosa destacada.
+        </p>
+        <dl class="rock-info__stats">
+          <div>
+            <dt>Tipo</dt>
+            <dd id="rock-info-type">—</dd>
+          </div>
+          <div>
+            <dt>Masa matriz</dt>
+            <dd id="rock-info-matrix-mass">—</dd>
+          </div>
+          <div>
+            <dt>Masa total</dt>
+            <dd id="rock-info-total-mass">—</dd>
+          </div>
+          <div>
+            <dt>Tiempo desde formación</dt>
+            <dd id="rock-info-age">—</dd>
+          </div>
+          <div>
+            <dt>Tiempo para erosión</dt>
+            <dd id="rock-info-erosion">—</dd>
+          </div>
+        </dl>
+        <section class="rock-info__composition" aria-label="Composición mineral">
+          <h3>Composición mineral</h3>
+          <ul id="rock-info-minerals" class="rock-info__minerals">
+            <li class="rock-info__mineral rock-info__mineral--empty">Sin datos de composición</li>
+          </ul>
+        </section>
+        <p class="rock-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
     <aside
       id="plant-info"
       class="plant-info"
