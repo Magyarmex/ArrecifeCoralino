@@ -147,6 +147,247 @@ const uiFallbackEvents = Array.isArray(runtimeState.uiFallbackEvents)
   ? runtimeState.uiFallbackEvents
   : (runtimeState.uiFallbackEvents = []);
 
+const ambientAudioState = {
+  supported:
+    typeof window !== 'undefined' &&
+    (typeof window.AudioContext === 'function' ||
+      typeof window.webkitAudioContext === 'function'),
+  context: null,
+  gain: null,
+  sources: [],
+  initialized: false,
+  enabled: Boolean(musicToggle?.checked),
+  defaultGain: 0.32,
+  reportedInitFailure: false,
+};
+
+function ensureAmbientAudioContext() {
+  if (!ambientAudioState.supported) {
+    return null;
+  }
+
+  if (ambientAudioState.context) {
+    return ambientAudioState.context;
+  }
+
+  const AudioContextClass =
+    typeof window !== 'undefined'
+      ? window.AudioContext || window.webkitAudioContext
+      : null;
+
+  if (!AudioContextClass) {
+    ambientAudioState.supported = false;
+    return null;
+  }
+
+  try {
+    ambientAudioState.context = new AudioContextClass();
+  } catch (error) {
+    if (!ambientAudioState.reportedInitFailure) {
+      ambientAudioState.reportedInitFailure = true;
+      const message =
+        'No se pudo inicializar el audio ambiental. ' +
+        String(error && error.message ? error.message : error ?? 'Error desconocido');
+      pendingRuntimeIssueQueue.push({
+        severity: 'warning',
+        context: 'audio',
+        error: message,
+      });
+    }
+    ambientAudioState.supported = false;
+    return null;
+  }
+
+  return ambientAudioState.context;
+}
+
+function ensureAmbientMusicNodes() {
+  const context = ambientAudioState.context;
+  if (!context) {
+    return null;
+  }
+  if (ambientAudioState.initialized && ambientAudioState.gain) {
+    return ambientAudioState.gain;
+  }
+
+  try {
+    const masterGain = context.createGain();
+    masterGain.gain.value = 0;
+    masterGain.connect(context.destination);
+    ambientAudioState.gain = masterGain;
+
+    const padLayers = [
+      { frequency: 196, detune: -25, type: 'sine', gain: 0.22 },
+      { frequency: 329.63, detune: 18, type: 'triangle', gain: 0.14 },
+      { frequency: 261.63, detune: -12, type: 'sine', gain: 0.12 },
+    ];
+
+    for (const layer of padLayers) {
+      const oscillator = context.createOscillator();
+      oscillator.type = layer.type;
+      oscillator.frequency.setValueAtTime(layer.frequency, context.currentTime);
+      if (typeof layer.detune === 'number') {
+        oscillator.detune.setValueAtTime(layer.detune, context.currentTime);
+      }
+      const layerGain = context.createGain();
+      layerGain.gain.value = layer.gain;
+      oscillator.connect(layerGain);
+      layerGain.connect(masterGain);
+      oscillator.start();
+      ambientAudioState.sources.push({ node: oscillator, gain: layerGain });
+    }
+
+    const bufferLength = Math.max(1, Math.floor(context.sampleRate * 2));
+    const noiseBuffer = context.createBuffer(1, bufferLength, context.sampleRate);
+    const channelData = noiseBuffer.getChannelData(0);
+    for (let index = 0; index < channelData.length; index += 1) {
+      channelData[index] = (Math.random() * 2 - 1) * 0.18;
+    }
+    const noiseSource = context.createBufferSource();
+    noiseSource.buffer = noiseBuffer;
+    noiseSource.loop = true;
+    const noiseGain = context.createGain();
+    noiseGain.gain.value = 0.05;
+    noiseSource.connect(noiseGain);
+    noiseGain.connect(masterGain);
+    noiseSource.start();
+    ambientAudioState.sources.push({ node: noiseSource, gain: noiseGain });
+
+    ambientAudioState.initialized = true;
+  } catch (error) {
+    if (!ambientAudioState.reportedInitFailure) {
+      ambientAudioState.reportedInitFailure = true;
+      const message =
+        'Error al preparar la música ambiental. ' +
+        String(error && error.message ? error.message : error ?? 'Error desconocido');
+      pendingRuntimeIssueQueue.push({
+        severity: 'warning',
+        context: 'audio',
+        error: message,
+      });
+    }
+    ambientAudioState.gain = null;
+    ambientAudioState.sources.length = 0;
+  }
+
+  return ambientAudioState.gain;
+}
+
+function fadeAmbientMusic(targetGain) {
+  const gainNode = ambientAudioState.gain;
+  const context = ambientAudioState.context;
+  if (!gainNode || !context) {
+    return;
+  }
+  const now = typeof context.currentTime === 'number' ? context.currentTime : 0;
+  try {
+    if (typeof gainNode.gain.cancelScheduledValues === 'function') {
+      gainNode.gain.cancelScheduledValues(now);
+    }
+    if (typeof gainNode.gain.setTargetAtTime === 'function') {
+      gainNode.gain.setTargetAtTime(targetGain, now, 0.8);
+    } else {
+      gainNode.gain.value = targetGain;
+    }
+  } catch (error) {
+    void error;
+    gainNode.gain.value = targetGain;
+  }
+}
+
+function setAmbientMusicEnabled(isEnabled) {
+  ambientAudioState.enabled = Boolean(isEnabled);
+  if (!ambientAudioState.enabled) {
+    fadeAmbientMusic(0);
+    return;
+  }
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    return;
+  }
+  if (ambientAudioState.context && ambientAudioState.context.state === 'running') {
+    ensureAmbientMusicNodes();
+    fadeAmbientMusic(ambientAudioState.defaultGain);
+  }
+}
+
+function handleAmbientMusicUserGesture() {
+  if (!ambientAudioState.supported || !ambientAudioState.enabled) {
+    return;
+  }
+
+  const context = ensureAmbientAudioContext();
+  if (!context) {
+    return;
+  }
+
+  const activate = () => {
+    if (!ambientAudioState.enabled) {
+      return;
+    }
+    ensureAmbientMusicNodes();
+    fadeAmbientMusic(ambientAudioState.defaultGain);
+  };
+
+  if (context.state === 'suspended' && typeof context.resume === 'function') {
+    try {
+      const resumeResult = context.resume();
+      if (resumeResult && typeof resumeResult.then === 'function') {
+        resumeResult.then(activate).catch(() => {});
+        return;
+      }
+    } catch (error) {
+      if (!ambientAudioState.reportedInitFailure) {
+        ambientAudioState.reportedInitFailure = true;
+        const message =
+          'No se pudo activar el audio ambiental. ' +
+          String(error && error.message ? error.message : error ?? 'Error desconocido');
+        pendingRuntimeIssueQueue.push({
+          severity: 'warning',
+          context: 'audio',
+          error: message,
+        });
+      }
+      return;
+    }
+  }
+
+  activate();
+}
+
+if (musicToggle && typeof musicToggle.addEventListener === 'function') {
+  musicToggle.addEventListener('change', (event) => {
+    const shouldEnable = Boolean(event?.target?.checked);
+    setAmbientMusicEnabled(shouldEnable);
+    if (shouldEnable && event?.isTrusted) {
+      handleAmbientMusicUserGesture();
+    }
+  });
+}
+
+setAmbientMusicEnabled(ambientAudioState.enabled);
+
+if (
+  ambientAudioState.supported &&
+  typeof document !== 'undefined' &&
+  typeof document.addEventListener === 'function'
+) {
+  document.addEventListener('visibilitychange', () => {
+    if (!ambientAudioState.context) {
+      return;
+    }
+    if (document.visibilityState === 'hidden') {
+      fadeAmbientMusic(0);
+      if (ambientAudioState.context.state === 'running') {
+        ambientAudioState.context.suspend?.().catch(() => {});
+      }
+      return;
+    }
+    if (ambientAudioState.enabled) {
+      handleAmbientMusicUserGesture();
+    }
+  });
+}
+
 function registerUiFallback(id, message, severity = 'error') {
   if (!id) {
     return null;
