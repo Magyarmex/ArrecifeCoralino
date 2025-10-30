@@ -4610,6 +4610,42 @@ let pitch = -0.35; // Inclina ligeramente la cámara hacia abajo para mostrar la
 const cameraPosition = [0, 5, 20];
 
 const pointerSensitivity = 0.002;
+
+const pointerLockCursorScale = (() => {
+  const existing = runtimeGlobal.pointerLockCursorScale;
+  if (existing && typeof existing === 'object') {
+    if (!Number.isFinite(existing.x)) {
+      existing.x = 1;
+    }
+    if (!Number.isFinite(existing.y)) {
+      existing.y = 1;
+    }
+    return existing;
+  }
+  const scale = {
+    x: 1,
+    y: 1,
+    targetX: 1,
+    targetY: 1,
+    set(nextX = 1, nextY = 1) {
+      this.x = Number.isFinite(nextX) && nextX > 0 ? nextX : 1;
+      this.y = Number.isFinite(nextY) && nextY > 0 ? nextY : 1;
+      this.targetX = this.x;
+      this.targetY = this.y;
+    },
+  };
+  runtimeGlobal.pointerLockCursorScale = scale;
+  return scale;
+})();
+
+function resetPointerLockScale() {
+  if (typeof pointerLockCursorScale?.set === 'function') {
+    pointerLockCursorScale.set(1, 1);
+  } else if (pointerLockCursorScale) {
+    pointerLockCursorScale.x = 1;
+    pointerLockCursorScale.y = 1;
+  }
+}
 const moveSpeed = 12;
 
 function normalize(v) {
@@ -4813,7 +4849,20 @@ function requestCameraControl(event) {
   }
   dismissTutorialOverlay();
   if (document.pointerLockElement !== canvas) {
-    canvas.requestPointerLock();
+    try {
+      canvas.focus?.();
+    } catch (error) {
+      if (typeof console !== 'undefined') {
+        console.warn('No se pudo enfocar el lienzo antes de pointer lock', error);
+      }
+    }
+    try {
+      canvas.requestPointerLock();
+    } catch (error) {
+      if (typeof console !== 'undefined') {
+        console.warn('Error al solicitar pointer lock', error);
+      }
+    }
   }
   if (trustedInteraction) {
     handleAmbientMusicUserGesture();
@@ -5033,6 +5082,7 @@ applyTranslucentTerrainSetting(initialTranslucentTerrain);
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
+  resetPointerLockScale();
   showTutorialOverlay();
 });
 
@@ -5040,16 +5090,14 @@ document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
   if (locked) {
     dismissTutorialOverlay();
-    pointerCanvasPosition.x = canvas.width / 2;
-    pointerCanvasPosition.y = canvas.height / 2;
+    resetPointerLockScale();
   } else if (!overlayDismissed) {
     showTutorialOverlay();
     pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
     pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
   } else {
     applyTutorialState(false);
-    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
-    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
+    resetPointerLockScale();
   }
 });
 
