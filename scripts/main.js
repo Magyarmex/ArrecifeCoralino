@@ -4616,6 +4616,42 @@ let pitch = -0.35; // Inclina ligeramente la cámara hacia abajo para mostrar la
 const cameraPosition = [0, 5, 20];
 
 const pointerSensitivity = 0.002;
+
+const pointerLockCursorScale = (() => {
+  const existing = runtimeGlobal.pointerLockCursorScale;
+  if (existing && typeof existing === 'object') {
+    if (!Number.isFinite(existing.x)) {
+      existing.x = 1;
+    }
+    if (!Number.isFinite(existing.y)) {
+      existing.y = 1;
+    }
+    return existing;
+  }
+  const scale = {
+    x: 1,
+    y: 1,
+    targetX: 1,
+    targetY: 1,
+    set(nextX = 1, nextY = 1) {
+      this.x = Number.isFinite(nextX) && nextX > 0 ? nextX : 1;
+      this.y = Number.isFinite(nextY) && nextY > 0 ? nextY : 1;
+      this.targetX = this.x;
+      this.targetY = this.y;
+    },
+  };
+  runtimeGlobal.pointerLockCursorScale = scale;
+  return scale;
+})();
+
+function resetPointerLockScale() {
+  if (typeof pointerLockCursorScale?.set === 'function') {
+    pointerLockCursorScale.set(1, 1);
+  } else if (pointerLockCursorScale) {
+    pointerLockCursorScale.x = 1;
+    pointerLockCursorScale.y = 1;
+  }
+}
 const moveSpeed = 12;
 
 function normalize(v) {
@@ -5052,6 +5088,7 @@ applyTranslucentTerrainSetting(initialTranslucentTerrain);
 let pointerLockErrors = 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
+  resetPointerLockScale();
   showTutorialOverlay();
 });
 
@@ -5063,13 +5100,32 @@ document.addEventListener('pointerlockchange', () => {
     pointerCanvasPosition.y = canvas.height * 0.5;
   } else if (!overlayDismissed) {
     showTutorialOverlay();
+    pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
+    pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
   } else {
     applyTutorialState(false);
+    resetPointerLockScale();
   }
 });
 
 document.addEventListener('mousemove', (event) => {
   if (document.pointerLockElement === canvas) {
+    const scaleX = Number.isFinite(pointerLockCursorScale.x)
+      ? pointerLockCursorScale.x
+      : 1;
+    const scaleY = Number.isFinite(pointerLockCursorScale.y)
+      ? pointerLockCursorScale.y
+      : 1;
+    pointerCanvasPosition.x = clamp(
+      pointerCanvasPosition.x + (event.movementX || 0) * scaleX,
+      0,
+      canvas.width,
+    );
+    pointerCanvasPosition.y = clamp(
+      pointerCanvasPosition.y + (event.movementY || 0) * scaleY,
+      0,
+      canvas.height,
+    );
     yaw += event.movementX * pointerSensitivity;
     pitch -= event.movementY * pointerSensitivity;
     const limit = Math.PI / 2 - 0.01;
