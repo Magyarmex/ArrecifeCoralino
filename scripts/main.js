@@ -1622,38 +1622,6 @@ let rockInfoKeyHandler = null;
 let ignoreNextRockPointerDown = false;
 let pendingRockSelection = null;
 const pointerCanvasPosition = { x: 0, y: 0 };
-const pointerLockCursorScale = { x: 1, y: 1 };
-const POINTER_LOCK_SCALE_SMOOTHING = 0.2;
-const POINTER_LOCK_SCALE_MIN = 0.25;
-const POINTER_LOCK_SCALE_MAX = 2.75;
-
-function calibratePointerLockScale(rawDelta, actualDelta, axis) {
-  if (!Number.isFinite(rawDelta) || !Number.isFinite(actualDelta)) {
-    return;
-  }
-
-  const magnitude = Math.abs(actualDelta);
-  const rawMagnitude = Math.abs(rawDelta);
-
-  if (rawMagnitude < 0.01 || magnitude < 0.01) {
-    return;
-  }
-
-  const targetScale = clamp(
-    magnitude / rawMagnitude,
-    POINTER_LOCK_SCALE_MIN,
-    POINTER_LOCK_SCALE_MAX,
-  );
-
-  const currentScale = pointerLockCursorScale[axis];
-  if (!Number.isFinite(currentScale)) {
-    pointerLockCursorScale[axis] = targetScale;
-    return;
-  }
-
-  pointerLockCursorScale[axis] =
-    currentScale + (targetScale - currentScale) * POINTER_LOCK_SCALE_SMOOTHING;
-}
 
 const drawStats = {
   terrain: 0,
@@ -3056,10 +3024,6 @@ function refreshSelectionAfterTerrain() {
 function getPointerPosition(event) {
   if (!canvas) {
     return { x: 0, y: 0 };
-  }
-
-  if (document.pointerLockElement === canvas) {
-    return { x: pointerCanvasPosition.x, y: pointerCanvasPosition.y };
   }
 
   if (event) {
@@ -4824,10 +4788,6 @@ function updateCanvasSize() {
     gl.viewport(0, 0, width, height);
     pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, width);
     pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, height);
-    if (document.pointerLockElement !== canvas) {
-      pointerCanvasPosition.x = width / 2;
-      pointerCanvasPosition.y = height / 2;
-    }
   }
 }
 
@@ -5117,18 +5077,10 @@ document.addEventListener('mousemove', (event) => {
     pitch = clamp(pitch, -limit, limit);
   } else {
     const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
-    const previousX = pointerCanvasPosition.x;
-    const previousY = pointerCanvasPosition.y;
     const x = (event.clientX ?? rect.left) - rect.left;
     const y = (event.clientY ?? rect.top) - rect.top;
     const clampedX = clamp(x, 0, canvas.width);
     const clampedY = clamp(y, 0, canvas.height);
-    const deltaX = clampedX - previousX;
-    const deltaY = clampedY - previousY;
-    const rawDeltaX = typeof event.movementX === 'number' ? event.movementX : deltaX;
-    const rawDeltaY = typeof event.movementY === 'number' ? event.movementY : deltaY;
-    calibratePointerLockScale(rawDeltaX, deltaX, 'x');
-    calibratePointerLockScale(rawDeltaY, deltaY, 'y');
     pointerCanvasPosition.x = clampedX;
     pointerCanvasPosition.y = clampedY;
   }
