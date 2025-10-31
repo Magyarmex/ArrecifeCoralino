@@ -1663,6 +1663,25 @@ if (!gl) {
   throw new Error('WebGL no soportado');
 }
 
+const derivativeExtension =
+  typeof gl.getExtension === 'function' ? gl.getExtension('OES_standard_derivatives') : null;
+const derivativesSupported = Boolean(derivativeExtension);
+const lightingDiagnostics = {
+  derivativesSupported,
+  lastAppliedSunSpecular: 0,
+  lastAppliedMoonSpecular: 0,
+};
+
+if (!derivativesSupported) {
+  recordRuntimeIssue(
+    'info',
+    'webgl-derivatives',
+    new Error(
+      'Extensión OES_standard_derivatives no disponible; se usarán normales aproximadas para la iluminación.',
+    ),
+  );
+}
+
 const GL_NO_ERROR = gl.NO_ERROR ?? 0;
 
 gl.clearColor(0.05, 0.08, 0.12, 1);
@@ -1846,13 +1865,54 @@ const vertexSource = `
   }
 `;
 
+const derivativeShaderHeader = derivativesSupported
+  ? '#extension GL_OES_standard_derivatives : enable'
+  : '';
+
+const fragmentNormalComputation = derivativesSupported
+  ? `
+  vec3 computeSurfaceNormal() {
+    vec3 dx = dFdx(vPosition);
+    vec3 dy = dFdy(vPosition);
+    vec3 normal = normalize(cross(dx, dy));
+    if (length(normal) < 0.0001) {
+      return vec3(0.0, 1.0, 0.0);
+    }
+    return gl_FrontFacing ? normal : -normal;
+  }
+`
+  : `
+  vec3 computeSurfaceNormal() {
+    return vec3(0.0, 1.0, 0.0);
+  }
+`;
+
 const fragmentSource = `
   precision mediump float;
+  ${derivativeShaderHeader}
   varying vec3 vColor;
   varying vec3 vPosition;
   uniform vec3 globalLightColor;
   uniform float terrainAlpha;
+  uniform int renderMode;
   uniform float patternTime;
+  uniform vec3 ambientLightColor;
+  uniform vec3 sunLightDirection;
+  uniform vec3 sunLightColor;
+  uniform vec3 moonLightDirection;
+  uniform vec3 moonLightColor;
+  uniform vec3 viewPosition;
+  uniform float sunSpecularStrength;
+  uniform float moonSpecularStrength;
+  uniform float specularPower;
+  uniform float surfaceSpecularStrength;
+  uniform float emissiveStrength;
+
+  const int RENDER_MODE_TERRAIN = 0;
+  const int RENDER_MODE_WATER = 1;
+  const int RENDER_MODE_WIND = 2;
+  const int RENDER_MODE_CLOUD = 3;
+  const int RENDER_MODE_CELESTIAL = 4;
 
   float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -1882,50 +1942,110 @@ const fragmentSource = `
     return total;
   }
 
+  ${fragmentNormalComputation}
+
   void main() {
-    vec3 baseColor = vColor;
-    float maxComponent = max(baseColor.r, max(baseColor.g, baseColor.b));
-    float minComponent = min(baseColor.r, min(baseColor.g, baseColor.b));
-    float saturation = maxComponent - minComponent;
-    float brightness = (baseColor.r + baseColor.g + baseColor.b) / 3.0;
-    float warmth = baseColor.r - baseColor.b;
-    float blueDominance = baseColor.b - (baseColor.r + baseColor.g) * 0.5;
-    float waterMask = smoothstep(0.05, 0.18, blueDominance);
-    float sandMask = smoothstep(0.15, 0.3, warmth + saturation * 0.5) * (1.0 - waterMask);
-    float rockMask = (1.0 - sandMask) * (1.0 - waterMask) * (1.0 - smoothstep(0.55, 0.8, brightness));
+    vec3 baseColor = clamp(vColor, 0.0, 1.0);
 
-    vec3 sandColor = baseColor;
-    if (sandMask > 0.001) {
-      vec2 sandCoords = vPosition.xz * 0.12;
-      float duneWave = sin(sandCoords.x * 4.1 + patternTime * 0.45) * 0.5 +
-        cos(sandCoords.y * 3.3 - patternTime * 0.32) * 0.5;
-      float grainNoise = layeredNoise(sandCoords * 2.3 + patternTime * 0.05);
-      float speckleNoise = layeredNoise(sandCoords * 5.0 - patternTime * 0.07);
-      float pattern = duneWave * 0.18 + (grainNoise - 0.5) * 0.22 + (speckleNoise - 0.5) * 0.12;
-      float sparkle = smoothstep(0.65, 1.0, speckleNoise) * 0.08;
-      sandColor = clamp(baseColor + pattern * vec3(0.14, 0.11, 0.05) + sparkle * vec3(0.16, 0.15, 0.1), 0.0, 1.0);
+    if (renderMode == RENDER_MODE_WIND) {
+      float alpha = clamp(baseColor.b, 0.0, 1.0);
+      vec3 windColor = vec3(baseColor.r, baseColor.g, baseColor.r * 0.9);
+      vec3 litWind = clamp(windColor * ambientLightColor * globalLightColor, 0.0, 1.0);
+      gl_FragColor = vec4(litWind, alpha * terrainAlpha);
+      return;
     }
 
-    vec3 rockColor = baseColor;
-    if (rockMask > 0.001) {
-      vec2 rockCoords = vec2(
-        dot(vPosition.xz, vec2(0.68, 0.52)),
-        vPosition.y * 0.6 + vPosition.x * 0.15 - vPosition.z * 0.1
-      );
-      float strata = sin(rockCoords.x * 3.4 + patternTime * 0.35);
-      float contour = cos(rockCoords.y * 2.7 - patternTime * 0.22);
-      float coarseNoise = layeredNoise((vPosition.xz + rockCoords.xy) * 1.1 + patternTime * 0.03);
-      float fineNoise = layeredNoise(vPosition.xz * 4.8 + rockCoords.yx * 0.5);
-      float pattern = strata * 0.18 + contour * 0.12 + (coarseNoise - 0.5) * 0.28 + (fineNoise - 0.5) * 0.08;
-      float highlight = smoothstep(0.68, 1.0, fineNoise) * 0.06;
-      rockColor = clamp(baseColor + pattern * vec3(0.16, 0.14, 0.12) + highlight * vec3(0.12, 0.13, 0.14), 0.05, 1.0);
+    if (renderMode == RENDER_MODE_CELESTIAL) {
+      vec3 emissive = clamp(baseColor * (1.0 + emissiveStrength), 0.0, 1.5);
+      gl_FragColor = vec4(emissive, terrainAlpha);
+      return;
     }
 
-    vec3 finalColor = baseColor;
-    finalColor = mix(finalColor, sandColor, clamp(sandMask, 0.0, 1.0));
-    finalColor = mix(finalColor, rockColor, clamp(rockMask, 0.0, 1.0));
+    vec3 texturedColor = baseColor;
+    if (renderMode != RENDER_MODE_CLOUD) {
+      float maxComponent = max(baseColor.r, max(baseColor.g, baseColor.b));
+      float minComponent = min(baseColor.r, min(baseColor.g, baseColor.b));
+      float saturation = maxComponent - minComponent;
+      float brightness = (baseColor.r + baseColor.g + baseColor.b) / 3.0;
+      float warmth = baseColor.r - baseColor.b;
+      float blueDominance = baseColor.b - (baseColor.r + baseColor.g) * 0.5;
+      float waterMask = smoothstep(0.05, 0.18, blueDominance);
+      float sandMask = smoothstep(0.15, 0.3, warmth + saturation * 0.5) * (1.0 - waterMask);
+      float rockMask = (1.0 - sandMask) * (1.0 - waterMask) * (1.0 - smoothstep(0.55, 0.8, brightness));
 
-    gl_FragColor = vec4(finalColor * globalLightColor, terrainAlpha);
+      vec3 sandColor = baseColor;
+      if (sandMask > 0.001) {
+        vec2 sandCoords = vPosition.xz * 0.12;
+        float duneWave = sin(sandCoords.x * 4.1 + patternTime * 0.45) * 0.5 +
+          cos(sandCoords.y * 3.3 - patternTime * 0.32) * 0.5;
+        float grainNoise = layeredNoise(sandCoords * 2.3 + patternTime * 0.05);
+        float speckleNoise = layeredNoise(sandCoords * 5.0 - patternTime * 0.07);
+        float pattern = duneWave * 0.18 + (grainNoise - 0.5) * 0.22 + (speckleNoise - 0.5) * 0.12;
+        float sparkle = smoothstep(0.65, 1.0, speckleNoise) * 0.08;
+        sandColor = clamp(baseColor + pattern * vec3(0.14, 0.11, 0.05) + sparkle * vec3(0.16, 0.15, 0.1), 0.0, 1.0);
+      }
+
+      vec3 rockColor = baseColor;
+      if (rockMask > 0.001) {
+        vec2 rockCoords = vec2(
+          dot(vPosition.xz, vec2(0.68, 0.52)),
+          vPosition.y * 0.6 + vPosition.x * 0.15 - vPosition.z * 0.1
+        );
+        float strata = sin(rockCoords.x * 3.4 + patternTime * 0.35);
+        float contour = cos(rockCoords.y * 2.7 - patternTime * 0.22);
+        float coarseNoise = layeredNoise((vPosition.xz + rockCoords.xy) * 1.1 + patternTime * 0.03);
+        float fineNoise = layeredNoise(vPosition.xz * 4.8 + rockCoords.yx * 0.5);
+        float pattern = strata * 0.18 + contour * 0.12 + (coarseNoise - 0.5) * 0.28 + (fineNoise - 0.5) * 0.08;
+        float highlight = smoothstep(0.68, 1.0, fineNoise) * 0.06;
+        rockColor = clamp(baseColor + pattern * vec3(0.16, 0.14, 0.12) + highlight * vec3(0.12, 0.13, 0.14), 0.05, 1.0);
+      }
+
+      texturedColor = mix(texturedColor, sandColor, clamp(sandMask, 0.0, 1.0));
+      texturedColor = mix(texturedColor, rockColor, clamp(rockMask, 0.0, 1.0));
+    }
+
+    vec3 normal = computeSurfaceNormal();
+    vec3 viewDir = normalize(viewPosition - vPosition);
+    if (length(viewDir) < 0.0001) {
+      viewDir = vec3(0.0, 0.0, 1.0);
+    }
+
+    float sunDiffuse = max(0.0, dot(normal, sunLightDirection));
+    float moonDiffuse = max(0.0, dot(normal, moonLightDirection));
+
+    vec3 sunHalf = normalize(sunLightDirection + viewDir);
+    vec3 moonHalf = normalize(moonLightDirection + viewDir);
+
+    float rawSunSpec = pow(max(0.0, dot(normal, sunHalf)), specularPower);
+    float rawMoonSpec = pow(max(0.0, dot(normal, moonHalf)), specularPower);
+
+    float sunSpec = rawSunSpec * sunSpecularStrength * surfaceSpecularStrength;
+    float moonSpec = rawMoonSpec * moonSpecularStrength * surfaceSpecularStrength;
+
+    vec3 lighting = ambientLightColor +
+      sunLightColor * (sunDiffuse + sunSpec) +
+      moonLightColor * (moonDiffuse + moonSpec);
+
+    if (renderMode == RENDER_MODE_CLOUD) {
+      lighting += sunLightColor * (0.1 + 0.2 * sunDiffuse);
+      lighting += moonLightColor * (0.08 + 0.12 * moonDiffuse);
+    }
+
+    vec3 finalColor = clamp(texturedColor * lighting * globalLightColor, 0.0, 1.35);
+
+    if (renderMode == RENDER_MODE_WATER) {
+      float sparkle = clamp(sunSpec * 2.1 + moonSpec * 1.1, 0.0, 1.2);
+      float coolSpark = clamp(moonSpec * 0.6, 0.0, 0.6);
+      finalColor = clamp(finalColor + sparkle * vec3(0.28, 0.28, 0.25) + coolSpark * vec3(0.05, 0.08, 0.16), 0.0, 1.3);
+    } else if (renderMode == RENDER_MODE_CLOUD) {
+      finalColor = clamp(mix(finalColor, vec3(1.0), 0.12), 0.0, 1.15);
+    }
+
+    if (emissiveStrength > 0.0) {
+      finalColor = clamp(finalColor + texturedColor * emissiveStrength, 0.0, 1.35);
+    }
+
+    gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), terrainAlpha);
   }
 `;
 
@@ -1953,6 +2073,17 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
+const ambientLightColorUniform = gl.getUniformLocation(program, 'ambientLightColor');
+const sunLightDirectionUniform = gl.getUniformLocation(program, 'sunLightDirection');
+const sunLightColorUniform = gl.getUniformLocation(program, 'sunLightColor');
+const moonLightDirectionUniform = gl.getUniformLocation(program, 'moonLightDirection');
+const moonLightColorUniform = gl.getUniformLocation(program, 'moonLightColor');
+const viewPositionUniform = gl.getUniformLocation(program, 'viewPosition');
+const sunSpecularStrengthUniform = gl.getUniformLocation(program, 'sunSpecularStrength');
+const moonSpecularStrengthUniform = gl.getUniformLocation(program, 'moonSpecularStrength');
+const specularPowerUniform = gl.getUniformLocation(program, 'specularPower');
+const surfaceSpecularStrengthUniform = gl.getUniformLocation(program, 'surfaceSpecularStrength');
+const emissiveStrengthUniform = gl.getUniformLocation(program, 'emissiveStrength');
 const uniformLocations = {
   renderMode: gl.getUniformLocation(program, 'renderMode'),
 };
@@ -1983,6 +2114,9 @@ const waterSwellStateUniform = gl.getUniformLocation(program, 'waterSwellState[0
 const renderModes = {
   terrain: 0,
   water: 1,
+  wind: 2,
+  cloud: 3,
+  celestial: 4,
 };
 
 const skyboxVertexSource = `
@@ -2214,6 +2348,21 @@ if (waterFoamColorUniform) {
 if (waterColorQuantizeStepUniform) {
   gl.uniform1f(waterColorQuantizeStepUniform, waterColorQuantizeStep);
 }
+if (specularPowerUniform && typeof gl.uniform1f === 'function') {
+  gl.uniform1f(specularPowerUniform, 28);
+}
+if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+  gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+}
+if (sunSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+  gl.uniform1f(sunSpecularStrengthUniform, 0.8);
+}
+if (moonSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+  gl.uniform1f(moonSpecularStrengthUniform, 0.35);
+}
+if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
+  gl.uniform1f(emissiveStrengthUniform, 0);
+}
 if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
   gl.uniform1f(terrainAlphaUniform, 1);
 }
@@ -2229,6 +2378,10 @@ const chunkGridBuffer = createBuffer(new Float32Array(0));
 const selectionHighlightBuffer = createBuffer(new Float32Array(0));
 const rockBuffer = createBuffer(new Float32Array(0));
 const plantBuffer = createBuffer(new Float32Array(0));
+const windBuffer = createBuffer(new Float32Array(0));
+const cloudBuffer = createBuffer(new Float32Array(0));
+const sunBuffer = createBuffer(new Float32Array(0));
+const moonBuffer = createBuffer(new Float32Array(0));
 
 let blockGridVertexCount = 0;
 let chunkGridVertexCount = 0;
@@ -2238,6 +2391,41 @@ let selectionHighlightVertexCount = 0;
 let waterVertexCount = 0;
 let waterVertexData = null;
 let waterNeedsUpload = false;
+let windVertexCount = 0;
+let cloudVertexCount = 0;
+let sunVertexCount = 0;
+let moonVertexCount = 0;
+let sunVertexData = null;
+let moonVertexData = null;
+let celestialTemplate = null;
+
+const WEATHER_WIND_LEAD_TIME = 1.4;
+const WEATHER_WIND_DURATION = 2.6;
+const MAX_WIND_EFFECTS = 12;
+const CLOUD_COUNT = 28;
+const CLOUD_ALTITUDE = 150;
+const CLOUD_EXTENT_MULTIPLIER = 2.6;
+const CELESTIAL_SUBDIVISIONS = 1;
+const CELESTIAL_SUN_RADIUS = 42;
+const CELESTIAL_MOON_RADIUS = 32;
+
+const weatherState = {
+  wind: {
+    active: [],
+    metrics: { active: 0, spawned: 0, culled: 0 },
+    sequence: 0,
+  },
+  clouds: {
+    random: null,
+    clouds: [],
+    vertexData: new Float32Array(0),
+    metrics: { count: 0 },
+    needsUpload: true,
+  },
+};
+
+let cloudDriftAccumulator = 0;
+let lastWindUpdateTime = 0;
 
 let terrainHeightField = null;
 let terrainMaskField = null;
@@ -2278,6 +2466,9 @@ const drawStats = {
   water: 0,
   rocks: 0,
   plants: 0,
+  wind: 0,
+  clouds: 0,
+  celestial: 0,
   blockGrid: 0,
   chunkGrid: 0,
   selection: 0,
@@ -2546,6 +2737,28 @@ function scheduleNextWaterSwell(currentTime) {
   waterSwellState.nextSpawnTime = currentTime + interval;
 }
 
+function scheduleWindGustFromSwell(swell) {
+  if (!swell) {
+    return;
+  }
+  const direction = swell.direction || [0, 1];
+  const length = Math.hypot(direction[0], direction[1]) || 1;
+  const normalizedDir = [direction[0] / length, direction[1] / length];
+  const effect = {
+    id: ++weatherState.wind.sequence,
+    origin: swell.origin ? swell.origin.slice() : [0, 0],
+    direction: normalizedDir,
+    crestLength: swell.crestLength ?? 6,
+    speed: swell.speed ?? 7,
+    startTime: swell.startTime ?? waterAnimationTime,
+    appearTime: (swell.startTime ?? waterAnimationTime) - WEATHER_WIND_LEAD_TIME,
+    lifespan: WEATHER_WIND_DURATION,
+    leadDistance: (swell.speed ?? 7) * WEATHER_WIND_LEAD_TIME,
+  };
+  weatherState.wind.active.push(effect);
+  weatherState.wind.metrics.spawned += 1;
+}
+
 function resetWaterSwells(seed) {
   const baseSeed = stringToSeed(seed ?? currentSeed);
   const random = createRandomGenerator(baseSeed ^ 0x3f2a9d17);
@@ -2561,6 +2774,11 @@ function resetWaterSwells(seed) {
   waterSwellUniformBuffers.origins.fill(0);
   waterSwellUniformBuffers.params.fill(0);
   waterSwellUniformBuffers.state.fill(0);
+  weatherState.wind.active = [];
+  weatherState.wind.metrics.active = 0;
+  weatherState.wind.metrics.culled = 0;
+  weatherState.wind.metrics.spawned = 0;
+  weatherState.wind.sequence = 0;
   spawnWaterSwell(startTime);
   scheduleNextWaterSwell(startTime);
 }
@@ -2600,7 +2818,7 @@ function spawnWaterSwell(currentTime) {
   const lifespan =
     (baseplateSize + decayDistance + crestLength + spawnRadius) / Math.max(0.1, speed) + 6;
 
-  waterSwellState.active.push({
+  const newSwell = {
     origin: [originX, originZ],
     direction,
     amplitude,
@@ -2612,7 +2830,10 @@ function spawnWaterSwell(currentTime) {
     decayDistance,
     splashHeight,
     lifespan,
-  });
+  };
+
+  waterSwellState.active.push(newSwell);
+  scheduleWindGustFromSwell(newSwell);
 
   if (waterSwellState.active.length > MAX_WATER_SWELLS) {
     waterSwellState.active.shift();
@@ -2661,6 +2882,362 @@ function updateWaterSwells(deltaTime) {
     waterSwellUniformBuffers.state[baseIndex + 1] = swell.speed;
     waterSwellUniformBuffers.state[baseIndex + 2] = swell.decayDistance;
     waterSwellUniformBuffers.state[baseIndex + 3] = swell.splashHeight;
+  }
+}
+
+function updateWindEffects(deltaTime) {
+  void deltaTime;
+  const now = waterAnimationTime;
+  const active = [];
+  for (const effect of weatherState.wind.active) {
+    const expireTime = (effect.appearTime ?? effect.startTime) + (effect.lifespan ?? WEATHER_WIND_DURATION);
+    if (now <= expireTime + 0.1) {
+      active.push(effect);
+    } else {
+      weatherState.wind.metrics.culled += 1;
+    }
+  }
+
+  if (active.length > MAX_WIND_EFFECTS) {
+    const overflow = active.length - MAX_WIND_EFFECTS;
+    active.splice(0, overflow);
+    weatherState.wind.metrics.culled += overflow;
+  }
+
+  weatherState.wind.active = active;
+  weatherState.wind.metrics.active = active.length;
+  lastWindUpdateTime = now;
+}
+
+function initializeCloudField(seedString) {
+  const baseSeed = stringToSeed(`${seedString ?? currentSeed}-clouds`);
+  const random = createRandomGenerator(baseSeed);
+  const half = (baseplateSize / 2) * CLOUD_EXTENT_MULTIPLIER;
+  const clouds = [];
+
+  for (let i = 0; i < CLOUD_COUNT; i++) {
+    const x = randomInRange(random, -half, half);
+    const z = randomInRange(random, -half, half);
+    const baseAltitude = CLOUD_ALTITUDE + randomInRange(random, -4, 4);
+    const radius = randomInRange(random, 12, 26);
+    const depth = randomInRange(random, radius * 0.45, radius * 0.75);
+    const driftAngle = randomInRange(random, 0, Math.PI * 2);
+    const driftSpeed = randomInRange(random, 0.35, 0.95);
+    const color = [
+      clamp(randomInRange(random, 0.88, 0.96), 0, 1),
+      clamp(randomInRange(random, 0.9, 0.98), 0, 1),
+      clamp(randomInRange(random, 0.92, 0.99), 0, 1),
+    ];
+
+    clouds.push({
+      center: [x, baseAltitude, z],
+      baseAltitude,
+      radius,
+      depth,
+      thickness: randomInRange(random, 6, 12),
+      driftDirection: [Math.cos(driftAngle), Math.sin(driftAngle)],
+      driftSpeed,
+      wobble: randomInRange(random, 0.35, 0.8),
+      phase: randomInRange(random, 0, Math.PI * 2),
+      puffCount: 3 + Math.floor(randomInRange(random, 0, 2.999)),
+      color,
+      rotation: randomInRange(random, 0, Math.PI * 2),
+    });
+  }
+
+  weatherState.clouds.random = random;
+  weatherState.clouds.clouds = clouds;
+  weatherState.clouds.vertexData = new Float32Array(0);
+  weatherState.clouds.needsUpload = true;
+  weatherState.clouds.metrics.count = clouds.length;
+  cloudVertexCount = 0;
+}
+
+function updateCloudField(deltaTime) {
+  const field = weatherState.clouds;
+  const clouds = field.clouds;
+  if (!clouds || clouds.length === 0) {
+    return;
+  }
+
+  const dt = Number.isFinite(deltaTime) ? deltaTime : 0;
+  cloudDriftAccumulator += dt;
+  const half = (baseplateSize / 2) * CLOUD_EXTENT_MULTIPLIER;
+  const wobbleTime = waterAnimationTime * 0.12;
+
+  for (const cloud of clouds) {
+    if (!cloud || !cloud.center) {
+      continue;
+    }
+    const speed = cloud.driftSpeed ?? 0;
+    const dir = cloud.driftDirection ?? [0, 0];
+    cloud.center[0] += dir[0] * speed * dt;
+    cloud.center[2] += dir[1] * speed * dt;
+
+    if (cloud.center[0] < -half) {
+      cloud.center[0] += half * 2;
+    } else if (cloud.center[0] > half) {
+      cloud.center[0] -= half * 2;
+    }
+    if (cloud.center[2] < -half) {
+      cloud.center[2] += half * 2;
+    } else if (cloud.center[2] > half) {
+      cloud.center[2] -= half * 2;
+    }
+
+    const wobble = cloud.wobble ?? 0;
+    const baseAltitude = cloud.baseAltitude ?? CLOUD_ALTITUDE;
+    const phase = cloud.phase ?? 0;
+    cloud.center[1] = baseAltitude + Math.sin(phase + wobbleTime) * wobble * 6;
+  }
+
+  if (cloudDriftAccumulator >= 0.18) {
+    field.needsUpload = true;
+    cloudDriftAccumulator = 0;
+  }
+}
+
+function rebuildCloudGeometry() {
+  const field = weatherState.clouds;
+  const clouds = field.clouds;
+  if (!clouds || clouds.length === 0) {
+    field.vertexData = new Float32Array(0);
+    cloudVertexCount = 0;
+    field.metrics.count = 0;
+    try {
+      gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, field.vertexData, gl.DYNAMIC_DRAW);
+    } catch (error) {
+      recordRuntimeIssue('warning', 'cloud-buffer', error);
+    }
+    field.needsUpload = false;
+    return;
+  }
+
+  let totalVertices = 0;
+  for (const cloud of clouds) {
+    const puffCount = Math.max(2, cloud?.puffCount ?? 3);
+    totalVertices += puffCount * 6;
+  }
+
+  const vertexData = new Float32Array(totalVertices * floatsPerVertex);
+  let offset = 0;
+
+  for (const cloud of clouds) {
+    if (!cloud || !cloud.center) {
+      continue;
+    }
+    const puffCount = Math.max(2, cloud.puffCount ?? 3);
+    const halfHeight = Math.max(1.5, (cloud.thickness ?? 6) / 2);
+    const center = cloud.center;
+    for (let i = 0; i < puffCount; i++) {
+      const angle = (Math.PI / puffCount) * i + (cloud.rotation ?? 0);
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
+      const halfWidth = Math.max(3.5, cloud.radius * (0.4 + (i / puffCount) * 0.35));
+      const offsetStrength = cloud.depth ?? cloud.radius * 0.6;
+      const offsetX = Math.cos(angle * 1.7) * offsetStrength * 0.12;
+      const offsetZ = Math.sin(angle * 1.7) * offsetStrength * 0.12;
+      const quadCenter = [center[0] + offsetX, center[1], center[2] + offsetZ];
+      const right = [cosA, 0, sinA];
+      const topColor = [
+        Math.min(1, (cloud.color?.[0] ?? 0.9) + 0.05),
+        Math.min(1, (cloud.color?.[1] ?? 0.92) + 0.04),
+        Math.min(1, (cloud.color?.[2] ?? 0.95) + 0.05),
+      ];
+      const baseColor = [
+        Math.max(0, (cloud.color?.[0] ?? 0.9) - 0.02),
+        Math.max(0, (cloud.color?.[1] ?? 0.92) - 0.02),
+        Math.max(0, (cloud.color?.[2] ?? 0.95) - 0.03),
+      ];
+
+      const topLeft = [
+        quadCenter[0] - right[0] * halfWidth,
+        quadCenter[1] + halfHeight,
+        quadCenter[2] - right[2] * halfWidth,
+      ];
+      const topRight = [
+        quadCenter[0] + right[0] * halfWidth,
+        quadCenter[1] + halfHeight,
+        quadCenter[2] + right[2] * halfWidth,
+      ];
+      const bottomRight = [
+        quadCenter[0] + right[0] * halfWidth,
+        quadCenter[1] - halfHeight,
+        quadCenter[2] + right[2] * halfWidth,
+      ];
+      const bottomLeft = [
+        quadCenter[0] - right[0] * halfWidth,
+        quadCenter[1] - halfHeight,
+        quadCenter[2] - right[2] * halfWidth,
+      ];
+
+      offset = pushVertex(vertexData, offset, topLeft[0], topLeft[1], topLeft[2], topColor);
+      offset = pushVertex(vertexData, offset, topRight[0], topRight[1], topRight[2], topColor);
+      offset = pushVertex(vertexData, offset, bottomRight[0], bottomRight[1], bottomRight[2], baseColor);
+      offset = pushVertex(vertexData, offset, topLeft[0], topLeft[1], topLeft[2], topColor);
+      offset = pushVertex(vertexData, offset, bottomRight[0], bottomRight[1], bottomRight[2], baseColor);
+      offset = pushVertex(vertexData, offset, bottomLeft[0], bottomLeft[1], bottomLeft[2], baseColor);
+    }
+  }
+
+  cloudVertexCount = vertexData.length / floatsPerVertex;
+  weatherState.clouds.vertexData = vertexData;
+  weatherState.clouds.needsUpload = false;
+  weatherState.clouds.metrics.count = clouds.length;
+
+  try {
+    gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+  } catch (error) {
+    recordRuntimeIssue('warning', 'cloud-buffer', error);
+  }
+}
+
+function buildWindVertices(effect, now) {
+  if (!effect) {
+    return null;
+  }
+  const appearTime = effect.appearTime ?? effect.startTime ?? now;
+  const lifespan = effect.lifespan ?? WEATHER_WIND_DURATION;
+  const progress = (now - appearTime) / lifespan;
+  if (progress <= 0 || progress >= 1.05) {
+    return null;
+  }
+
+  const fadeIn = clamp01((progress - 0.02) / 0.18);
+  const fadeOut = clamp01(1 - (progress - 0.6) / 0.4);
+  const alpha = clamp01(fadeIn * fadeOut);
+  if (alpha <= 0.001) {
+    return null;
+  }
+
+  const direction = effect.direction ?? [0, 1];
+  const normalizedDir = normalize2D(direction);
+  const perp = normalize2D([-normalizedDir[1], normalizedDir[0]]);
+  const speed = effect.speed ?? 6;
+  const leadDistance = effect.leadDistance ?? speed * WEATHER_WIND_LEAD_TIME;
+  const traveled = Math.max(0, now - (effect.startTime ?? now)) * speed;
+  const centerDistance = traveled + leadDistance * (1 - progress * 0.65);
+  const center = [
+    effect.origin[0] + normalizedDir[0] * centerDistance,
+    waterSurfaceLevel + 0.35 + progress * 0.45,
+    effect.origin[1] + normalizedDir[1] * centerDistance,
+  ];
+
+  const length = (effect.crestLength ?? 6) * (0.35 + progress * 0.6);
+  const width = 0.18 + progress * 0.28;
+  const halfLength = length / 2;
+  const head = [
+    center[0] + normalizedDir[0] * halfLength,
+    center[1] + progress * 0.18,
+    center[2] + normalizedDir[1] * halfLength,
+  ];
+  const tail = [
+    center[0] - normalizedDir[0] * halfLength,
+    center[1] - progress * 0.12,
+    center[2] - normalizedDir[1] * halfLength,
+  ];
+  const lateral = [perp[0] * width, 0, perp[1] * width];
+
+  const vertices = new Float32Array(6 * floatsPerVertex);
+  let offset = 0;
+  const headColor = [0.95, 0.92, alpha];
+  const tailColor = [0.85, 0.82, alpha * 0.85];
+
+  offset = pushVertex(vertices, offset, head[0] + lateral[0], head[1], head[2] + lateral[2], headColor);
+  offset = pushVertex(vertices, offset, head[0] - lateral[0], head[1], head[2] - lateral[2], headColor);
+  offset = pushVertex(vertices, offset, tail[0] + lateral[0], tail[1], tail[2] + lateral[2], tailColor);
+  offset = pushVertex(vertices, offset, head[0] - lateral[0], head[1], head[2] - lateral[2], headColor);
+  offset = pushVertex(vertices, offset, tail[0] - lateral[0], tail[1], tail[2] - lateral[2], tailColor);
+  offset = pushVertex(vertices, offset, tail[0] + lateral[0], tail[1], tail[2] + lateral[2], tailColor);
+
+  return { vertices, alpha: clamp01(alpha * 0.65 + 0.2), progress: clamp01(progress) };
+}
+
+function ensureCelestialTemplate() {
+  if (celestialTemplate) {
+    return celestialTemplate;
+  }
+  let topology = createBaseIcosahedron();
+  for (let i = 0; i < CELESTIAL_SUBDIVISIONS; i++) {
+    topology = subdivideTopology(topology);
+  }
+  const triangles = [];
+  for (const face of topology.faces) {
+    triangles.push(topology.vertices[face[0]]);
+    triangles.push(topology.vertices[face[1]]);
+    triangles.push(topology.vertices[face[2]]);
+  }
+  celestialTemplate = { triangles };
+  return celestialTemplate;
+}
+
+function fillCelestialVertexData(target, radius, position, color) {
+  const template = ensureCelestialTemplate();
+  const requiredLength = template.triangles.length * floatsPerVertex;
+  let data = target;
+  if (!data || data.length !== requiredLength) {
+    data = new Float32Array(requiredLength);
+  }
+  let offset = 0;
+  for (const vertex of template.triangles) {
+    offset = pushVertex(
+      data,
+      offset,
+      position[0] + vertex[0] * radius,
+      position[1] + vertex[1] * radius,
+      position[2] + vertex[2] * radius,
+      color,
+    );
+  }
+  return data;
+}
+
+function updateCelestialGeometry() {
+  const template = ensureCelestialTemplate();
+  if (!template) {
+    return;
+  }
+
+  try {
+    const sunColor = [
+      clamp01(dayNightCycleState.sunLightColor[0] + 0.25),
+      clamp01(dayNightCycleState.sunLightColor[1] + 0.18),
+      clamp01(dayNightCycleState.sunLightColor[2] + 0.12),
+    ];
+    sunVertexData = fillCelestialVertexData(
+      sunVertexData,
+      CELESTIAL_SUN_RADIUS,
+      dayNightCycleState.sunPosition,
+      sunColor,
+    );
+    sunVertexCount = sunVertexData.length / floatsPerVertex;
+    gl.bindBuffer(gl.ARRAY_BUFFER, sunBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, sunVertexData, gl.DYNAMIC_DRAW);
+  } catch (error) {
+    recordRuntimeIssue('warning', 'sun-geometry', error);
+    sunVertexCount = 0;
+  }
+
+  try {
+    const moonColor = [
+      clamp01(dayNightCycleState.moonLightColor[0] + 0.08),
+      clamp01(dayNightCycleState.moonLightColor[1] + 0.1),
+      clamp01(dayNightCycleState.moonLightColor[2] + 0.12),
+    ];
+    moonVertexData = fillCelestialVertexData(
+      moonVertexData,
+      CELESTIAL_MOON_RADIUS,
+      dayNightCycleState.moonPosition,
+      moonColor,
+    );
+    moonVertexCount = moonVertexData.length / floatsPerVertex;
+    gl.bindBuffer(gl.ARRAY_BUFFER, moonBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, moonVertexData, gl.DYNAMIC_DRAW);
+  } catch (error) {
+    recordRuntimeIssue('warning', 'moon-geometry', error);
+    moonVertexCount = 0;
   }
 }
 
@@ -2839,6 +3416,19 @@ const dayNightCycleState = {
   ]),
   lightColor: [1, 1, 1],
   sunAngle: -Math.PI / 2,
+  sunDirection: [0, -1, 0],
+  sunPosition: [0, 0, 0],
+  sunLightColor: dayLightTint.slice(),
+  sunSpecularStrength: 0.8,
+  sunlightIntensity: 0,
+  sunAltitude: -1,
+  moonDirection: [0, 1, 0],
+  moonPosition: [0, 0, 0],
+  moonLightColor: nightLightTint.slice(),
+  moonSpecularStrength: 0.35,
+  moonlightIntensity: 0,
+  moonAltitude: 1,
+  ambientLightColor: nightLightTint.slice(),
   skyGradient: {
     top: defaultSkyGradient.top.slice(),
     middle: defaultSkyGradient.middle.slice(),
@@ -2925,14 +3515,67 @@ function updateDayNightCycleState(currentSimulationTime) {
   const cycleTime = ((currentSimulationTime % duration) + duration) % duration;
   const normalized = cycleTime / duration;
   const sunAngle = normalized * 2 * Math.PI - Math.PI / 2;
-  const daylight = clamp01(Math.sin(sunAngle) * 0.5 + 0.5);
+  const sunOrbitRadius = Math.max(baseplateSize * 2.6, 520);
+  const moonOrbitRadius = Math.max(baseplateSize * 2.3, 460);
+  const sunVerticalFactor = Math.sin(sunAngle);
+  const sunLateral = Math.sin(normalized * 2 * Math.PI + Math.PI / 4) * 0.45;
+  const sunPosition = [
+    Math.cos(sunAngle) * sunOrbitRadius,
+    sunVerticalFactor * sunOrbitRadius * 0.62,
+    sunLateral * sunOrbitRadius * 0.48,
+  ];
+  const sunDirection = normalize(sunPosition);
+
+  const moonAngle = sunAngle + Math.PI;
+  const moonVerticalFactor = Math.sin(moonAngle);
+  const moonLateral = Math.sin(normalized * 2 * Math.PI + Math.PI * 0.85) * 0.42;
+  const moonPosition = [
+    Math.cos(moonAngle) * moonOrbitRadius,
+    moonVerticalFactor * moonOrbitRadius * 0.55,
+    moonLateral * moonOrbitRadius * 0.4,
+  ];
+  const moonDirection = normalize(moonPosition);
+
+  const daylight = clamp01(sunDirection[1] * 0.55 + 0.5);
+  const rawMoonVisibility = clamp01((1 - daylight) * 0.85 + (moonDirection[1] * 0.6 + 0.4));
+  const moonlight = clamp01(rawMoonVisibility);
   const intensity = 0.25 + daylight * 0.75;
   const tint = mixColor(nightLightTint, dayLightTint, daylight);
   const lightColor = [
-    clamp01(tint[0] * intensity),
-    clamp01(tint[1] * intensity),
-    clamp01(tint[2] * intensity),
+    clamp01(tint[0] * (0.35 + daylight * 0.95)),
+    clamp01(tint[1] * (0.35 + daylight * 0.95)),
+    clamp01(tint[2] * (0.35 + daylight * 0.95)),
   ];
+
+  const ambientNight = [0.08, 0.11, 0.18];
+  const ambientDay = [0.42, 0.48, 0.56];
+  const ambientLightColor = [
+    clamp01(lerp(ambientNight[0], ambientDay[0], daylight)),
+    clamp01(lerp(ambientNight[1], ambientDay[1], daylight)),
+    clamp01(lerp(ambientNight[2], ambientDay[2], daylight)),
+  ];
+
+  const baseSunColor = mixColor([1, 0.82, 0.6], [1, 0.96, 0.85], clamp01(daylight * 0.9));
+  const sunLightColor = [
+    clamp01(baseSunColor[0] * (0.2 + daylight * 1.4)),
+    clamp01(baseSunColor[1] * (0.22 + daylight * 1.35)),
+    clamp01(baseSunColor[2] * (0.24 + daylight * 1.2)),
+  ];
+  const baseMoonColor = [0.45, 0.52, 0.78];
+  const moonLightColor = [
+    clamp01(baseMoonColor[0] * (0.18 + moonlight * 0.5)),
+    clamp01(baseMoonColor[1] * (0.2 + moonlight * 0.48)),
+    clamp01(baseMoonColor[2] * (0.24 + moonlight * 0.55)),
+  ];
+  const sunSpecularStrength = clamp01(0.45 + daylight * 0.7);
+  const moonSpecularStrength = clamp01(0.22 + moonlight * 0.35);
+
+  const { gradient, weights } = computeSkyboxGradient(normalized);
+  const averageSkyColor = normalizeColor([
+    (gradient.top[0] + gradient.middle[0] + gradient.bottom[0]) / 3,
+    (gradient.top[1] + gradient.middle[1] + gradient.bottom[1]) / 3,
+    (gradient.top[2] + gradient.middle[2] + gradient.bottom[2]) / 3,
+  ]);
 
   const { gradient, weights } = computeSkyboxGradient(normalized);
   const averageSkyColor = normalizeColor([
@@ -2947,6 +3590,19 @@ function updateDayNightCycleState(currentSimulationTime) {
   dayNightCycleState.skyColor = averageSkyColor;
   dayNightCycleState.lightColor = lightColor;
   dayNightCycleState.sunAngle = sunAngle;
+  dayNightCycleState.sunDirection = sunDirection;
+  dayNightCycleState.sunPosition = sunPosition;
+  dayNightCycleState.sunLightColor = sunLightColor;
+  dayNightCycleState.sunSpecularStrength = sunSpecularStrength;
+  dayNightCycleState.sunlightIntensity = daylight;
+  dayNightCycleState.sunAltitude = sunPosition[1];
+  dayNightCycleState.moonDirection = moonDirection;
+  dayNightCycleState.moonPosition = moonPosition;
+  dayNightCycleState.moonLightColor = moonLightColor;
+  dayNightCycleState.moonSpecularStrength = moonSpecularStrength;
+  dayNightCycleState.moonlightIntensity = moonlight;
+  dayNightCycleState.moonAltitude = moonPosition[1];
+  dayNightCycleState.ambientLightColor = ambientLightColor;
   dayNightCycleState.skyGradient.top = gradient.top;
   dayNightCycleState.skyGradient.middle = gradient.middle;
   dayNightCycleState.skyGradient.bottom = gradient.bottom;
@@ -4593,30 +5249,28 @@ function tintRockBaseColor(baseColor, composition) {
   const phosphorusPercent = clamp01(composition.phosphorusPercent ?? 0);
 
   let sulfurInfluence = 0;
-  if (sulfurPercent >= 0.7) {
-    sulfurInfluence = 1;
-  } else if (sulfurPercent > 0.005) {
-    const normalized = clamp01((sulfurPercent - 0.005) / 0.32);
-    sulfurInfluence = Math.pow(normalized, 1.35);
+  if (sulfurPercent > 0) {
+    const subtle = clamp01(sulfurPercent / 0.24) * 0.25;
+    const pronounced = clamp01((sulfurPercent - 0.08) / 0.6);
+    sulfurInfluence = clamp01(subtle + Math.pow(pronounced, 1.45) * 0.85);
   }
 
   let phosphorusInfluence = 0;
-  if (phosphorusPercent >= 0.7) {
-    phosphorusInfluence = 1;
-  } else if (phosphorusPercent > 0.005) {
-    const normalized = clamp01((phosphorusPercent - 0.005) / 0.34);
-    phosphorusInfluence = Math.pow(normalized, 1.25);
+  if (phosphorusPercent > 0) {
+    const subtle = clamp01(phosphorusPercent / 0.26) * 0.22;
+    const pronounced = clamp01((phosphorusPercent - 0.06) / 0.58);
+    phosphorusInfluence = clamp01(subtle + Math.pow(pronounced, 1.35) * 0.88);
   }
 
   if (sulfurInfluence > 0) {
-    const subtleScale = lerp(0.18, 0.45, sulfurInfluence);
+    const subtleScale = lerp(0.05, 0.48, sulfurInfluence);
     tinted[0] = clamp(tinted[0] + subtleScale, 0, 1);
     tinted[1] = clamp(tinted[1] + subtleScale * 0.55, 0, 1);
     tinted[2] = clamp(tinted[2] - subtleScale * 0.6, 0, 1);
   }
 
   if (phosphorusInfluence > 0) {
-    const subtleScale = lerp(0.14, 0.36, phosphorusInfluence);
+    const subtleScale = lerp(0.04, 0.4, phosphorusInfluence);
     tinted[0] = clamp(tinted[0] - subtleScale * 0.35, 0, 1);
     tinted[1] = clamp(tinted[1] + subtleScale, 0, 1);
     tinted[2] = clamp(tinted[2] - subtleScale * 0.28, 0, 1);
@@ -5523,6 +6177,7 @@ function regenerateTerrain(seedString) {
     : 0;
   terrainInfo.featureStats = featureStats;
   resetWaterSwells(seedString);
+  initializeCloudField(seedString);
   regenerateRocks(seedString, heightfield, maskfield);
   regeneratePlants(seedString, heightfield, maskfield);
 }
@@ -5557,6 +6212,8 @@ try {
 } catch (error) {
   handleFatalRuntimeError(error, 'generación inicial de terreno');
 }
+
+updateDayNightCycleState(simulationTime);
 
 function isEditableElement(element) {
   if (!element) {
@@ -5634,6 +6291,14 @@ function normalize(v) {
   const length = Math.hypot(v[0], v[1], v[2]);
   if (length === 0) return [0, 0, 0];
   return [v[0] / length, v[1] / length, v[2] / length];
+}
+
+function normalize2D(v) {
+  const length = Math.hypot(v[0], v[1]);
+  if (length === 0) {
+    return [0, 1];
+  }
+  return [v[0] / length, v[1] / length];
 }
 
 function subtract(a, b) {
@@ -6217,6 +6882,19 @@ const simulationInfo = {
   displayedTps,
   ticksLastFrame,
   dayNight: dayNightCycleState,
+  weather: {
+    windActive: 0,
+    windSpawned: 0,
+    windCulled: 0,
+    clouds: 0,
+  },
+  celestial: {
+    sunAltitude: dayNightCycleState.sunAltitude,
+    moonAltitude: dayNightCycleState.moonAltitude,
+    sunlight: dayNightCycleState.sunlightIntensity,
+    moonlight: dayNightCycleState.moonlightIntensity,
+    derivativesSupported,
+  },
 };
 
 if (typeof window !== 'undefined') {
@@ -6365,8 +7043,12 @@ function update(deltaTime) {
   if (Number.isFinite(deltaTime)) {
     waterAnimationTime += deltaTime;
     updateWaterSwells(deltaTime);
+    updateWindEffects(deltaTime);
+    updateCloudField(deltaTime);
   } else {
     updateWaterSwells(0);
+    updateWindEffects(0);
+    updateCloudField(0);
   }
 
   const isUnderwater = cameraPosition[1] < waterSurfaceLevel - 0.05;
@@ -6465,11 +7147,184 @@ function renderSkybox() {
   }
 }
 
+function renderCelestialBodies() {
+  updateCelestialGeometry();
+  if (!uniformLocations.renderMode || typeof gl.uniform1i !== 'function') {
+    return;
+  }
+
+  const resetSpecular = () => {
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+    }
+    if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(emissiveStrengthUniform, 0);
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
+  };
+
+  if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(surfaceSpecularStrengthUniform, 0);
+  }
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, 1);
+  }
+
+  if (sunVertexCount > 0) {
+    gl.uniform1i(uniformLocations.renderMode, renderModes.celestial);
+    if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(emissiveStrengthUniform, 1.65);
+    }
+    bindGeometry(sunBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, sunVertexCount);
+    drawStats.celestial += 1;
+    drawStats.total += 1;
+  }
+
+  if (moonVertexCount > 0) {
+    gl.uniform1i(uniformLocations.renderMode, renderModes.celestial);
+    if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(emissiveStrengthUniform, 0.45);
+    }
+    bindGeometry(moonBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, moonVertexCount);
+    drawStats.celestial += 1;
+    drawStats.total += 1;
+  }
+
+  resetSpecular();
+}
+
+function renderCloudLayer() {
+  if (!uniformLocations.renderMode || typeof gl.uniform1i !== 'function') {
+    return;
+  }
+  if (weatherState.clouds.needsUpload) {
+    rebuildCloudGeometry();
+  }
+  if (cloudVertexCount <= 0) {
+    return;
+  }
+
+  const blendWasEnabled = terrainRenderState.translucent;
+  if (!blendWasEnabled && typeof gl.enable === 'function') {
+    gl.enable(gl.BLEND);
+    if (typeof gl.blendFunc === 'function') {
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
+  }
+  if (typeof gl.depthMask === 'function') {
+    gl.depthMask(false);
+  }
+  gl.uniform1i(uniformLocations.renderMode, renderModes.cloud);
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, 0.68);
+  }
+  if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(surfaceSpecularStrengthUniform, 0.25);
+  }
+  bindGeometry(cloudBuffer);
+  gl.drawArrays(gl.TRIANGLES, 0, cloudVertexCount);
+  drawStats.clouds += 1;
+  drawStats.total += 1;
+
+  if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+  }
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+  }
+  if (typeof gl.depthMask === 'function') {
+    gl.depthMask(true);
+  }
+  if (!blendWasEnabled && typeof gl.disable === 'function') {
+    gl.disable(gl.BLEND);
+  }
+  gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
+}
+
+function renderWindStreaks() {
+  if (!uniformLocations.renderMode || typeof gl.uniform1i !== 'function') {
+    return;
+  }
+  if (!weatherState.wind.active || weatherState.wind.active.length === 0) {
+    return;
+  }
+
+  const now = waterAnimationTime;
+  let drawn = 0;
+  let blendingEnabled = terrainRenderState.translucent;
+  if (!blendingEnabled && typeof gl.enable === 'function') {
+    gl.enable(gl.BLEND);
+    blendingEnabled = true;
+  }
+  if (typeof gl.blendFunc === 'function') {
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+  if (typeof gl.depthMask === 'function') {
+    gl.depthMask(false);
+  }
+
+  for (const effect of weatherState.wind.active) {
+    const geometry = buildWindVertices(effect, now);
+    if (!geometry) {
+      continue;
+    }
+    try {
+      gl.bindBuffer(gl.ARRAY_BUFFER, windBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, geometry.vertices, gl.DYNAMIC_DRAW);
+    } catch (error) {
+      recordRuntimeIssue('warning', 'wind-buffer', error);
+      continue;
+    }
+    windVertexCount = geometry.vertices.length / floatsPerVertex;
+    if (windVertexCount <= 0) {
+      continue;
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, geometry.alpha);
+    }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0);
+    }
+    gl.uniform1i(uniformLocations.renderMode, renderModes.wind);
+    gl.vertexAttribPointer(positionAttribute, 3, gl.FLOAT, false, vertexStride, 0);
+    gl.vertexAttribPointer(colorAttribute, 3, gl.FLOAT, false, vertexStride, 12);
+    gl.drawArrays(gl.TRIANGLES, 0, windVertexCount);
+    drawn += 1;
+  }
+
+  if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+  }
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+  }
+  if (typeof gl.depthMask === 'function') {
+    gl.depthMask(true);
+  }
+  if (blendingEnabled && !terrainRenderState.translucent && typeof gl.disable === 'function') {
+    gl.disable(gl.BLEND);
+  }
+  gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
+
+  if (drawn > 0) {
+    drawStats.wind += drawn;
+    drawStats.total += drawn;
+  }
+}
+
 function render() {
   drawStats.terrain = 0;
   drawStats.water = 0;
   drawStats.rocks = 0;
   drawStats.plants = 0;
+  drawStats.wind = 0;
+  drawStats.clouds = 0;
+  drawStats.celestial = 0;
   drawStats.blockGrid = 0;
   drawStats.chunkGrid = 0;
   drawStats.selection = 0;
@@ -6478,6 +7333,44 @@ function render() {
   const skyColor = dayNightCycleState.skyColor;
   if (skyColor) {
     gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
+  }
+
+  if (ambientLightColorUniform) {
+    const ambient = dayNightCycleState.ambientLightColor || [0.2, 0.24, 0.3];
+    gl.uniform3f(ambientLightColorUniform, ambient[0], ambient[1], ambient[2]);
+  }
+  if (sunLightDirectionUniform) {
+    const dir = dayNightCycleState.sunDirection || [0, -1, 0];
+    gl.uniform3f(sunLightDirectionUniform, dir[0], dir[1], dir[2]);
+  }
+  if (sunLightColorUniform) {
+    const sunColor = dayNightCycleState.sunLightColor || [1, 0.95, 0.85];
+    gl.uniform3f(sunLightColorUniform, sunColor[0], sunColor[1], sunColor[2]);
+  }
+  if (moonLightDirectionUniform) {
+    const dir = dayNightCycleState.moonDirection || [0, 1, 0];
+    gl.uniform3f(moonLightDirectionUniform, dir[0], dir[1], dir[2]);
+  }
+  if (moonLightColorUniform) {
+    const moonColor = dayNightCycleState.moonLightColor || [0.45, 0.52, 0.78];
+    gl.uniform3f(moonLightColorUniform, moonColor[0], moonColor[1], moonColor[2]);
+  }
+  if (sunSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(sunSpecularStrengthUniform, dayNightCycleState.sunSpecularStrength ?? 0.6);
+  }
+  if (moonSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(moonSpecularStrengthUniform, dayNightCycleState.moonSpecularStrength ?? 0.3);
+  }
+  lightingDiagnostics.lastAppliedSunSpecular = dayNightCycleState.sunSpecularStrength ?? 0.6;
+  lightingDiagnostics.lastAppliedMoonSpecular = dayNightCycleState.moonSpecularStrength ?? 0.3;
+  if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+  }
+  if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(emissiveStrengthUniform, 0);
+  }
+  if (viewPositionUniform) {
+    gl.uniform3f(viewPositionUniform, cameraPosition[0], cameraPosition[1], cameraPosition[2]);
   }
 
   if (globalLightColorUniform) {
@@ -6512,6 +7405,8 @@ function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   renderSkybox();
+  renderCelestialBodies();
+  renderCloudLayer();
 
   if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
@@ -6535,10 +7430,16 @@ function render() {
   }
 
   if (baseplateVertexCount > 0) {
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.38);
+    }
     bindGeometry(baseplateBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
     drawStats.terrain += 1;
     drawStats.total += 1;
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+    }
   }
 
   if (waterVertexCount > 0) {
@@ -6566,6 +7467,9 @@ function render() {
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, waterAlpha);
     }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 1.25);
+    }
 
     bindGeometry(waterBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
@@ -6578,6 +7482,9 @@ function render() {
     if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
       gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
     }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+    }
 
     if (depthMaskChanged) {
       gl.depthMask(true);
@@ -6587,9 +7494,14 @@ function render() {
     }
   }
 
+  renderWindStreaks();
+
   if (rockVertexCount > 0) {
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, 1);
+    }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.55);
     }
     bindGeometry(rockBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
@@ -6597,6 +7509,9 @@ function render() {
     drawStats.total += 1;
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
     }
   }
 
@@ -6608,12 +7523,18 @@ function render() {
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, 1);
     }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.3);
+    }
     bindGeometry(plantBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, plantVertexCount);
     drawStats.plants += 1;
     drawStats.total += 1;
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
     }
   }
 
@@ -6657,6 +7578,10 @@ function render() {
     if (typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
+  }
+
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
   }
 
   if (typeof gl.getError === 'function') {
@@ -6732,7 +7657,9 @@ function updateDebugConsole(deltaTime) {
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} nubes=${weatherState.clouds.metrics.count}`,
+    `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -6856,6 +7783,14 @@ function loop(currentTime) {
     simulationInfo.displayedTps = displayedTps;
     simulationInfo.ticksLastFrame = ticksLastFrame;
     simulationInfo.dayNight = dayNightCycleState;
+    simulationInfo.weather.windActive = weatherState.wind.metrics.active;
+    simulationInfo.weather.windSpawned = weatherState.wind.metrics.spawned;
+    simulationInfo.weather.windCulled = weatherState.wind.metrics.culled;
+    simulationInfo.weather.clouds = weatherState.clouds.metrics.count;
+    simulationInfo.celestial.sunAltitude = dayNightCycleState.sunAltitude;
+    simulationInfo.celestial.moonAltitude = dayNightCycleState.moonAltitude;
+    simulationInfo.celestial.sunlight = dayNightCycleState.sunlightIntensity;
+    simulationInfo.celestial.moonlight = dayNightCycleState.moonlightIntensity;
 
     update(deltaTime);
     render();
