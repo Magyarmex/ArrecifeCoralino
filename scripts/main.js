@@ -1715,6 +1715,9 @@ function createShader(type, source) {
 }
 
 const vertexSource = `
+  precision mediump float;
+  precision mediump int;
+
   attribute vec3 position;
   attribute vec3 color;
 
@@ -1889,6 +1892,7 @@ const fragmentNormalComputation = derivativesSupported
 
 const fragmentSource = `
   precision mediump float;
+  precision mediump int;
   ${derivativeShaderHeader}
   varying vec3 vColor;
   varying vec3 vPosition;
@@ -3622,61 +3626,6 @@ function updateDayNightCycleState(currentSimulationTime) {
     clamp01(tint[1] * (0.35 + daylight * 0.95)),
     clamp01(tint[2] * (0.35 + daylight * 0.95)),
   ];
-  const baseMoonColor = [0.45, 0.52, 0.78];
-  const moonLightColor = [
-    clamp01(baseMoonColor[0] * (0.18 + moonlight * 0.5)),
-    clamp01(baseMoonColor[1] * (0.2 + moonlight * 0.48)),
-    clamp01(baseMoonColor[2] * (0.24 + moonlight * 0.55)),
-  ];
-  const sunSpecularStrength = clamp01(0.45 + daylight * 0.7);
-  const moonSpecularStrength = clamp01(0.22 + moonlight * 0.35);
-
-  const skyboxComputation = computeSkyboxGradient(normalized);
-  const skyGradient = skyboxComputation.gradient;
-  const weights = skyboxComputation.weights;
-  const gradientValid =
-    skyGradient &&
-    typeof skyGradient === 'object' &&
-    Array.isArray(skyGradient.top) &&
-    Array.isArray(skyGradient.middle) &&
-    Array.isArray(skyGradient.bottom) &&
-    skyGradient.top.length === 3 &&
-    skyGradient.middle.length === 3 &&
-    skyGradient.bottom.length === 3 &&
-    skyGradient.top.every(Number.isFinite) &&
-    skyGradient.middle.every(Number.isFinite) &&
-    skyGradient.bottom.every(Number.isFinite);
-
-  const activeSkyGradient = gradientValid ? skyGradient : dayNightCycleState.skyGradient;
-  if (gradientValid) {
-    if (!dayNightCycleState.flags.skyGradientValid) {
-      recordRuntimeIssue('info', 'ciclo día/noche', 'Gradiente de cielo restaurado.');
-    }
-    dayNightCycleState.skyGradient.top = skyGradient.top;
-    dayNightCycleState.skyGradient.middle = skyGradient.middle;
-    dayNightCycleState.skyGradient.bottom = skyGradient.bottom;
-    dayNightCycleState.skyboxWeights = weights;
-    dayNightCycleState.metrics.skyGradientUpdates += 1;
-    dayNightCycleState.metrics.lastGradientUpdateTime = currentSimulationTime;
-    dayNightCycleState.flags.skyGradientValid = true;
-  } else {
-    if (dayNightCycleState.flags.skyGradientValid) {
-      recordRuntimeIssue(
-        'error',
-        'ciclo día/noche',
-        'Gradiente de cielo inválido; se mantiene el último valor válido.',
-      );
-    }
-    dayNightCycleState.metrics.skyGradientInvalidations += 1;
-    dayNightCycleState.metrics.lastGradientInvalidationTime = currentSimulationTime;
-    dayNightCycleState.flags.skyGradientValid = false;
-  }
-
-  const averageSkyColor = normalizeColor([
-    (activeSkyGradient.top[0] + activeSkyGradient.middle[0] + activeSkyGradient.bottom[0]) / 3,
-    (activeSkyGradient.top[1] + activeSkyGradient.middle[1] + activeSkyGradient.bottom[1]) / 3,
-    (activeSkyGradient.top[2] + activeSkyGradient.middle[2] + activeSkyGradient.bottom[2]) / 3,
-  ]);
 
   const ambientNight = [0.08, 0.11, 0.18];
   const ambientDay = [0.42, 0.48, 0.56];
