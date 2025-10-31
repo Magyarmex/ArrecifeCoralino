@@ -247,6 +247,141 @@ function ensureAmbientMusicNodes() {
     return ambientAudioState.gain;
   }
 
+  function noteNameToFrequency(note) {
+    if (!note) {
+      return null;
+    }
+    const match = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(String(note));
+    if (!match) {
+      return null;
+    }
+    const [, baseLetter, accidental, octaveString] = match;
+    const baseOffsets = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+    const semitone = baseOffsets[baseLetter.toUpperCase()];
+    if (typeof semitone !== 'number') {
+      return null;
+    }
+    let offset = semitone;
+    if (accidental === '#') {
+      offset += 1;
+    } else if (accidental === 'b' || accidental === '♭') {
+      offset -= 1;
+    }
+    const octave = Number.parseInt(octaveString, 10);
+    if (!Number.isFinite(octave)) {
+      return null;
+    }
+    const midiNumber = offset + (octave + 1) * 12;
+    return 440 * Math.pow(2, (midiNumber - 69) / 12);
+  }
+
+  function buildPatternSegments(pattern) {
+    const segments = [];
+    let beatCursor = 0;
+    for (const step of pattern) {
+      if (!step) {
+        continue;
+      }
+      const beats = typeof step.beats === 'number' && step.beats > 0 ? step.beats : 0.25;
+      const startBeat = beatCursor;
+      const endBeat = startBeat + beats;
+      const isRest = step.note === null || step.note === undefined || step.note === 'rest';
+      segments.push({
+        startBeat,
+        endBeat,
+        beats,
+        note: isRest ? null : step.note,
+        frequency: isRest ? null : noteNameToFrequency(step.note),
+        velocity:
+          typeof step.velocity === 'number' && step.velocity >= 0
+            ? step.velocity
+            : 1,
+        noiseTimbre: step.noiseTimbre,
+        active: !isRest,
+      });
+      beatCursor = endBeat;
+    }
+    return { segments, totalBeats: beatCursor };
+  }
+
+  function findSegment(segments, beatPosition) {
+    for (const segment of segments) {
+      if (beatPosition >= segment.startBeat && beatPosition < segment.endBeat) {
+        return segment;
+      }
+    }
+    return segments.length ? segments[segments.length - 1] : null;
+  }
+
+  function computeEnvelopeValue(localTime, duration, envelope = {}) {
+    if (duration <= 0) {
+      return 0;
+    }
+    const attack = Math.max(0.001, Math.min(envelope.attack ?? 0.01, duration));
+    const decay = Math.max(0, Math.min(envelope.decay ?? 0.06, Math.max(duration - attack, 0)));
+    const sustainLevel = envelope.sustain ?? 0.8;
+    const release = Math.max(0.001, Math.min(envelope.release ?? 0.08, duration));
+    const sustainStart = attack + decay;
+    const releaseStart = Math.max(duration - release, sustainStart);
+
+    if (localTime <= 0) {
+      return 0;
+    }
+    if (localTime < attack) {
+      return Math.max(0, Math.min(1, localTime / attack));
+    }
+    if (localTime < sustainStart) {
+      if (decay <= 0) {
+        return sustainLevel;
+      }
+      const decayProgress = (localTime - attack) / decay;
+      return 1 - (1 - sustainLevel) * Math.min(Math.max(decayProgress, 0), 1);
+    }
+    if (localTime < releaseStart) {
+      return sustainLevel;
+    }
+    const releaseProgress = (localTime - releaseStart) / Math.max(duration - releaseStart, 0.001);
+    return Math.max(0, sustainLevel * (1 - Math.min(Math.max(releaseProgress, 0), 1)));
+  }
+
+  function createNoiseGenerator() {
+    let state = 1;
+    return () => {
+      state = (state * 1664525 + 1013904223) >>> 0;
+      return (state / 4294967295) * 2 - 1;
+    };
+  }
+
+  function generateWaveSample(type, frequency, time, options) {
+    if (!frequency || !Number.isFinite(frequency)) {
+      return 0;
+    }
+    const phase = (time * frequency) % 1;
+    switch (type) {
+      case 'triangle': {
+        return 1 - 4 * Math.abs(phase - 0.5);
+      }
+      case 'sawtooth': {
+        return 2 * phase - 1;
+      }
+      case 'pulse': {
+        const width = Math.min(Math.max(options?.pulseWidth ?? 0.3, 0.05), 0.95);
+        return phase < width ? 1 : -1;
+      }
+      case 'sine': {
+        return Math.sin(2 * Math.PI * phase);
+      }
+      case 'chip-sine': {
+        const value = Math.sin(2 * Math.PI * phase);
+        return Math.sign(value) * Math.pow(Math.abs(value), 0.8);
+      }
+      case 'square':
+      default: {
+        return phase < 0.5 ? 1 : -1;
+      }
+    }
+  }
+
   try {
     ambientAudioState.sources.length = 0;
 
@@ -1533,6 +1668,18 @@ const GL_NO_ERROR = gl.NO_ERROR ?? 0;
 gl.clearColor(0.05, 0.08, 0.12, 1);
 gl.enable(gl.DEPTH_TEST);
 
+const defaultDepthFunc = gl.LESS ?? 0x0201;
+let skyboxProgram = null;
+let skyboxPositionAttribute = -1;
+let skyboxViewProjectionUniform = null;
+let skyboxTopColorUniform = null;
+let skyboxMiddleColorUniform = null;
+let skyboxBottomColorUniform = null;
+let skyboxBuffer = null;
+let skyboxVertexCount = 0;
+let skyboxViewProjectionMatrix = null;
+let lastViewProjectionMatrix = null;
+
 function createShader(type, source) {
   const shader = gl.createShader(type);
   if (!shader) {
@@ -1837,6 +1984,119 @@ const renderModes = {
   terrain: 0,
   water: 1,
 };
+
+const skyboxVertexSource = `
+  attribute vec3 position;
+  uniform mat4 viewProjection;
+  varying vec3 vDirection;
+
+  void main() {
+    vDirection = position;
+    vec4 clip = viewProjection * vec4(position, 1.0);
+    gl_Position = vec4(clip.xy, clip.w, clip.w);
+  }
+`;
+
+const skyboxFragmentSource = `
+  precision mediump float;
+  varying vec3 vDirection;
+  uniform vec3 skyTopColor;
+  uniform vec3 skyMiddleColor;
+  uniform vec3 skyBottomColor;
+
+  vec3 sampleGradient(float t) {
+    float lowerBlend = smoothstep(0.0, 0.5, t);
+    float upperBlend = smoothstep(0.5, 1.0, t);
+    vec3 midColor = mix(skyBottomColor, skyMiddleColor, lowerBlend);
+    return mix(midColor, skyTopColor, upperBlend);
+  }
+
+  void main() {
+    vec3 direction = normalize(vDirection);
+    float t = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 color = sampleGradient(t);
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+try {
+  const skyboxVertexShader = createShader(gl.VERTEX_SHADER, skyboxVertexSource);
+  const skyboxFragmentShader = createShader(gl.FRAGMENT_SHADER, skyboxFragmentSource);
+  skyboxProgram = gl.createProgram();
+  if (!skyboxProgram) {
+    throw new Error('No se pudo crear el programa del skybox');
+  }
+  gl.attachShader(skyboxProgram, skyboxVertexShader);
+  gl.attachShader(skyboxProgram, skyboxFragmentShader);
+  gl.linkProgram(skyboxProgram);
+  if (!gl.getProgramParameter(skyboxProgram, gl.LINK_STATUS)) {
+    const info = gl.getProgramInfoLog(skyboxProgram);
+    throw new Error('Error enlazando el programa del skybox: ' + info);
+  }
+  skyboxPositionAttribute = gl.getAttribLocation(skyboxProgram, 'position');
+  skyboxViewProjectionUniform = gl.getUniformLocation(skyboxProgram, 'viewProjection');
+  skyboxTopColorUniform = gl.getUniformLocation(skyboxProgram, 'skyTopColor');
+  skyboxMiddleColorUniform = gl.getUniformLocation(skyboxProgram, 'skyMiddleColor');
+  skyboxBottomColorUniform = gl.getUniformLocation(skyboxProgram, 'skyBottomColor');
+
+  const skyboxVertices = new Float32Array([
+    -1, -1, -1,
+    1, -1, -1,
+    -1, 1, -1,
+    -1, 1, -1,
+    1, -1, -1,
+    1, 1, -1,
+
+    -1, -1, 1,
+    -1, 1, 1,
+    1, -1, 1,
+    -1, 1, 1,
+    1, 1, 1,
+    1, -1, 1,
+
+    -1, -1, -1,
+    -1, 1, -1,
+    -1, -1, 1,
+    -1, -1, 1,
+    -1, 1, -1,
+    -1, 1, 1,
+
+    1, -1, -1,
+    1, -1, 1,
+    1, 1, -1,
+    1, -1, 1,
+    1, 1, 1,
+    1, 1, -1,
+
+    -1, -1, -1,
+    -1, -1, 1,
+    1, -1, -1,
+    -1, -1, 1,
+    1, -1, 1,
+    1, -1, -1,
+
+    -1, 1, -1,
+    1, 1, -1,
+    -1, 1, 1,
+    -1, 1, 1,
+    1, 1, -1,
+    1, 1, 1,
+  ]);
+
+  skyboxBuffer = gl.createBuffer();
+  if (!skyboxBuffer) {
+    throw new Error('No se pudo crear el buffer del skybox');
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, skyboxBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, skyboxVertices, gl.STATIC_DRAW);
+  skyboxVertexCount = skyboxVertices.length / 3;
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+} catch (error) {
+  recordRuntimeIssue('warning', 'skybox', error);
+  skyboxProgram = null;
+  skyboxBuffer = null;
+  skyboxVertexCount = 0;
+}
 
 const blockSize = 1; // cada bloque cubre el doble de superficie para ampliar el mapa
 const blocksPerChunk = 8;
@@ -2489,20 +2749,107 @@ function mixColor(a, b, t) {
   ];
 }
 
-const nightSkyColor = [0.02, 0.03, 0.08];
-const daySkyColor = [0.32, 0.56, 0.84];
+function smoothStep(edge0, edge1, value) {
+  if (edge0 === edge1) {
+    return value < edge0 ? 0 : 1;
+  }
+  const t = clamp01((value - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+function smoothPulse(edge0, edge1, edge2, edge3, value) {
+  if (edge0 >= edge1 || edge2 >= edge3) {
+    return 0;
+  }
+  const rise = smoothStep(edge0, edge1, value);
+  const fall = smoothStep(edge2, edge3, value);
+  return clamp01(rise - fall);
+}
+
+function smoothPulseWrap(edge0, edge1, edge2, edge3, value) {
+  let result = smoothPulse(edge0, edge1, edge2, edge3, value);
+  result += smoothPulse(edge0, edge1, edge2, edge3, value + 1);
+  result += smoothPulse(edge0, edge1, edge2, edge3, value - 1);
+  return clamp01(result);
+}
+
+function accumulateWeightedColor(target, color, weight) {
+  if (!target || !color || weight <= 0) {
+    return;
+  }
+  target[0] += color[0] * weight;
+  target[1] += color[1] * weight;
+  target[2] += color[2] * weight;
+}
+
+function normalizeColor(color) {
+  if (!color) {
+    return [0, 0, 0];
+  }
+  return [clamp01(color[0]), clamp01(color[1]), clamp01(color[2])];
+}
+
+const skyboxPalettes = {
+  night: {
+    top: [0.08, 0.02, 0.12],
+    middle: [0.03, 0.01, 0.08],
+    bottom: [0.0, 0.0, 0.03],
+  },
+  dawn: {
+    top: [0.95, 0.6, 0.75],
+    middle: [0.98, 0.68, 0.5],
+    bottom: [0.92, 0.45, 0.3],
+  },
+  day: {
+    top: [0.18, 0.42, 0.9],
+    middle: [0.38, 0.66, 0.96],
+    bottom: [0.68, 0.84, 0.97],
+  },
+  dusk: {
+    top: [0.88, 0.44, 0.68],
+    middle: [0.98, 0.58, 0.42],
+    bottom: [0.64, 0.26, 0.38],
+  },
+};
+
+const nightSkyColor = skyboxPalettes.night.middle.slice();
+const daySkyColor = skyboxPalettes.day.middle.slice();
 const nightLightTint = [0.55, 0.68, 0.95];
 const dayLightTint = [1, 0.97, 0.9];
 const dayNightCycleDuration = 240;
+
+const defaultSkyGradient = {
+  top: skyboxPalettes.night.top.slice(),
+  middle: skyboxPalettes.night.middle.slice(),
+  bottom: skyboxPalettes.night.bottom.slice(),
+};
 
 const dayNightCycleState = {
   length: dayNightCycleDuration,
   normalizedTime: 0,
   daylight: 0,
   intensity: 1,
-  skyColor: nightSkyColor.slice(),
+  skyColor: normalizeColor([
+    (defaultSkyGradient.top[0] + defaultSkyGradient.middle[0] + defaultSkyGradient.bottom[0]) /
+      3,
+    (defaultSkyGradient.top[1] + defaultSkyGradient.middle[1] + defaultSkyGradient.bottom[1]) /
+      3,
+    (defaultSkyGradient.top[2] + defaultSkyGradient.middle[2] + defaultSkyGradient.bottom[2]) /
+      3,
+  ]),
   lightColor: [1, 1, 1],
   sunAngle: -Math.PI / 2,
+  skyGradient: {
+    top: defaultSkyGradient.top.slice(),
+    middle: defaultSkyGradient.middle.slice(),
+    bottom: defaultSkyGradient.bottom.slice(),
+  },
+  skyboxWeights: {
+    night: 1,
+    dawn: 0,
+    day: 0,
+    dusk: 0,
+  },
 };
 
 const dayCyclePhaseLabels = {
@@ -2529,6 +2876,50 @@ function getDayCyclePhase(normalizedTime) {
   return 'midnight';
 }
 
+function computeSkyboxGradient(normalizedTime) {
+  const normalized = ((normalizedTime % 1) + 1) % 1;
+  const dawnWeight = smoothPulseWrap(0.17, 0.25, 0.33, 0.41, normalized);
+  const dayWeight = smoothPulseWrap(0.28, 0.42, 0.58, 0.72, normalized);
+  const duskWeight = smoothPulseWrap(0.6, 0.72, 0.82, 0.94, normalized);
+  const totalWarm = clamp01(dawnWeight + dayWeight + duskWeight);
+  const nightWeight = clamp01(1 - totalWarm);
+
+  const weights = {
+    night: nightWeight,
+    dawn: dawnWeight,
+    day: dayWeight,
+    dusk: duskWeight,
+  };
+
+  const gradient = {
+    top: [0, 0, 0],
+    middle: [0, 0, 0],
+    bottom: [0, 0, 0],
+  };
+
+  for (const [phase, weight] of Object.entries(weights)) {
+    if (weight <= 0) {
+      continue;
+    }
+    const palette = skyboxPalettes[phase];
+    if (!palette) {
+      continue;
+    }
+    accumulateWeightedColor(gradient.top, palette.top, weight);
+    accumulateWeightedColor(gradient.middle, palette.middle, weight);
+    accumulateWeightedColor(gradient.bottom, palette.bottom, weight);
+  }
+
+  return {
+    gradient: {
+      top: normalizeColor(gradient.top),
+      middle: normalizeColor(gradient.middle),
+      bottom: normalizeColor(gradient.bottom),
+    },
+    weights,
+  };
+}
+
 function updateDayNightCycleState(currentSimulationTime) {
   const duration = Math.max(1, dayNightCycleDuration);
   const cycleTime = ((currentSimulationTime % duration) + duration) % duration;
@@ -2537,19 +2928,29 @@ function updateDayNightCycleState(currentSimulationTime) {
   const daylight = clamp01(Math.sin(sunAngle) * 0.5 + 0.5);
   const intensity = 0.25 + daylight * 0.75;
   const tint = mixColor(nightLightTint, dayLightTint, daylight);
-  const skyColor = mixColor(nightSkyColor, daySkyColor, daylight);
   const lightColor = [
     clamp01(tint[0] * intensity),
     clamp01(tint[1] * intensity),
     clamp01(tint[2] * intensity),
   ];
 
+  const { gradient, weights } = computeSkyboxGradient(normalized);
+  const averageSkyColor = normalizeColor([
+    (gradient.top[0] + gradient.middle[0] + gradient.bottom[0]) / 3,
+    (gradient.top[1] + gradient.middle[1] + gradient.bottom[1]) / 3,
+    (gradient.top[2] + gradient.middle[2] + gradient.bottom[2]) / 3,
+  ]);
+
   dayNightCycleState.normalizedTime = normalized;
   dayNightCycleState.daylight = daylight;
   dayNightCycleState.intensity = intensity;
-  dayNightCycleState.skyColor = skyColor;
+  dayNightCycleState.skyColor = averageSkyColor;
   dayNightCycleState.lightColor = lightColor;
   dayNightCycleState.sunAngle = sunAngle;
+  dayNightCycleState.skyGradient.top = gradient.top;
+  dayNightCycleState.skyGradient.middle = gradient.middle;
+  dayNightCycleState.skyGradient.bottom = gradient.bottom;
+  dayNightCycleState.skyboxWeights = weights;
 }
 
 const translucentTerrainAlpha = 0.45;
@@ -5976,6 +6377,17 @@ function update(deltaTime) {
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
   const viewProjection = multiplyMatrices(projection, view);
   inverseViewProjectionMatrix = invertMatrix(viewProjection);
+  lastViewProjectionMatrix = viewProjection;
+
+  if (skyboxProgram) {
+    const viewNoTranslation = new Float32Array(view);
+    viewNoTranslation[12] = 0;
+    viewNoTranslation[13] = 0;
+    viewNoTranslation[14] = 0;
+    skyboxViewProjectionMatrix = multiplyMatrices(projection, viewNoTranslation);
+  } else {
+    skyboxViewProjectionMatrix = null;
+  }
 
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
 }
@@ -5984,6 +6396,73 @@ function bindGeometry(buffer) {
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.vertexAttribPointer(positionAttribute, 3, gl.FLOAT, false, vertexStride, 0);
   gl.vertexAttribPointer(colorAttribute, 3, gl.FLOAT, false, vertexStride, 12);
+}
+
+function renderSkybox() {
+  if (!skyboxProgram || !skyboxBuffer || skyboxVertexCount <= 0 || !skyboxViewProjectionMatrix) {
+    return;
+  }
+
+  const gradient = dayNightCycleState.skyGradient;
+  if (!gradient) {
+    return;
+  }
+
+  if (typeof gl.depthMask === 'function') {
+    gl.depthMask(false);
+  }
+  if (typeof gl.depthFunc === 'function') {
+    gl.depthFunc(gl.LEQUAL);
+  }
+
+  gl.useProgram(skyboxProgram);
+  gl.bindBuffer(gl.ARRAY_BUFFER, skyboxBuffer);
+  gl.vertexAttribPointer(skyboxPositionAttribute, 3, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(skyboxPositionAttribute);
+
+  if (skyboxViewProjectionUniform) {
+    gl.uniformMatrix4fv(skyboxViewProjectionUniform, false, skyboxViewProjectionMatrix);
+  }
+  if (skyboxTopColorUniform) {
+    gl.uniform3f(
+      skyboxTopColorUniform,
+      gradient.top[0],
+      gradient.top[1],
+      gradient.top[2],
+    );
+  }
+  if (skyboxMiddleColorUniform) {
+    gl.uniform3f(
+      skyboxMiddleColorUniform,
+      gradient.middle[0],
+      gradient.middle[1],
+      gradient.middle[2],
+    );
+  }
+  if (skyboxBottomColorUniform) {
+    gl.uniform3f(
+      skyboxBottomColorUniform,
+      gradient.bottom[0],
+      gradient.bottom[1],
+      gradient.bottom[2],
+    );
+  }
+
+  gl.drawArrays(gl.TRIANGLES, 0, skyboxVertexCount);
+
+  if (typeof gl.depthMask === 'function') {
+    gl.depthMask(true);
+  }
+  if (typeof gl.depthFunc === 'function') {
+    gl.depthFunc(defaultDepthFunc);
+  }
+
+  gl.useProgram(program);
+  gl.enableVertexAttribArray(positionAttribute);
+  gl.enableVertexAttribArray(colorAttribute);
+  if (viewProjectionUniform && lastViewProjectionMatrix) {
+    gl.uniformMatrix4fv(viewProjectionUniform, false, lastViewProjectionMatrix);
+  }
 }
 
 function render() {
@@ -6031,6 +6510,8 @@ function render() {
   }
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  renderSkybox();
 
   if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
