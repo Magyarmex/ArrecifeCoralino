@@ -2835,6 +2835,93 @@ function spawnWaterSwell(currentTime) {
   waterSwellState.active.push(newSwell);
   scheduleWindGustFromSwell(newSwell);
 
+  try {
+    gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+  } catch (error) {
+    recordRuntimeIssue('warning', 'cloud-buffer', error);
+  }
+}
+
+function buildWindVertices(effect, now) {
+  if (!effect) {
+    return null;
+  }
+  const appearTime = effect.appearTime ?? effect.startTime ?? now;
+  const lifespan = effect.lifespan ?? WEATHER_WIND_DURATION;
+  const progress = (now - appearTime) / lifespan;
+  if (progress <= 0 || progress >= 1.05) {
+    return null;
+  }
+
+  const fadeIn = clamp01((progress - 0.02) / 0.18);
+  const fadeOut = clamp01(1 - (progress - 0.6) / 0.4);
+  const alpha = clamp01(fadeIn * fadeOut);
+  if (alpha <= 0.001) {
+    return null;
+  }
+
+  const direction = effect.direction ?? [0, 1];
+  const normalizedDir = normalize2D(direction);
+  const perp = normalize2D([-normalizedDir[1], normalizedDir[0]]);
+  const speed = effect.speed ?? 6;
+  const leadDistance = effect.leadDistance ?? speed * WEATHER_WIND_LEAD_TIME;
+  const traveled = Math.max(0, now - (effect.startTime ?? now)) * speed;
+  const centerDistance = traveled + leadDistance * (1 - progress * 0.65);
+  const center = [
+    effect.origin[0] + normalizedDir[0] * centerDistance,
+    waterSurfaceLevel + 0.35 + progress * 0.45,
+    effect.origin[1] + normalizedDir[1] * centerDistance,
+  ];
+
+  const length = (effect.crestLength ?? 6) * (0.35 + progress * 0.6);
+  const width = 0.18 + progress * 0.28;
+  const halfLength = length / 2;
+  const head = [
+    center[0] + normalizedDir[0] * halfLength,
+    center[1] + progress * 0.18,
+    center[2] + normalizedDir[1] * halfLength,
+  ];
+  const tail = [
+    center[0] - normalizedDir[0] * halfLength,
+    center[1] - progress * 0.12,
+    center[2] - normalizedDir[1] * halfLength,
+  ];
+  const lateral = [perp[0] * width, 0, perp[1] * width];
+
+  const vertices = new Float32Array(6 * floatsPerVertex);
+  let offset = 0;
+  const headColor = [0.95, 0.92, alpha];
+  const tailColor = [0.85, 0.82, alpha * 0.85];
+
+  offset = pushVertex(vertices, offset, head[0] + lateral[0], head[1], head[2] + lateral[2], headColor);
+  offset = pushVertex(vertices, offset, head[0] - lateral[0], head[1], head[2] - lateral[2], headColor);
+  offset = pushVertex(vertices, offset, tail[0] + lateral[0], tail[1], tail[2] + lateral[2], tailColor);
+  offset = pushVertex(vertices, offset, head[0] - lateral[0], head[1], head[2] - lateral[2], headColor);
+  offset = pushVertex(vertices, offset, tail[0] - lateral[0], tail[1], tail[2] - lateral[2], tailColor);
+  offset = pushVertex(vertices, offset, tail[0] + lateral[0], tail[1], tail[2] + lateral[2], tailColor);
+
+  return { vertices, alpha: clamp01(alpha * 0.65 + 0.2), progress: clamp01(progress) };
+}
+
+function ensureCelestialTemplate() {
+  if (celestialTemplate) {
+    return celestialTemplate;
+  }
+  let topology = createBaseIcosahedron();
+  for (let i = 0; i < CELESTIAL_SUBDIVISIONS; i++) {
+    topology = subdivideTopology(topology);
+  }
+  const triangles = [];
+  for (const face of topology.faces) {
+    triangles.push(topology.vertices[face[0]]);
+    triangles.push(topology.vertices[face[1]]);
+    triangles.push(topology.vertices[face[2]]);
+  }
+  celestialTemplate = { triangles };
+  return celestialTemplate;
+}
+
 function fillCelestialVertexData(target, radius, position, color) {
   const template = ensureCelestialTemplate();
   const requiredLength = template.triangles.length * floatsPerVertex;
@@ -3573,6 +3660,61 @@ function updateDayNightCycleState(currentSimulationTime) {
     clamp01(tint[1] * (0.35 + daylight * 0.95)),
     clamp01(tint[2] * (0.35 + daylight * 0.95)),
   ];
+  const baseMoonColor = [0.45, 0.52, 0.78];
+  const moonLightColor = [
+    clamp01(baseMoonColor[0] * (0.18 + moonlight * 0.5)),
+    clamp01(baseMoonColor[1] * (0.2 + moonlight * 0.48)),
+    clamp01(baseMoonColor[2] * (0.24 + moonlight * 0.55)),
+  ];
+  const sunSpecularStrength = clamp01(0.45 + daylight * 0.7);
+  const moonSpecularStrength = clamp01(0.22 + moonlight * 0.35);
+
+  const skyboxComputation = computeSkyboxGradient(normalized);
+  const skyGradient = skyboxComputation.gradient;
+  const weights = skyboxComputation.weights;
+  const gradientValid =
+    skyGradient &&
+    typeof skyGradient === 'object' &&
+    Array.isArray(skyGradient.top) &&
+    Array.isArray(skyGradient.middle) &&
+    Array.isArray(skyGradient.bottom) &&
+    skyGradient.top.length === 3 &&
+    skyGradient.middle.length === 3 &&
+    skyGradient.bottom.length === 3 &&
+    skyGradient.top.every(Number.isFinite) &&
+    skyGradient.middle.every(Number.isFinite) &&
+    skyGradient.bottom.every(Number.isFinite);
+
+  const activeSkyGradient = gradientValid ? skyGradient : dayNightCycleState.skyGradient;
+  if (gradientValid) {
+    if (!dayNightCycleState.flags.skyGradientValid) {
+      recordRuntimeIssue('info', 'ciclo día/noche', 'Gradiente de cielo restaurado.');
+    }
+    dayNightCycleState.skyGradient.top = skyGradient.top;
+    dayNightCycleState.skyGradient.middle = skyGradient.middle;
+    dayNightCycleState.skyGradient.bottom = skyGradient.bottom;
+    dayNightCycleState.skyboxWeights = weights;
+    dayNightCycleState.metrics.skyGradientUpdates += 1;
+    dayNightCycleState.metrics.lastGradientUpdateTime = currentSimulationTime;
+    dayNightCycleState.flags.skyGradientValid = true;
+  } else {
+    if (dayNightCycleState.flags.skyGradientValid) {
+      recordRuntimeIssue(
+        'error',
+        'ciclo día/noche',
+        'Gradiente de cielo inválido; se mantiene el último valor válido.',
+      );
+    }
+    dayNightCycleState.metrics.skyGradientInvalidations += 1;
+    dayNightCycleState.metrics.lastGradientInvalidationTime = currentSimulationTime;
+    dayNightCycleState.flags.skyGradientValid = false;
+  }
+
+  const averageSkyColor = normalizeColor([
+    (activeSkyGradient.top[0] + activeSkyGradient.middle[0] + activeSkyGradient.bottom[0]) / 3,
+    (activeSkyGradient.top[1] + activeSkyGradient.middle[1] + activeSkyGradient.bottom[1]) / 3,
+    (activeSkyGradient.top[2] + activeSkyGradient.middle[2] + activeSkyGradient.bottom[2]) / 3,
+  ]);
 
   const ambientNight = [0.08, 0.11, 0.18];
   const ambientDay = [0.42, 0.48, 0.56];
