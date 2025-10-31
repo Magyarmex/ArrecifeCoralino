@@ -2835,53 +2835,71 @@ function spawnWaterSwell(currentTime) {
   waterSwellState.active.push(newSwell);
   scheduleWindGustFromSwell(newSwell);
 
-  if (waterSwellState.active.length > MAX_WATER_SWELLS) {
-    waterSwellState.active.shift();
+function fillCelestialVertexData(target, radius, position, color) {
+  const template = ensureCelestialTemplate();
+  const requiredLength = template.triangles.length * floatsPerVertex;
+  let data = target;
+  if (!data || data.length !== requiredLength) {
+    data = new Float32Array(requiredLength);
   }
+  let offset = 0;
+  for (const vertex of template.triangles) {
+    offset = pushVertex(
+      data,
+      offset,
+      position[0] + vertex[0] * radius,
+      position[1] + vertex[1] * radius,
+      position[2] + vertex[2] * radius,
+      color,
+    );
+  }
+  return data;
 }
 
-function updateWaterSwells(deltaTime) {
-  void deltaTime;
-  if (!waterSwellState) {
+function updateCelestialGeometry() {
+  const template = ensureCelestialTemplate();
+  if (!template) {
     return;
   }
 
-  const now = waterAnimationTime;
-  const active = waterSwellState.active.filter((swell) => now - swell.startTime <= swell.lifespan);
-  waterSwellState.active = active;
-
-  const spawnThreshold = waterSwellState.nextSpawnTime ?? now + 8;
-  if (active.length < MAX_WATER_SWELLS) {
-    if (now >= spawnThreshold) {
-      spawnWaterSwell(now);
-      scheduleNextWaterSwell(now);
-    }
-  } else if (now >= spawnThreshold) {
-    scheduleNextWaterSwell(now + 3);
+  try {
+    const sunColor = [
+      clamp01(dayNightCycleState.sunLightColor[0] + 0.25),
+      clamp01(dayNightCycleState.sunLightColor[1] + 0.18),
+      clamp01(dayNightCycleState.sunLightColor[2] + 0.12),
+    ];
+    sunVertexData = fillCelestialVertexData(
+      sunVertexData,
+      CELESTIAL_SUN_RADIUS,
+      dayNightCycleState.sunPosition,
+      sunColor,
+    );
+    sunVertexCount = sunVertexData.length / floatsPerVertex;
+    gl.bindBuffer(gl.ARRAY_BUFFER, sunBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, sunVertexData, gl.DYNAMIC_DRAW);
+  } catch (error) {
+    recordRuntimeIssue('warning', 'sun-geometry', error);
+    sunVertexCount = 0;
   }
 
-  waterSwellUniformBuffers.origins.fill(0);
-  waterSwellUniformBuffers.params.fill(0);
-  waterSwellUniformBuffers.state.fill(0);
-
-  waterSwellActiveCount = Math.min(active.length, MAX_WATER_SWELLS);
-  for (let i = 0; i < waterSwellActiveCount; i++) {
-    const swell = active[i];
-    const baseIndex = i * 4;
-    waterSwellUniformBuffers.origins[baseIndex + 0] = swell.origin[0];
-    waterSwellUniformBuffers.origins[baseIndex + 1] = swell.origin[1];
-    waterSwellUniformBuffers.origins[baseIndex + 2] = swell.direction[0];
-    waterSwellUniformBuffers.origins[baseIndex + 3] = swell.direction[1];
-
-    waterSwellUniformBuffers.params[baseIndex + 0] = swell.amplitude;
-    waterSwellUniformBuffers.params[baseIndex + 1] = swell.crestLength;
-    waterSwellUniformBuffers.params[baseIndex + 2] = swell.lateralSpread;
-    waterSwellUniformBuffers.params[baseIndex + 3] = swell.foamBoost;
-
-    waterSwellUniformBuffers.state[baseIndex + 0] = swell.startTime;
-    waterSwellUniformBuffers.state[baseIndex + 1] = swell.speed;
-    waterSwellUniformBuffers.state[baseIndex + 2] = swell.decayDistance;
-    waterSwellUniformBuffers.state[baseIndex + 3] = swell.splashHeight;
+  try {
+    const moonColor = [
+      clamp01(dayNightCycleState.moonLightColor[0] + 0.08),
+      clamp01(dayNightCycleState.moonLightColor[1] + 0.1),
+      clamp01(dayNightCycleState.moonLightColor[2] + 0.12),
+    ];
+    moonVertexData = fillCelestialVertexData(
+      moonVertexData,
+      CELESTIAL_MOON_RADIUS,
+      dayNightCycleState.moonPosition,
+      moonColor,
+    );
+    moonVertexCount = moonVertexData.length / floatsPerVertex;
+    gl.bindBuffer(gl.ARRAY_BUFFER, moonBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, moonVertexData, gl.DYNAMIC_DRAW);
+  } catch (error) {
+    recordRuntimeIssue('warning', 'moon-geometry', error);
+    moonVertexCount = 0;
   }
 }
 
@@ -3440,6 +3458,15 @@ const dayNightCycleState = {
     day: 0,
     dusk: 0,
   },
+  metrics: {
+    skyGradientUpdates: 0,
+    skyGradientInvalidations: 0,
+    lastGradientUpdateTime: 0,
+    lastGradientInvalidationTime: 0,
+  },
+  flags: {
+    skyGradientValid: true,
+  },
 };
 
 const dayCyclePhaseLabels = {
@@ -3570,18 +3597,51 @@ function updateDayNightCycleState(currentSimulationTime) {
   const sunSpecularStrength = clamp01(0.45 + daylight * 0.7);
   const moonSpecularStrength = clamp01(0.22 + moonlight * 0.35);
 
-  const { gradient, weights } = computeSkyboxGradient(normalized);
-  const averageSkyColor = normalizeColor([
-    (gradient.top[0] + gradient.middle[0] + gradient.bottom[0]) / 3,
-    (gradient.top[1] + gradient.middle[1] + gradient.bottom[1]) / 3,
-    (gradient.top[2] + gradient.middle[2] + gradient.bottom[2]) / 3,
-  ]);
+  const skyboxComputation = computeSkyboxGradient(normalized);
+  const skyGradient = skyboxComputation.gradient;
+  const weights = skyboxComputation.weights;
+  const gradientValid =
+    skyGradient &&
+    typeof skyGradient === 'object' &&
+    Array.isArray(skyGradient.top) &&
+    Array.isArray(skyGradient.middle) &&
+    Array.isArray(skyGradient.bottom) &&
+    skyGradient.top.length === 3 &&
+    skyGradient.middle.length === 3 &&
+    skyGradient.bottom.length === 3 &&
+    skyGradient.top.every(Number.isFinite) &&
+    skyGradient.middle.every(Number.isFinite) &&
+    skyGradient.bottom.every(Number.isFinite);
 
-  const { gradient, weights } = computeSkyboxGradient(normalized);
+  const activeSkyGradient = gradientValid ? skyGradient : dayNightCycleState.skyGradient;
+  if (gradientValid) {
+    if (!dayNightCycleState.flags.skyGradientValid) {
+      recordRuntimeIssue('info', 'ciclo día/noche', 'Gradiente de cielo restaurado.');
+    }
+    dayNightCycleState.skyGradient.top = skyGradient.top;
+    dayNightCycleState.skyGradient.middle = skyGradient.middle;
+    dayNightCycleState.skyGradient.bottom = skyGradient.bottom;
+    dayNightCycleState.skyboxWeights = weights;
+    dayNightCycleState.metrics.skyGradientUpdates += 1;
+    dayNightCycleState.metrics.lastGradientUpdateTime = currentSimulationTime;
+    dayNightCycleState.flags.skyGradientValid = true;
+  } else {
+    if (dayNightCycleState.flags.skyGradientValid) {
+      recordRuntimeIssue(
+        'error',
+        'ciclo día/noche',
+        'Gradiente de cielo inválido; se mantiene el último valor válido.',
+      );
+    }
+    dayNightCycleState.metrics.skyGradientInvalidations += 1;
+    dayNightCycleState.metrics.lastGradientInvalidationTime = currentSimulationTime;
+    dayNightCycleState.flags.skyGradientValid = false;
+  }
+
   const averageSkyColor = normalizeColor([
-    (gradient.top[0] + gradient.middle[0] + gradient.bottom[0]) / 3,
-    (gradient.top[1] + gradient.middle[1] + gradient.bottom[1]) / 3,
-    (gradient.top[2] + gradient.middle[2] + gradient.bottom[2]) / 3,
+    (activeSkyGradient.top[0] + activeSkyGradient.middle[0] + activeSkyGradient.bottom[0]) / 3,
+    (activeSkyGradient.top[1] + activeSkyGradient.middle[1] + activeSkyGradient.bottom[1]) / 3,
+    (activeSkyGradient.top[2] + activeSkyGradient.middle[2] + activeSkyGradient.bottom[2]) / 3,
   ]);
 
   dayNightCycleState.normalizedTime = normalized;
@@ -3603,10 +3663,6 @@ function updateDayNightCycleState(currentSimulationTime) {
   dayNightCycleState.moonlightIntensity = moonlight;
   dayNightCycleState.moonAltitude = moonPosition[1];
   dayNightCycleState.ambientLightColor = ambientLightColor;
-  dayNightCycleState.skyGradient.top = gradient.top;
-  dayNightCycleState.skyGradient.middle = gradient.middle;
-  dayNightCycleState.skyGradient.bottom = gradient.bottom;
-  dayNightCycleState.skyboxWeights = weights;
 }
 
 const translucentTerrainAlpha = 0.45;
@@ -6894,6 +6950,8 @@ const simulationInfo = {
     sunlight: dayNightCycleState.sunlightIntensity,
     moonlight: dayNightCycleState.moonlightIntensity,
     derivativesSupported,
+    skyboxMetrics: dayNightCycleState.metrics,
+    skyboxHealthy: dayNightCycleState.flags.skyGradientValid,
   },
 };
 
@@ -7085,8 +7143,13 @@ function renderSkybox() {
     return;
   }
 
-  const gradient = dayNightCycleState.skyGradient;
-  if (!gradient) {
+  const skyGradient = dayNightCycleState.skyGradient;
+  if (
+    !skyGradient ||
+    !Array.isArray(skyGradient.top) ||
+    !Array.isArray(skyGradient.middle) ||
+    !Array.isArray(skyGradient.bottom)
+  ) {
     return;
   }
 
@@ -7108,25 +7171,25 @@ function renderSkybox() {
   if (skyboxTopColorUniform) {
     gl.uniform3f(
       skyboxTopColorUniform,
-      gradient.top[0],
-      gradient.top[1],
-      gradient.top[2],
+      skyGradient.top[0],
+      skyGradient.top[1],
+      skyGradient.top[2],
     );
   }
   if (skyboxMiddleColorUniform) {
     gl.uniform3f(
       skyboxMiddleColorUniform,
-      gradient.middle[0],
-      gradient.middle[1],
-      gradient.middle[2],
+      skyGradient.middle[0],
+      skyGradient.middle[1],
+      skyGradient.middle[2],
     );
   }
   if (skyboxBottomColorUniform) {
     gl.uniform3f(
       skyboxBottomColorUniform,
-      gradient.bottom[0],
-      gradient.bottom[1],
-      gradient.bottom[2],
+      skyGradient.bottom[0],
+      skyGradient.bottom[1],
+      skyGradient.bottom[2],
     );
   }
 
@@ -7791,6 +7854,8 @@ function loop(currentTime) {
     simulationInfo.celestial.moonAltitude = dayNightCycleState.moonAltitude;
     simulationInfo.celestial.sunlight = dayNightCycleState.sunlightIntensity;
     simulationInfo.celestial.moonlight = dayNightCycleState.moonlightIntensity;
+    simulationInfo.celestial.skyboxMetrics = dayNightCycleState.metrics;
+    simulationInfo.celestial.skyboxHealthy = dayNightCycleState.flags.skyGradientValid;
 
     update(deltaTime);
     render();
