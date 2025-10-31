@@ -147,6 +147,8 @@ const uiFallbackEvents = Array.isArray(runtimeState.uiFallbackEvents)
   ? runtimeState.uiFallbackEvents
   : (runtimeState.uiFallbackEvents = []);
 
+const AMBIENT_MUSIC_TRACK_URL = 'aquatic-downtime-363761.mp3';
+
 const ambientAudioState = {
   supported:
     typeof window !== 'undefined' &&
@@ -154,11 +156,43 @@ const ambientAudioState = {
       typeof window.webkitAudioContext === 'function'),
   context: null,
   gain: null,
+  mixGain: null,
+  environmentFilter: null,
   sources: [],
   initialized: false,
   enabled: Boolean(musicToggle?.checked),
   defaultGain: 0.32,
   reportedInitFailure: false,
+  music: {
+    buffer: null,
+    source: null,
+    gain: null,
+    colorFilter: null,
+    loadPromise: null,
+  },
+  wind: {
+    buffer: null,
+    source: null,
+    gain: null,
+    filter: null,
+  },
+  diagnostics: {
+    musicTrack: AMBIENT_MUSIC_TRACK_URL,
+    musicStatus: 'inactivo',
+    musicLoadTimeMs: null,
+    underwater: false,
+    filterFrequency: 0,
+    windLevel: 0,
+    windTarget: 0,
+    lastUpdate: 0,
+    issues: 0,
+    lastError: null,
+    transitions: 0,
+  },
+  flags: {
+    musicLoadFailed: false,
+  },
+  underwater: false,
 };
 
 function ensureAmbientAudioContext() {
@@ -201,76 +235,406 @@ function ensureAmbientAudioContext() {
   return ambientAudioState.context;
 }
 
+
 function ensureAmbientMusicNodes() {
   const context = ambientAudioState.context;
   if (!context) {
     return null;
   }
   if (ambientAudioState.initialized && ambientAudioState.gain) {
+    ensureAmbientMusicPlayback();
+    ensureWindSource();
     return ambientAudioState.gain;
   }
 
   try {
+    ambientAudioState.sources.length = 0;
+
     const masterGain = context.createGain();
     masterGain.gain.value = 0;
+
+    const mixGain = context.createGain();
+    mixGain.gain.value = 1;
+
+    let environmentFilter = null;
+    if (typeof context.createBiquadFilter === 'function') {
+      environmentFilter = context.createBiquadFilter();
+      environmentFilter.type = 'lowpass';
+      environmentFilter.Q.value = 0.8;
+      environmentFilter.frequency.value = 12000;
+      mixGain.connect(environmentFilter);
+      environmentFilter.connect(masterGain);
+    } else {
+      mixGain.connect(masterGain);
+    }
+
     masterGain.connect(context.destination);
+
     ambientAudioState.gain = masterGain;
+    ambientAudioState.mixGain = mixGain;
+    ambientAudioState.environmentFilter = environmentFilter;
 
-    const padLayers = [
-      { frequency: 196, detune: -25, type: 'sine', gain: 0.22 },
-      { frequency: 329.63, detune: 18, type: 'triangle', gain: 0.14 },
-      { frequency: 261.63, detune: -12, type: 'sine', gain: 0.12 },
-    ];
+    const musicGain = context.createGain();
+    musicGain.gain.value = 0.32;
+    ambientAudioState.music.gain = musicGain;
 
-    for (const layer of padLayers) {
-      const oscillator = context.createOscillator();
-      oscillator.type = layer.type;
-      oscillator.frequency.setValueAtTime(layer.frequency, context.currentTime);
-      if (typeof layer.detune === 'number') {
-        oscillator.detune.setValueAtTime(layer.detune, context.currentTime);
-      }
-      const layerGain = context.createGain();
-      layerGain.gain.value = layer.gain;
-      oscillator.connect(layerGain);
-      layerGain.connect(masterGain);
-      oscillator.start();
-      ambientAudioState.sources.push({ node: oscillator, gain: layerGain });
+    let musicColorFilter = null;
+    if (typeof context.createBiquadFilter === 'function') {
+      musicColorFilter = context.createBiquadFilter();
+      musicColorFilter.type = 'lowpass';
+      musicColorFilter.frequency.value = 8500;
+      musicColorFilter.Q.value = 0.7;
+      musicGain.connect(musicColorFilter);
+      musicColorFilter.connect(mixGain);
+    } else {
+      musicGain.connect(mixGain);
     }
+    ambientAudioState.music.colorFilter = musicColorFilter;
 
-    const bufferLength = Math.max(1, Math.floor(context.sampleRate * 2));
-    const noiseBuffer = context.createBuffer(1, bufferLength, context.sampleRate);
-    const channelData = noiseBuffer.getChannelData(0);
-    for (let index = 0; index < channelData.length; index += 1) {
-      channelData[index] = (Math.random() * 2 - 1) * 0.18;
+    const windGain = context.createGain();
+    windGain.gain.value = 0.05;
+    ambientAudioState.wind.gain = windGain;
+
+    let windFilter = null;
+    if (typeof context.createBiquadFilter === 'function') {
+      windFilter = context.createBiquadFilter();
+      windFilter.type = 'bandpass';
+      windFilter.frequency.value = 320;
+      windFilter.Q.value = 1.2;
+      windFilter.connect(windGain);
     }
-    const noiseSource = context.createBufferSource();
-    noiseSource.buffer = noiseBuffer;
-    noiseSource.loop = true;
-    const noiseGain = context.createGain();
-    noiseGain.gain.value = 0.05;
-    noiseSource.connect(noiseGain);
-    noiseGain.connect(masterGain);
-    noiseSource.start();
-    ambientAudioState.sources.push({ node: noiseSource, gain: noiseGain });
+    ambientAudioState.wind.filter = windFilter;
 
+    windGain.connect(mixGain);
+
+    ambientAudioState.wind.buffer =
+      ambientAudioState.wind.buffer || createWindNoiseBuffer(context);
+    ensureWindSource();
+
+    ambientAudioState.diagnostics.musicStatus = ambientAudioState.music.buffer
+      ? 'listo'
+      : 'inactivo';
+    ambientAudioState.diagnostics.windLevel = windGain.gain.value;
+    ambientAudioState.diagnostics.filterFrequency =
+      environmentFilter?.frequency?.value ?? ambientAudioState.diagnostics.filterFrequency;
+    ambientAudioState.diagnostics.musicTrack = AMBIENT_MUSIC_TRACK_URL;
+    ambientAudioState.flags.musicLoadFailed = false;
     ambientAudioState.initialized = true;
+
+    beginMusicLoad();
+    ensureAmbientMusicPlayback();
   } catch (error) {
-    if (!ambientAudioState.reportedInitFailure) {
-      ambientAudioState.reportedInitFailure = true;
-      const message =
-        'Error al preparar la música ambiental. ' +
-        String(error && error.message ? error.message : error ?? 'Error desconocido');
-      pendingRuntimeIssueQueue.push({
-        severity: 'warning',
-        context: 'audio',
-        error: message,
-      });
-    }
+    handleAmbientMusicError('Error al preparar la mezcla ambiental', error);
     ambientAudioState.gain = null;
+    ambientAudioState.mixGain = null;
+    ambientAudioState.environmentFilter = null;
+    ambientAudioState.music.gain = null;
+    ambientAudioState.music.colorFilter = null;
+    ambientAudioState.wind.gain = null;
+    ambientAudioState.wind.filter = null;
+    ambientAudioState.initialized = false;
     ambientAudioState.sources.length = 0;
   }
 
   return ambientAudioState.gain;
+}
+
+function createWindNoiseBuffer(context) {
+  try {
+    const durationSeconds = 6;
+    const channels = 2;
+    const frameCount = Math.max(1, Math.floor(context.sampleRate * durationSeconds));
+    const buffer = context.createBuffer(channels, frameCount, context.sampleRate);
+    for (let channel = 0; channel < channels; channel++) {
+      const data = buffer.getChannelData(channel);
+      let previous = 0;
+      for (let i = 0; i < frameCount; i++) {
+        const random = Math.random() * 2 - 1;
+        previous = previous * 0.92 + random * 0.08;
+        data[i] = previous * 0.6;
+      }
+    }
+    return buffer;
+  } catch (error) {
+    handleAmbientMusicError('Error al generar el ruido de viento', error);
+    return null;
+  }
+}
+
+function ensureWindSource() {
+  const context = ambientAudioState.context;
+  const wind = ambientAudioState.wind;
+  if (!context || !wind?.buffer || !wind.gain) {
+    return;
+  }
+  if (wind.source) {
+    return;
+  }
+  try {
+    const source = context.createBufferSource();
+    source.buffer = wind.buffer;
+    source.loop = true;
+    if (wind.filter) {
+      source.connect(wind.filter);
+    } else {
+      source.connect(wind.gain);
+    }
+    source.start(0);
+    source.onended = () => {
+      if (ambientAudioState.wind.source === source) {
+        ambientAudioState.wind.source = null;
+        if (ambientAudioState.enabled) {
+          ensureWindSource();
+        }
+      }
+    };
+    ambientAudioState.wind.source = source;
+    ambientAudioState.sources = ambientAudioState.sources.filter(
+      (entry) => entry?.label !== 'wind',
+    );
+    ambientAudioState.sources.push({ node: source, label: 'wind' });
+  } catch (error) {
+    handleAmbientMusicError('Error al iniciar el viento ambiental', error);
+  }
+}
+
+function beginMusicLoad() {
+  const context = ambientAudioState.context;
+  const music = ambientAudioState.music;
+  if (!context || !music) {
+    return null;
+  }
+  if (music.buffer) {
+    return Promise.resolve(music.buffer);
+  }
+  if (music.loadPromise) {
+    return music.loadPromise;
+  }
+  if (typeof fetch !== 'function') {
+    handleAmbientMusicError(
+      'La API fetch no está disponible para cargar la pista ambiental',
+      new Error('fetch no disponible'),
+    );
+    return null;
+  }
+  const loadStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  ambientAudioState.diagnostics.musicStatus = 'cargando';
+  ambientAudioState.flags.musicLoadFailed = false;
+  const loadPromise = fetch(AMBIENT_MUSIC_TRACK_URL)
+    .then((response) => {
+      if (!response?.ok) {
+        throw new Error(`Respuesta ${response?.status ?? 'desconocida'} al cargar la pista`);
+      }
+      return response.arrayBuffer();
+    })
+    .then(
+      (arrayBuffer) =>
+        new Promise((resolve, reject) => {
+          context.decodeAudioData(
+            arrayBuffer,
+            (decoded) => resolve(decoded),
+            (decodeError) =>
+              reject(
+                decodeError ||
+                  new Error('No se pudo decodificar la pista ambiental proporcionada'),
+              ),
+          );
+        }),
+    )
+    .then((buffer) => {
+      music.buffer = buffer;
+      ambientAudioState.diagnostics.musicStatus = 'listo';
+      ambientAudioState.diagnostics.musicLoadTimeMs = Math.round(
+        (typeof performance !== 'undefined' ? performance.now() : Date.now()) - loadStart,
+      );
+      ambientAudioState.diagnostics.lastError = null;
+      ambientAudioState.flags.musicLoadFailed = false;
+      ensureAmbientMusicPlayback();
+      return buffer;
+    })
+    .catch((error) => {
+      ambientAudioState.music.buffer = null;
+      handleAmbientMusicError('Error al cargar la pista ambiental', error);
+      ambientAudioState.music.loadPromise = null;
+      throw error;
+    });
+  music.loadPromise = loadPromise;
+  return loadPromise;
+}
+
+function startMusicSource(buffer) {
+  const context = ambientAudioState.context;
+  const music = ambientAudioState.music;
+  if (!context || !music?.gain || !buffer) {
+    return;
+  }
+  try {
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.connect(music.gain);
+    source.start(0);
+    source.onended = () => {
+      if (ambientAudioState.music.source === source) {
+        ambientAudioState.music.source = null;
+        if (ambientAudioState.enabled) {
+          ensureAmbientMusicPlayback();
+        }
+      }
+    };
+    ambientAudioState.music.source = source;
+    ambientAudioState.sources = ambientAudioState.sources.filter(
+      (entry) => entry?.label !== 'music',
+    );
+    ambientAudioState.sources.push({ node: source, label: 'music' });
+    ambientAudioState.diagnostics.musicStatus = 'listo';
+  } catch (error) {
+    handleAmbientMusicError('Error al iniciar la pista ambiental', error);
+  }
+}
+
+function ensureAmbientMusicPlayback() {
+  const music = ambientAudioState.music;
+  if (!music?.gain) {
+    return;
+  }
+  if (music.source) {
+    return;
+  }
+  if (music.buffer) {
+    startMusicSource(music.buffer);
+    return;
+  }
+  beginMusicLoad();
+}
+
+function handleAmbientMusicError(prefix, error) {
+  const details = String(error?.message ? error.message : error ?? 'Error desconocido');
+  const message = `${prefix}. ${details}`;
+  ambientAudioState.diagnostics.musicStatus = 'error';
+  ambientAudioState.diagnostics.lastError = message;
+  ambientAudioState.diagnostics.issues = (ambientAudioState.diagnostics.issues ?? 0) + 1;
+  ambientAudioState.flags.musicLoadFailed = true;
+  if (!ambientAudioState.reportedInitFailure) {
+    ambientAudioState.reportedInitFailure = true;
+  }
+  pendingRuntimeIssueQueue.push({
+    severity: 'warning',
+    context: 'audio',
+    error: message,
+  });
+}
+
+
+function updateAmbientAudioMix(isUnderwater) {
+  if (!ambientAudioState.enabled) {
+    ambientAudioState.underwater = false;
+    ambientAudioState.diagnostics.underwater = false;
+    ambientAudioState.diagnostics.windTarget = 0;
+    const windGain = ambientAudioState.wind?.gain;
+    ambientAudioState.diagnostics.windLevel = windGain?.gain?.value ?? 0;
+    return;
+  }
+
+  ensureAmbientMusicNodes();
+  ensureAmbientMusicPlayback();
+  ensureWindSource();
+
+  const context = ambientAudioState.context;
+  if (!context) {
+    return;
+  }
+
+  const now = typeof context.currentTime === 'number' ? context.currentTime : 0;
+  const nextUnderwater = Boolean(isUnderwater);
+  const diagnostics = ambientAudioState.diagnostics;
+
+  if (nextUnderwater !== ambientAudioState.underwater) {
+    diagnostics.transitions = (diagnostics.transitions ?? 0) + 1;
+  }
+
+  ambientAudioState.underwater = nextUnderwater;
+  diagnostics.underwater = nextUnderwater;
+
+  const environmentFilter = ambientAudioState.environmentFilter;
+  const targetFilterFrequency = nextUnderwater ? 900 : 12000;
+  const targetFilterQ = nextUnderwater ? 1.1 : 0.8;
+  if (environmentFilter?.frequency) {
+    if (typeof environmentFilter.frequency.setTargetAtTime === 'function') {
+      environmentFilter.frequency.setTargetAtTime(targetFilterFrequency, now, nextUnderwater ? 0.8 : 1.2);
+    } else {
+      environmentFilter.frequency.value = targetFilterFrequency;
+    }
+    diagnostics.filterFrequency = environmentFilter.frequency.value;
+  } else {
+    diagnostics.filterFrequency = targetFilterFrequency;
+  }
+  if (environmentFilter?.Q) {
+    if (typeof environmentFilter.Q.setTargetAtTime === 'function') {
+      environmentFilter.Q.setTargetAtTime(targetFilterQ, now, 0.6);
+    } else {
+      environmentFilter.Q.value = targetFilterQ;
+    }
+  }
+
+  const musicGainNode = ambientAudioState.music?.gain;
+  const targetMusicGain = nextUnderwater ? 0.24 : 0.32;
+  if (musicGainNode?.gain) {
+    if (typeof musicGainNode.gain.setTargetAtTime === 'function') {
+      musicGainNode.gain.setTargetAtTime(targetMusicGain, now, 0.9);
+    } else {
+      musicGainNode.gain.value = targetMusicGain;
+    }
+  }
+
+  const musicColorFilter = ambientAudioState.music?.colorFilter;
+  if (musicColorFilter?.frequency) {
+    const targetColorFrequency = nextUnderwater ? 2600 : 8500;
+    if (typeof musicColorFilter.frequency.setTargetAtTime === 'function') {
+      musicColorFilter.frequency.setTargetAtTime(targetColorFrequency, now, 0.6);
+    } else {
+      musicColorFilter.frequency.value = targetColorFrequency;
+    }
+    if (musicColorFilter.Q) {
+      const targetColorQ = nextUnderwater ? 1.3 : 0.7;
+      if (typeof musicColorFilter.Q.setTargetAtTime === 'function') {
+        musicColorFilter.Q.setTargetAtTime(targetColorQ, now, 0.6);
+      } else {
+        musicColorFilter.Q.value = targetColorQ;
+      }
+    }
+  }
+
+  const windGainNode = ambientAudioState.wind?.gain;
+  if (windGainNode?.gain) {
+    const baseOscillation = Math.sin(now * 0.09) * 0.5 + 0.5;
+    const gustOscillation = Math.sin(now * 0.37 + 1.2) * 0.5 + 0.5;
+    const targetWindGain = nextUnderwater
+      ? 0.012 + baseOscillation * 0.012
+      : 0.045 + baseOscillation * 0.03 + gustOscillation * 0.02;
+    diagnostics.windTarget = targetWindGain;
+    if (typeof windGainNode.gain.setTargetAtTime === 'function') {
+      windGainNode.gain.setTargetAtTime(targetWindGain, now, 2.4);
+    } else {
+      windGainNode.gain.value = targetWindGain;
+    }
+    diagnostics.windLevel = windGainNode.gain.value;
+  } else {
+    diagnostics.windTarget = 0;
+    diagnostics.windLevel = 0;
+  }
+
+  const windFilter = ambientAudioState.wind?.filter;
+  if (windFilter?.frequency) {
+    const targetWindFrequency = nextUnderwater ? 200 : 360;
+    if (typeof windFilter.frequency.setTargetAtTime === 'function') {
+      windFilter.frequency.setTargetAtTime(targetWindFrequency, now, 1.2);
+    } else {
+      windFilter.frequency.value = targetWindFrequency;
+    }
+  }
+
+  diagnostics.lastUpdate = Date.now();
 }
 
 function fadeAmbientMusic(targetGain) {
@@ -299,15 +663,37 @@ function setAmbientMusicEnabled(isEnabled) {
   ambientAudioState.enabled = Boolean(isEnabled);
   if (!ambientAudioState.enabled) {
     fadeAmbientMusic(0);
+    ambientAudioState.diagnostics.musicStatus = ambientAudioState.music?.buffer
+      ? 'silenciado'
+      : 'inactivo';
+    ambientAudioState.diagnostics.underwater = false;
+    ambientAudioState.diagnostics.windTarget = 0;
     return;
   }
+
+  const context = ensureAmbientAudioContext();
+  if (!context) {
+    return;
+  }
+
+  ensureAmbientMusicNodes();
+
+  if (ambientAudioState.music?.buffer && ambientAudioState.diagnostics.musicStatus !== 'error') {
+    ambientAudioState.diagnostics.musicStatus = 'listo';
+  }
+
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    if (ambientAudioState.diagnostics.musicStatus !== 'error') {
+      ambientAudioState.diagnostics.musicStatus = 'pausado';
+    }
     return;
   }
-  if (ambientAudioState.context && ambientAudioState.context.state === 'running') {
-    ensureAmbientMusicNodes();
+
+  if (context.state === 'running') {
     fadeAmbientMusic(ambientAudioState.defaultGain);
   }
+
+  updateAmbientAudioMix(ambientAudioState.underwater);
 }
 
 function handleAmbientMusicUserGesture() {
@@ -326,6 +712,7 @@ function handleAmbientMusicUserGesture() {
     }
     ensureAmbientMusicNodes();
     fadeAmbientMusic(ambientAudioState.defaultGain);
+    updateAmbientAudioMix(ambientAudioState.underwater);
   };
 
   if (context.state === 'suspended' && typeof context.resume === 'function') {
@@ -377,6 +764,9 @@ if (
     }
     if (document.visibilityState === 'hidden') {
       fadeAmbientMusic(0);
+      if (ambientAudioState.diagnostics.musicStatus !== 'error') {
+        ambientAudioState.diagnostics.musicStatus = 'pausado';
+      }
       if (ambientAudioState.context.state === 'running') {
         ambientAudioState.context.suspend?.().catch(() => {});
       }
@@ -5578,6 +5968,9 @@ function update(deltaTime) {
     updateWaterSwells(0);
   }
 
+  const isUnderwater = cameraPosition[1] < waterSurfaceLevel - 0.05;
+  updateAmbientAudioMix(isUnderwater);
+
   const target = add(cameraPosition, forwardDirection);
   const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 500);
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
@@ -5862,6 +6255,32 @@ function updateDebugConsole(deltaTime) {
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
+
+  const audioDiagnostics = ambientAudioState?.diagnostics;
+  if (audioDiagnostics) {
+    const musicStatus = audioDiagnostics.musicStatus ?? 'n/d';
+    const windLevel = Number.isFinite(audioDiagnostics.windLevel)
+      ? audioDiagnostics.windLevel.toFixed(3)
+      : '---';
+    const windTarget = Number.isFinite(audioDiagnostics.windTarget)
+      ? audioDiagnostics.windTarget.toFixed(3)
+      : '---';
+    const filterFrequency = Number.isFinite(audioDiagnostics.filterFrequency)
+      ? Math.round(audioDiagnostics.filterFrequency)
+      : '---';
+    const underwaterStatus = audioDiagnostics.underwater ? 'sí' : 'no';
+    const loadTime =
+      Number.isFinite(audioDiagnostics.musicLoadTimeMs) &&
+      audioDiagnostics.musicLoadTimeMs !== null
+        ? `${audioDiagnostics.musicLoadTimeMs} ms`
+        : 'n/d';
+    info.push(
+      `Audio: pista=${audioDiagnostics.musicTrack ?? 'desconocida'} estado=${musicStatus} filtro=${filterFrequency}Hz bajo_agua=${underwaterStatus} viento=${windLevel}/${windTarget} carga=${loadTime} incidencias=${audioDiagnostics.issues ?? 0}`,
+    );
+    if (audioDiagnostics.lastError) {
+      info.push(`Audio último error: ${audioDiagnostics.lastError}`);
+    }
+  }
 
   if (pointerLockErrors > 0) {
     info.push(`Pointer lock errores: ${pointerLockErrors}`);
