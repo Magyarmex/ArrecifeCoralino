@@ -210,48 +210,510 @@ function ensureAmbientMusicNodes() {
     return ambientAudioState.gain;
   }
 
+  function noteNameToFrequency(note) {
+    if (!note) {
+      return null;
+    }
+    const match = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(String(note));
+    if (!match) {
+      return null;
+    }
+    const [, baseLetter, accidental, octaveString] = match;
+    const baseOffsets = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+    const semitone = baseOffsets[baseLetter.toUpperCase()];
+    if (typeof semitone !== 'number') {
+      return null;
+    }
+    let offset = semitone;
+    if (accidental === '#') {
+      offset += 1;
+    } else if (accidental === 'b' || accidental === '♭') {
+      offset -= 1;
+    }
+    const octave = Number.parseInt(octaveString, 10);
+    if (!Number.isFinite(octave)) {
+      return null;
+    }
+    const midiNumber = offset + (octave + 1) * 12;
+    return 440 * Math.pow(2, (midiNumber - 69) / 12);
+  }
+
+  function buildPatternSegments(pattern) {
+    const segments = [];
+    let beatCursor = 0;
+    for (const step of pattern) {
+      if (!step) {
+        continue;
+      }
+      const beats = typeof step.beats === 'number' && step.beats > 0 ? step.beats : 0.25;
+      const startBeat = beatCursor;
+      const endBeat = startBeat + beats;
+      const isRest = step.note === null || step.note === undefined || step.note === 'rest';
+      segments.push({
+        startBeat,
+        endBeat,
+        beats,
+        note: isRest ? null : step.note,
+        frequency: isRest ? null : noteNameToFrequency(step.note),
+        velocity:
+          typeof step.velocity === 'number' && step.velocity >= 0
+            ? step.velocity
+            : 1,
+        noiseTimbre: step.noiseTimbre,
+        active: !isRest,
+      });
+      beatCursor = endBeat;
+    }
+    return { segments, totalBeats: beatCursor };
+  }
+
+  function findSegment(segments, beatPosition) {
+    for (const segment of segments) {
+      if (beatPosition >= segment.startBeat && beatPosition < segment.endBeat) {
+        return segment;
+      }
+    }
+    return segments.length ? segments[segments.length - 1] : null;
+  }
+
+  function computeEnvelopeValue(localTime, duration, envelope = {}) {
+    if (duration <= 0) {
+      return 0;
+    }
+    const attack = Math.max(0.001, Math.min(envelope.attack ?? 0.01, duration));
+    const decay = Math.max(0, Math.min(envelope.decay ?? 0.06, Math.max(duration - attack, 0)));
+    const sustainLevel = envelope.sustain ?? 0.8;
+    const release = Math.max(0.001, Math.min(envelope.release ?? 0.08, duration));
+    const sustainStart = attack + decay;
+    const releaseStart = Math.max(duration - release, sustainStart);
+
+    if (localTime <= 0) {
+      return 0;
+    }
+    if (localTime < attack) {
+      return Math.max(0, Math.min(1, localTime / attack));
+    }
+    if (localTime < sustainStart) {
+      if (decay <= 0) {
+        return sustainLevel;
+      }
+      const decayProgress = (localTime - attack) / decay;
+      return 1 - (1 - sustainLevel) * Math.min(Math.max(decayProgress, 0), 1);
+    }
+    if (localTime < releaseStart) {
+      return sustainLevel;
+    }
+    const releaseProgress = (localTime - releaseStart) / Math.max(duration - releaseStart, 0.001);
+    return Math.max(0, sustainLevel * (1 - Math.min(Math.max(releaseProgress, 0), 1)));
+  }
+
+  function createNoiseGenerator() {
+    let state = 1;
+    return () => {
+      state = (state * 1664525 + 1013904223) >>> 0;
+      return (state / 4294967295) * 2 - 1;
+    };
+  }
+
+  function generateWaveSample(type, frequency, time, options) {
+    if (!frequency || !Number.isFinite(frequency)) {
+      return 0;
+    }
+    const phase = (time * frequency) % 1;
+    switch (type) {
+      case 'triangle': {
+        return 1 - 4 * Math.abs(phase - 0.5);
+      }
+      case 'sawtooth': {
+        return 2 * phase - 1;
+      }
+      case 'pulse': {
+        const width = Math.min(Math.max(options?.pulseWidth ?? 0.3, 0.05), 0.95);
+        return phase < width ? 1 : -1;
+      }
+      case 'sine': {
+        return Math.sin(2 * Math.PI * phase);
+      }
+      case 'chip-sine': {
+        const value = Math.sin(2 * Math.PI * phase);
+        return Math.sign(value) * Math.pow(Math.abs(value), 0.8);
+      }
+      case 'square':
+      default: {
+        return phase < 0.5 ? 1 : -1;
+      }
+    }
+  }
+
   try {
     const masterGain = context.createGain();
     masterGain.gain.value = 0;
     masterGain.connect(context.destination);
     ambientAudioState.gain = masterGain;
 
-    const padLayers = [
-      { frequency: 196, detune: -25, type: 'sine', gain: 0.22 },
-      { frequency: 329.63, detune: 18, type: 'triangle', gain: 0.14 },
-      { frequency: 261.63, detune: -12, type: 'sine', gain: 0.12 },
+    const bpm = 128;
+    const beatDuration = 60 / bpm;
+
+    const voiceConfigurations = [
+      {
+        name: 'bass',
+        type: 'tone',
+        wave: 'square',
+        pulseWidth: 0.42,
+        vibrato: { depth: 0.004, rate: 4.5 },
+        bitDepth: 6,
+        downsample: 2,
+        sampleGain: 0.8,
+        envelope: { attack: 0.012, decay: 0.05, sustain: 0.7, release: 0.14 },
+        pattern: (() => {
+          const pattern = [];
+          const bars = [
+            [
+              'C2',
+              'C3',
+              'G1',
+              'C2',
+              'C2',
+              'C3',
+              'G1',
+              'C2',
+            ],
+            [
+              'Ab1',
+              'Eb2',
+              'F1',
+              'C2',
+              'Ab1',
+              'Eb2',
+              'F1',
+              'C2',
+            ],
+            [
+              'Bb1',
+              'F2',
+              'G1',
+              'D2',
+              'Bb1',
+              'F2',
+              'G1',
+              'D2',
+            ],
+            [
+              'F1',
+              'C2',
+              'G1',
+              'D2',
+              'F1',
+              'C2',
+              'G1',
+              null,
+            ],
+          ];
+          for (const bar of bars) {
+            bar.forEach((note, index) => {
+              pattern.push({
+                note,
+                beats: 0.5,
+                velocity: index % 2 === 0 ? 1 : 0.85,
+              });
+            });
+          }
+          return pattern;
+        })(),
+        mixerGain: 0.28,
+      },
+      {
+        name: 'arpeggio',
+        type: 'tone',
+        wave: 'pulse',
+        pulseWidth: 0.28,
+        vibrato: { depth: 0.006, rate: 5.5 },
+        bitDepth: 5,
+        downsample: 2,
+        sampleGain: 0.75,
+        envelope: { attack: 0.01, decay: 0.04, sustain: 0.6, release: 0.06 },
+        pattern: (() => {
+          const pattern = [];
+          const bars = [
+            [
+              'C4',
+              'G4',
+              'Eb4',
+              'G4',
+              'C5',
+              'G4',
+              'Eb4',
+              'Bb4',
+              'C4',
+              'G4',
+              'Eb4',
+              'G4',
+              'C5',
+              'G4',
+              'Bb4',
+              'G4',
+            ],
+            [
+              'Ab3',
+              'Eb4',
+              'C4',
+              'Eb4',
+              'Ab4',
+              'Eb4',
+              'C4',
+              'F4',
+              'Ab3',
+              'Eb4',
+              'C4',
+              'Eb4',
+              'Ab4',
+              'C4',
+              'F4',
+              'Eb4',
+            ],
+            [
+              'Bb3',
+              'F4',
+              'D4',
+              'F4',
+              'Bb4',
+              'F4',
+              'D4',
+              'G4',
+              'Bb3',
+              'F4',
+              'D4',
+              'F4',
+              'Bb4',
+              'F4',
+              'G4',
+              'D4',
+            ],
+            [
+              'F3',
+              'C4',
+              'A3',
+              'C4',
+              'F4',
+              'C4',
+              'A3',
+              'G4',
+              'F3',
+              'C4',
+              'A3',
+              'C4',
+              'F4',
+              'C5',
+              'G4',
+              'C4',
+            ],
+          ];
+          for (const bar of bars) {
+            bar.forEach((note, index) => {
+              const accent = index % 4 === 0 ? 1 : index % 2 === 0 ? 0.8 : 0.65;
+              pattern.push({ note, beats: 0.25, velocity: accent });
+            });
+          }
+          return pattern;
+        })(),
+        mixerGain: 0.24,
+      },
+      {
+        name: 'melody',
+        type: 'tone',
+        wave: 'triangle',
+        vibrato: { depth: 0.012, rate: 6.5 },
+        bitDepth: 6,
+        sampleGain: 0.9,
+        envelope: { attack: 0.02, decay: 0.08, sustain: 0.7, release: 0.18 },
+        pattern: (() => {
+          const pattern = [];
+          const bars = [
+            ['G5', 'F5', 'Eb5', 'C5', 'Bb4', 'C5', 'G4', null],
+            ['F5', 'G5', 'Bb5', 'G5', 'F5', 'Eb5', 'C5', 'Bb4'],
+            ['G5', 'Bb5', 'C6', 'Bb5', 'G5', 'F5', 'Eb5', 'F5'],
+            ['G5', 'F5', 'Eb5', 'C5', 'Bb4', null, 'C5', null],
+          ];
+          for (const bar of bars) {
+            bar.forEach((note, index) => {
+              const accent = index === 0 || index === 4 ? 1 : 0.75;
+              pattern.push({ note, beats: 0.5, velocity: accent });
+            });
+          }
+          return pattern;
+        })(),
+        mixerGain: 0.22,
+      },
+      {
+        name: 'kick',
+        type: 'tone',
+        wave: 'chip-sine',
+        sampleGain: 0.85,
+        bitDepth: 5,
+        envelope: { attack: 0.005, decay: 0.05, sustain: 0.6, release: 0.12 },
+        pitchEnvelope: { amount: -12, decay: 0.16 },
+        pattern: (() => {
+          const pattern = [];
+          for (let step = 0; step < 64; step += 1) {
+            const stepInBar = step % 16;
+            const isKick = stepInBar === 0 || stepInBar === 8 || step === 63;
+            pattern.push({ note: isKick ? 'C2' : null, beats: 0.25, velocity: isKick ? 1 : 0 });
+          }
+          return pattern;
+        })(),
+        mixerGain: 0.16,
+      },
+      {
+        name: 'percussion',
+        type: 'noise',
+        sampleGain: 0.9,
+        envelope: { attack: 0.005, decay: 0.03, sustain: 0.4, release: 0.05 },
+        pattern: (() => {
+          const pattern = [];
+          for (let step = 0; step < 64; step += 1) {
+            const stepInBar = step % 16;
+            const isDownBeat = stepInBar % 4 === 0;
+            const isSnare = stepInBar === 4 || stepInBar === 12;
+            const isHat = !isSnare && stepInBar % 2 === 0;
+            let velocity = 0;
+            let noiseTimbre = 'hat';
+            if (isSnare) {
+              velocity = 0.78;
+              noiseTimbre = 'snare';
+            } else if (isDownBeat) {
+              velocity = 0.55;
+              noiseTimbre = 'hat';
+            } else if (isHat) {
+              velocity = 0.3;
+            }
+            if (stepInBar === 14) {
+              velocity = 0.5;
+              noiseTimbre = 'snare';
+            }
+            pattern.push({
+              note: velocity > 0 ? 'noise' : null,
+              beats: 0.25,
+              velocity,
+              noiseTimbre,
+            });
+          }
+          return pattern;
+        })(),
+        mixerGain: 0.12,
+      },
     ];
 
-    for (const layer of padLayers) {
-      const oscillator = context.createOscillator();
-      oscillator.type = layer.type;
-      oscillator.frequency.setValueAtTime(layer.frequency, context.currentTime);
-      if (typeof layer.detune === 'number') {
-        oscillator.detune.setValueAtTime(layer.detune, context.currentTime);
-      }
-      const layerGain = context.createGain();
-      layerGain.gain.value = layer.gain;
-      oscillator.connect(layerGain);
-      layerGain.connect(masterGain);
-      oscillator.start();
-      ambientAudioState.sources.push({ node: oscillator, gain: layerGain });
-    }
+    const loopBeats = 16;
+    const beatToSeconds = beatDuration;
+    const noiseGenerator = createNoiseGenerator();
 
-    const bufferLength = Math.max(1, Math.floor(context.sampleRate * 2));
-    const noiseBuffer = context.createBuffer(1, bufferLength, context.sampleRate);
-    const channelData = noiseBuffer.getChannelData(0);
-    for (let index = 0; index < channelData.length; index += 1) {
-      channelData[index] = (Math.random() * 2 - 1) * 0.18;
+    for (const voice of voiceConfigurations) {
+      const { segments, totalBeats } = buildPatternSegments(voice.pattern);
+      const voiceBeats = totalBeats > 0 ? totalBeats : loopBeats;
+      const loopDuration = voiceBeats * beatToSeconds;
+      const sampleRate = context.sampleRate || 44100;
+      const bufferLength = Math.max(1, Math.floor(loopDuration * sampleRate));
+      const buffer = context.createBuffer(1, bufferLength, sampleRate);
+      const channel = buffer.getChannelData(0);
+      let downsampleCounter = 0;
+      let lastDownsampled = 0;
+      let previousNoise = 0;
+
+      for (let index = 0; index < bufferLength; index += 1) {
+        const time = index / sampleRate;
+        const beatPosition = (time / beatToSeconds) % voiceBeats;
+        const segment = findSegment(segments, beatPosition);
+        if (!segment || !segment.active) {
+          channel[index] = 0;
+          continue;
+        }
+
+        const segmentDuration = (segment.endBeat - segment.startBeat) * beatToSeconds;
+        const localBeat = beatPosition - segment.startBeat;
+        const localTime = localBeat * beatToSeconds;
+        const envelopeValue = computeEnvelopeValue(localTime, segmentDuration, voice.envelope);
+        if (envelopeValue <= 0 || segment.velocity <= 0) {
+          channel[index] = 0;
+          continue;
+        }
+
+        let sampleValue = 0;
+
+        if (voice.type === 'noise') {
+          const randomValue = noiseGenerator();
+          if (segment.noiseTimbre === 'snare') {
+            const tone = Math.sin(2 * Math.PI * 180 * localTime);
+            sampleValue = randomValue * 0.7 + tone * 0.3;
+          } else if (segment.noiseTimbre === 'hat') {
+            const high = randomValue - previousNoise * 0.6;
+            previousNoise = randomValue;
+            sampleValue = high;
+          } else {
+            const lowTone = Math.sin(2 * Math.PI * 60 * localTime);
+            sampleValue = randomValue * 0.4 + lowTone * 0.6;
+          }
+        } else {
+          let frequency = segment.frequency;
+          if (!frequency) {
+            channel[index] = 0;
+            continue;
+          }
+
+          if (voice.pitchEnvelope) {
+            const envelopeDuration = Math.min(
+              voice.pitchEnvelope.decay ?? segmentDuration,
+              segmentDuration
+            );
+            const progress = envelopeDuration > 0 ? Math.min(localTime / envelopeDuration, 1) : 1;
+            const amount = voice.pitchEnvelope.amount ?? 0;
+            let startFrequency = frequency;
+            let endFrequency = frequency;
+            if (amount < 0) {
+              startFrequency = frequency * Math.pow(2, Math.abs(amount) / 12);
+            } else if (amount > 0) {
+              endFrequency = frequency * Math.pow(2, amount / 12);
+            }
+            frequency = startFrequency + (endFrequency - startFrequency) * progress;
+          }
+
+          if (voice.vibrato) {
+            const depth = voice.vibrato.depth ?? 0;
+            if (depth > 0) {
+              const rate = voice.vibrato.rate ?? 5;
+              frequency *= 1 + Math.sin(2 * Math.PI * rate * time) * depth;
+            }
+          }
+
+          sampleValue = generateWaveSample(voice.wave ?? 'square', frequency, time, voice);
+        }
+
+        if (voice.bitDepth && voice.bitDepth > 1) {
+          const steps = Math.pow(2, voice.bitDepth - 1);
+          sampleValue = Math.round(sampleValue * steps) / steps;
+        }
+
+        if (voice.downsample && voice.downsample > 1) {
+          if (downsampleCounter === 0) {
+            lastDownsampled = sampleValue;
+          }
+          sampleValue = lastDownsampled;
+          downsampleCounter = (downsampleCounter + 1) % voice.downsample;
+        }
+
+        const sampleGain = typeof voice.sampleGain === 'number' ? voice.sampleGain : 1;
+        channel[index] = sampleValue * envelopeValue * segment.velocity * sampleGain;
+      }
+
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      const voiceGain = context.createGain();
+      voiceGain.gain.value = typeof voice.mixerGain === 'number' ? voice.mixerGain : 0.18;
+      source.connect(voiceGain);
+      voiceGain.connect(masterGain);
+      source.start();
+      ambientAudioState.sources.push({ node: source, gain: voiceGain });
     }
-    const noiseSource = context.createBufferSource();
-    noiseSource.buffer = noiseBuffer;
-    noiseSource.loop = true;
-    const noiseGain = context.createGain();
-    noiseGain.gain.value = 0.05;
-    noiseSource.connect(noiseGain);
-    noiseGain.connect(masterGain);
-    noiseSource.start();
-    ambientAudioState.sources.push({ node: noiseSource, gain: noiseGain });
 
     ambientAudioState.initialized = true;
   } catch (error) {
