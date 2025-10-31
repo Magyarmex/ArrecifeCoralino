@@ -2412,7 +2412,7 @@ const CELESTIAL_MOON_RADIUS = 32;
 const weatherState = {
   wind: {
     active: [],
-    metrics: { active: 0, spawned: 0, culled: 0 },
+    metrics: { active: 0, spawned: 0, culled: 0, geometryRejected: 0 },
     sequence: 0,
   },
   clouds: {
@@ -2778,6 +2778,7 @@ function resetWaterSwells(seed) {
   weatherState.wind.metrics.active = 0;
   weatherState.wind.metrics.culled = 0;
   weatherState.wind.metrics.spawned = 0;
+  weatherState.wind.metrics.geometryRejected = 0;
   weatherState.wind.sequence = 0;
   spawnWaterSwell(startTime);
   scheduleNextWaterSwell(startTime);
@@ -2834,45 +2835,6 @@ function spawnWaterSwell(currentTime) {
 
   waterSwellState.active.push(newSwell);
   scheduleWindGustFromSwell(newSwell);
-
-  try {
-    gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
-  } catch (error) {
-    recordRuntimeIssue('warning', 'cloud-buffer', error);
-  }
-}
-
-function buildWindVertices(effect, now) {
-  if (!effect) {
-    return null;
-  }
-  const appearTime = effect.appearTime ?? effect.startTime ?? now;
-  const lifespan = effect.lifespan ?? WEATHER_WIND_DURATION;
-  const progress = (now - appearTime) / lifespan;
-  if (progress <= 0 || progress >= 1.05) {
-    return null;
-  }
-
-  const fadeIn = clamp01((progress - 0.02) / 0.18);
-  const fadeOut = clamp01(1 - (progress - 0.6) / 0.4);
-  const alpha = clamp01(fadeIn * fadeOut);
-  if (alpha <= 0.001) {
-    return null;
-  }
-
-  const direction = effect.direction ?? [0, 1];
-  const normalizedDir = normalize2D(direction);
-  const perp = normalize2D([-normalizedDir[1], normalizedDir[0]]);
-  const speed = effect.speed ?? 6;
-  const leadDistance = effect.leadDistance ?? speed * WEATHER_WIND_LEAD_TIME;
-  const traveled = Math.max(0, now - (effect.startTime ?? now)) * speed;
-  const centerDistance = traveled + leadDistance * (1 - progress * 0.65);
-  const center = [
-    effect.origin[0] + normalizedDir[0] * centerDistance,
-    waterSurfaceLevel + 0.35 + progress * 0.45,
-    effect.origin[1] + normalizedDir[1] * centerDistance,
-  ];
 
   const length = (effect.crestLength ?? 6) * (0.35 + progress * 0.6);
   const width = 0.18 + progress * 0.28;
@@ -3199,7 +3161,7 @@ function rebuildCloudGeometry() {
   }
 }
 
-function buildWindVertices(effect, now) {
+function composeWindStreakGeometry(effect, now) {
   if (!effect) {
     return null;
   }
@@ -3595,7 +3557,7 @@ function computeSkyboxGradient(normalizedTime) {
     dusk: duskWeight,
   };
 
-  const gradient = {
+  const gradientAccumulator = {
     top: [0, 0, 0],
     middle: [0, 0, 0],
     bottom: [0, 0, 0],
@@ -3609,16 +3571,16 @@ function computeSkyboxGradient(normalizedTime) {
     if (!palette) {
       continue;
     }
-    accumulateWeightedColor(gradient.top, palette.top, weight);
-    accumulateWeightedColor(gradient.middle, palette.middle, weight);
-    accumulateWeightedColor(gradient.bottom, palette.bottom, weight);
+    accumulateWeightedColor(gradientAccumulator.top, palette.top, weight);
+    accumulateWeightedColor(gradientAccumulator.middle, palette.middle, weight);
+    accumulateWeightedColor(gradientAccumulator.bottom, palette.bottom, weight);
   }
 
   return {
     gradient: {
-      top: normalizeColor(gradient.top),
-      middle: normalizeColor(gradient.middle),
-      bottom: normalizeColor(gradient.bottom),
+      top: normalizeColor(gradientAccumulator.top),
+      middle: normalizeColor(gradientAccumulator.middle),
+      bottom: normalizeColor(gradientAccumulator.bottom),
     },
     weights,
   };
@@ -7084,6 +7046,7 @@ const simulationInfo = {
     windActive: 0,
     windSpawned: 0,
     windCulled: 0,
+    windGeometryRejected: 0,
     clouds: 0,
   },
   celestial: {
@@ -7474,8 +7437,9 @@ function renderWindStreaks() {
   }
 
   for (const effect of weatherState.wind.active) {
-    const geometry = buildWindVertices(effect, now);
+    const geometry = composeWindStreakGeometry(effect, now);
     if (!geometry) {
+      weatherState.wind.metrics.geometryRejected += 1;
       continue;
     }
     try {
@@ -7863,7 +7827,7 @@ function updateDebugConsole(deltaTime) {
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
     `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
-    `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} nubes=${weatherState.clouds.metrics.count}`,
+    `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
@@ -7991,6 +7955,7 @@ function loop(currentTime) {
     simulationInfo.weather.windActive = weatherState.wind.metrics.active;
     simulationInfo.weather.windSpawned = weatherState.wind.metrics.spawned;
     simulationInfo.weather.windCulled = weatherState.wind.metrics.culled;
+    simulationInfo.weather.windGeometryRejected = weatherState.wind.metrics.geometryRejected;
     simulationInfo.weather.clouds = weatherState.clouds.metrics.count;
     simulationInfo.celestial.sunAltitude = dayNightCycleState.sunAltitude;
     simulationInfo.celestial.moonAltitude = dayNightCycleState.moonAltitude;
