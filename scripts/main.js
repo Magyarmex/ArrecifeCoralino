@@ -2868,6 +2868,45 @@ function spawnWaterSwell(currentTime) {
   waterSwellState.active.push(newSwell);
   scheduleWindGustFromSwell(newSwell);
 
+  return { vertices, alpha: clamp01(alpha * 0.65 + 0.2), progress: clamp01(progress) };
+}
+
+function getTimestamp() {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function ensureCelestialMeshTemplate() {
+  if (celestialGeometryState.template) {
+    return celestialGeometryState.template;
+  }
+
+  try {
+    let topology = createBaseIcosahedron();
+    for (let i = 0; i < CELESTIAL_SUBDIVISIONS; i++) {
+      topology = subdivideTopology(topology);
+    }
+    const triangles = [];
+    for (const face of topology.faces) {
+      triangles.push(topology.vertices[face[0]]);
+      triangles.push(topology.vertices[face[1]]);
+      triangles.push(topology.vertices[face[2]]);
+    }
+    celestialGeometryState.template = { triangles };
+    celestialGeometryState.metrics.templateBuilds += 1;
+    celestialGeometryState.metrics.lastTemplateBuildTime = getTimestamp();
+    celestialGeometryState.flags.templateValid = true;
+  } catch (error) {
+    celestialGeometryState.metrics.templateBuildErrors += 1;
+    celestialGeometryState.metrics.lastTemplateErrorTime = getTimestamp();
+    celestialGeometryState.flags.templateValid = false;
+    recordRuntimeIssue('error', 'celestial-template', error);
+    celestialGeometryState.template = null;
+    return null;
+  }
+
   return celestialGeometryState.template;
 }
 
@@ -3241,69 +3280,61 @@ function getTimestamp() {
   return Date.now();
 }
 
-function ensureCelestialMeshTemplate() {
-  if (celestialGeometryState.template) {
-    return celestialGeometryState.template;
-  }
-
-  try {
-    let topology = createBaseIcosahedron();
-    for (let i = 0; i < CELESTIAL_SUBDIVISIONS; i++) {
-      topology = subdivideTopology(topology);
-    }
-    const triangles = [];
-    for (const face of topology.faces) {
-      triangles.push(topology.vertices[face[0]]);
-      triangles.push(topology.vertices[face[1]]);
-      triangles.push(topology.vertices[face[2]]);
-    }
-    celestialGeometryState.template = { triangles };
-    celestialGeometryState.metrics.templateBuilds += 1;
-    celestialGeometryState.metrics.lastTemplateBuildTime = getTimestamp();
-    celestialGeometryState.flags.templateValid = true;
-  } catch (error) {
-    celestialGeometryState.metrics.templateBuildErrors += 1;
-    celestialGeometryState.metrics.lastTemplateErrorTime = getTimestamp();
-    celestialGeometryState.flags.templateValid = false;
-    recordRuntimeIssue('error', 'celestial-template', error);
-    celestialGeometryState.template = null;
-    return null;
-  }
-
-  return celestialGeometryState.template;
-}
-
-function fillCelestialVertexData(target, radius, position, color) {
-  const template = ensureCelestialMeshTemplate();
-  if (!template || !template.triangles || template.triangles.length === 0) {
-    return new Float32Array(0);
-  }
-  const requiredLength = template.triangles.length * floatsPerVertex;
-  let data = target;
-  if (!data || data.length !== requiredLength) {
-    data = new Float32Array(requiredLength);
-  }
-  let offset = 0;
-  for (const vertex of template.triangles) {
-    offset = pushVertex(
-      data,
-      offset,
-      position[0] + vertex[0] * radius,
-      position[1] + vertex[1] * radius,
-      position[2] + vertex[2] * radius,
-      color,
-    );
-  }
-  return data;
-}
-
 function updateCelestialGeometry() {
-  const template = ensureCelestialMeshTemplate();
+  if (!celestialGeometryState.template || !celestialGeometryState.flags.templateValid) {
+    try {
+      let topology = createBaseIcosahedron();
+      for (let i = 0; i < CELESTIAL_SUBDIVISIONS; i++) {
+        topology = subdivideTopology(topology);
+      }
+      const triangles = [];
+      for (const face of topology.faces) {
+        triangles.push(topology.vertices[face[0]]);
+        triangles.push(topology.vertices[face[1]]);
+        triangles.push(topology.vertices[face[2]]);
+      }
+      celestialGeometryState.template = { triangles };
+      celestialGeometryState.metrics.templateBuilds += 1;
+      celestialGeometryState.metrics.lastTemplateBuildTime = getTimestamp();
+      celestialGeometryState.flags.templateValid = true;
+    } catch (error) {
+      celestialGeometryState.metrics.templateBuildErrors += 1;
+      celestialGeometryState.metrics.lastTemplateErrorTime = getTimestamp();
+      celestialGeometryState.flags.templateValid = false;
+      recordRuntimeIssue('error', 'celestial-template', error);
+      celestialGeometryState.template = null;
+    }
+  }
+
+  const template = celestialGeometryState.template;
   if (!template) {
     celestialGeometryState.flags.sunGeometryValid = false;
     celestialGeometryState.flags.moonGeometryValid = false;
     return;
   }
+
+  const populateCelestialVertexBuffer = (target, radius, position, color) => {
+    if (!template.triangles || template.triangles.length === 0) {
+      return new Float32Array(0);
+    }
+    const requiredLength = template.triangles.length * floatsPerVertex;
+    let data = target;
+    if (!data || data.length !== requiredLength) {
+      data = new Float32Array(requiredLength);
+    }
+    let offset = 0;
+    for (const vertex of template.triangles) {
+      offset = pushVertex(
+        data,
+        offset,
+        position[0] + vertex[0] * radius,
+        position[1] + vertex[1] * radius,
+        position[2] + vertex[2] * radius,
+        color,
+      );
+    }
+    return data;
+  };
 
   try {
     const sunColor = [
@@ -3311,7 +3342,7 @@ function updateCelestialGeometry() {
       clamp01(dayNightCycleState.sunLightColor[1] + 0.18),
       clamp01(dayNightCycleState.sunLightColor[2] + 0.12),
     ];
-    sunVertexData = fillCelestialVertexData(
+    sunVertexData = populateCelestialVertexBuffer(
       sunVertexData,
       CELESTIAL_SUN_RADIUS,
       dayNightCycleState.sunPosition,
@@ -3341,7 +3372,7 @@ function updateCelestialGeometry() {
       clamp01(dayNightCycleState.moonLightColor[1] + 0.1),
       clamp01(dayNightCycleState.moonLightColor[2] + 0.12),
     ];
-    moonVertexData = fillCelestialVertexData(
+    moonVertexData = populateCelestialVertexBuffer(
       moonVertexData,
       CELESTIAL_MOON_RADIUS,
       dayNightCycleState.moonPosition,
