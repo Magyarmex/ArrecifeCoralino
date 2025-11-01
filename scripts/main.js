@@ -16,6 +16,8 @@ const startButton = document.getElementById('start-button');
 let debugConsole = document.getElementById('debug-console');
 let debugPanel = document.getElementById('debug-panel');
 let debugToggleButton = document.getElementById('debug-toggle');
+const cameraNearDisplay = document.getElementById('camera-near-display');
+const cameraFarDisplay = document.getElementById('camera-far-display');
 const settingsToggle = document.getElementById('settings-toggle');
 const settingsPanel = document.getElementById('settings-panel');
 const seedInput = document.getElementById('seed-input');
@@ -177,6 +179,34 @@ const debugConsoleDiagnostics =
       });
 
 runtimeGlobal.__ARRECIFE_DEBUG_CONSOLE__ = debugConsoleDiagnostics;
+
+const cameraDisplayDiagnostics =
+  runtimeState.cameraDisplayDiagnostics && typeof runtimeState.cameraDisplayDiagnostics === 'object'
+    ? runtimeState.cameraDisplayDiagnostics
+    : (runtimeState.cameraDisplayDiagnostics = {
+        updates: 0,
+        lastUpdateTime: 0,
+        missingElements: 0,
+        lastMissingTimestamp: null,
+      });
+
+const simulationInfoDiagnostics =
+  runtimeState.simulationInfoDiagnostics && typeof runtimeState.simulationInfoDiagnostics === 'object'
+    ? runtimeState.simulationInfoDiagnostics
+    : (runtimeState.simulationInfoDiagnostics = {
+        cameraRepairs: 0,
+        clipRepairs: 0,
+        clipFlagRepairs: 0,
+        clipOverrideRepairs: 0,
+        lastRepairTime: 0,
+        reportedCameraRepair: false,
+        reportedClipRepair: false,
+        reportedFlagRepair: false,
+        reportedOverrideRepair: false,
+      });
+
+runtimeGlobal.__ARRECIFE_CAMERA_DISPLAY__ = cameraDisplayDiagnostics;
+runtimeGlobal.__ARRECIFE_SIMULATION_INFO_DIAGNOSTICS__ = simulationInfoDiagnostics;
 
 const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   ? runtimeState.pendingIssues
@@ -9114,6 +9144,36 @@ function updateDebugConsole(deltaTime) {
   const baseClipLabel = `${CAMERA_BASE_NEAR_PLANE.toFixed(2)}/${CAMERA_BASE_FAR_PLANE.toFixed(1)}`;
   const activeClipLabel = `${CAMERA_NEAR_PLANE.toFixed(2)}/${CAMERA_FAR_PLANE.toFixed(1)}`;
 
+  const now = Date.now();
+  cameraDisplayDiagnostics.lastUpdateTime = now;
+  cameraDisplayDiagnostics.updates = Math.max(
+    0,
+    (cameraDisplayDiagnostics.updates ?? 0) + 1,
+  );
+  let missingCameraDisplays = 0;
+  if (
+    cameraNearDisplay &&
+    typeof cameraNearDisplay === 'object' &&
+    'textContent' in cameraNearDisplay
+  ) {
+    cameraNearDisplay.textContent = CAMERA_NEAR_PLANE.toFixed(2);
+  } else {
+    missingCameraDisplays += 1;
+  }
+  if (
+    cameraFarDisplay &&
+    typeof cameraFarDisplay === 'object' &&
+    'textContent' in cameraFarDisplay
+  ) {
+    cameraFarDisplay.textContent = CAMERA_FAR_PLANE.toFixed(1);
+  } else {
+    missingCameraDisplays += 1;
+  }
+  cameraDisplayDiagnostics.missingElements = missingCameraDisplays;
+  if (missingCameraDisplays > 0) {
+    cameraDisplayDiagnostics.lastMissingTimestamp = now;
+  }
+
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
@@ -9269,6 +9329,34 @@ function updateDebugConsole(deltaTime) {
     }
   }
 
+  if (cameraDisplayDiagnostics.missingElements > 0) {
+    const lastMissingLabel = cameraDisplayDiagnostics.lastMissingTimestamp
+      ? new Date(cameraDisplayDiagnostics.lastMissingTimestamp).toISOString()
+      : 'n/d';
+    info.push(
+      `UI cámara: faltantes=${cameraDisplayDiagnostics.missingElements} ` +
+        `última_falta=${lastMissingLabel}`,
+    );
+  }
+
+  if (
+    (simulationInfoDiagnostics.cameraRepairs ?? 0) > 0 ||
+    (simulationInfoDiagnostics.clipRepairs ?? 0) > 0 ||
+    (simulationInfoDiagnostics.clipFlagRepairs ?? 0) > 0 ||
+    (simulationInfoDiagnostics.clipOverrideRepairs ?? 0) > 0
+  ) {
+    const lastRepairLabel = simulationInfoDiagnostics.lastRepairTime
+      ? new Date(simulationInfoDiagnostics.lastRepairTime).toISOString()
+      : 'n/d';
+    info.push(
+      `SimInfo reparaciones: cámara=${simulationInfoDiagnostics.cameraRepairs ?? 0} ` +
+        `clip=${simulationInfoDiagnostics.clipRepairs ?? 0} banderas=${
+          simulationInfoDiagnostics.clipFlagRepairs ?? 0
+        } overrides=${simulationInfoDiagnostics.clipOverrideRepairs ?? 0} ` +
+        `último=${lastRepairLabel}`,
+    );
+  }
+
   if (cloudMetrics.lastError) {
     info.push(`Nubes error: ${cloudMetrics.lastError}`);
   }
@@ -9368,19 +9456,98 @@ function loop(currentTime) {
     simulationInfo.totalTicks = totalTicks;
     simulationInfo.displayedTps = displayedTps;
     simulationInfo.ticksLastFrame = ticksLastFrame;
-    simulationInfo.camera.position = [
-      cameraPosition[0],
-      cameraPosition[1],
-      cameraPosition[2],
-    ];
-    simulationInfo.camera.yaw = yaw;
-    simulationInfo.camera.pitch = pitch;
-    const clipSnapshot = snapshotCameraClipDiagnostics();
-    Object.assign(simulationInfo.camera.clip, clipSnapshot);
-    simulationInfo.camera.clipFlags.overrideActive = clipSnapshot.overrideActive;
-    simulationInfo.camera.clipFlags.invalidOrdering = clipSnapshot.invalidOrdering;
-    simulationInfo.camera.clipOverrides.count = clipSnapshot.overrides;
-    simulationInfo.camera.clipOverrides.lastTimestamp = clipSnapshot.lastOverrideTimestamp;
+    let cameraInfo = simulationInfo.camera;
+    if (!cameraInfo || typeof cameraInfo !== 'object') {
+      cameraInfo = {
+        position: [0, 0, 0],
+        yaw: 0,
+        pitch: 0,
+        clip: {},
+        clipFlags: { overrideActive: false, invalidOrdering: false },
+        clipOverrides: { count: 0, lastTimestamp: null },
+      };
+      simulationInfo.camera = cameraInfo;
+      simulationInfoDiagnostics.cameraRepairs = Math.max(
+        0,
+        (simulationInfoDiagnostics.cameraRepairs ?? 0) + 1,
+      );
+      simulationInfoDiagnostics.lastRepairTime = Date.now();
+      if (!simulationInfoDiagnostics.reportedCameraRepair) {
+        recordRuntimeIssue(
+          'warning',
+          'sim-info',
+          'Se restauró la estructura de la cámara en simulationInfo.',
+        );
+        simulationInfoDiagnostics.reportedCameraRepair = true;
+      }
+    }
+    if (!Array.isArray(cameraInfo.position) || cameraInfo.position.length !== 3) {
+      cameraInfo.position = [0, 0, 0];
+      simulationInfoDiagnostics.cameraRepairs = Math.max(
+        0,
+        (simulationInfoDiagnostics.cameraRepairs ?? 0) + 1,
+      );
+      simulationInfoDiagnostics.lastRepairTime = Date.now();
+    }
+    cameraInfo.position[0] = cameraPosition[0];
+    cameraInfo.position[1] = cameraPosition[1];
+    cameraInfo.position[2] = cameraPosition[2];
+    cameraInfo.yaw = yaw;
+    cameraInfo.pitch = pitch;
+    const clipSnapshot = snapshotCameraClipDiagnostics() ?? {};
+    if (!cameraInfo.clip || typeof cameraInfo.clip !== 'object') {
+      cameraInfo.clip = {};
+      simulationInfoDiagnostics.clipRepairs = Math.max(
+        0,
+        (simulationInfoDiagnostics.clipRepairs ?? 0) + 1,
+      );
+      simulationInfoDiagnostics.lastRepairTime = Date.now();
+      if (!simulationInfoDiagnostics.reportedClipRepair) {
+        recordRuntimeIssue(
+          'warning',
+          'sim-info',
+          'Se restauró la sección clip de simulationInfo.camera.',
+        );
+        simulationInfoDiagnostics.reportedClipRepair = true;
+      }
+    }
+    Object.assign(cameraInfo.clip, clipSnapshot);
+    if (!cameraInfo.clipFlags || typeof cameraInfo.clipFlags !== 'object') {
+      cameraInfo.clipFlags = { overrideActive: false, invalidOrdering: false };
+      simulationInfoDiagnostics.clipFlagRepairs = Math.max(
+        0,
+        (simulationInfoDiagnostics.clipFlagRepairs ?? 0) + 1,
+      );
+      simulationInfoDiagnostics.lastRepairTime = Date.now();
+      if (!simulationInfoDiagnostics.reportedFlagRepair) {
+        recordRuntimeIssue(
+          'warning',
+          'sim-info',
+          'Se restauraron las banderas de clipping en simulationInfo.camera.',
+        );
+        simulationInfoDiagnostics.reportedFlagRepair = true;
+      }
+    }
+    cameraInfo.clipFlags.overrideActive = clipSnapshot.overrideActive;
+    cameraInfo.clipFlags.invalidOrdering = clipSnapshot.invalidOrdering;
+    if (!cameraInfo.clipOverrides || typeof cameraInfo.clipOverrides !== 'object') {
+      cameraInfo.clipOverrides = { count: 0, lastTimestamp: null };
+      simulationInfoDiagnostics.clipOverrideRepairs = Math.max(
+        0,
+        (simulationInfoDiagnostics.clipOverrideRepairs ?? 0) + 1,
+      );
+      simulationInfoDiagnostics.lastRepairTime = Date.now();
+      if (!simulationInfoDiagnostics.reportedOverrideRepair) {
+        recordRuntimeIssue(
+          'warning',
+          'sim-info',
+          'Se restauraron los contadores de overrides de clipping.',
+        );
+        simulationInfoDiagnostics.reportedOverrideRepair = true;
+      }
+    }
+    cameraInfo.clipOverrides.count = clipSnapshot.overrides;
+    cameraInfo.clipOverrides.lastTimestamp = clipSnapshot.lastOverrideTimestamp;
     simulationInfo.dayNight = dayNightCycleState;
     simulationInfo.terrain.surfaceStyle = terrainInfo.surfaceStyle;
     simulationInfo.terrain.colorVariance = terrainInfo.colorVariance ?? 0;
@@ -9466,6 +9633,40 @@ function loop(currentTime) {
       simulationInfo.debug.panel.lastHeartbeatTime =
         debugConsoleDiagnostics.lastHeartbeatTime ?? 0;
       simulationInfo.debug.panel.lastError = debugConsoleDiagnostics.lastError ?? null;
+    }
+    if (simulationInfo.debug) {
+      if (!simulationInfo.debug.repairs || typeof simulationInfo.debug.repairs !== 'object') {
+        simulationInfo.debug.repairs = {
+          camera: 0,
+          clip: 0,
+          clipFlags: 0,
+          clipOverrides: 0,
+          lastRepairTime: 0,
+        };
+      }
+      const repairDebug = simulationInfo.debug.repairs;
+      repairDebug.camera = simulationInfoDiagnostics.cameraRepairs ?? 0;
+      repairDebug.clip = simulationInfoDiagnostics.clipRepairs ?? 0;
+      repairDebug.clipFlags = simulationInfoDiagnostics.clipFlagRepairs ?? 0;
+      repairDebug.clipOverrides = simulationInfoDiagnostics.clipOverrideRepairs ?? 0;
+      repairDebug.lastRepairTime = simulationInfoDiagnostics.lastRepairTime ?? 0;
+      if (
+        !simulationInfo.debug.cameraDisplay ||
+        typeof simulationInfo.debug.cameraDisplay !== 'object'
+      ) {
+        simulationInfo.debug.cameraDisplay = {
+          updates: 0,
+          lastUpdateTime: 0,
+          missingElements: 0,
+          lastMissingTimestamp: null,
+        };
+      }
+      const cameraDisplayDebug = simulationInfo.debug.cameraDisplay;
+      cameraDisplayDebug.updates = cameraDisplayDiagnostics.updates ?? 0;
+      cameraDisplayDebug.lastUpdateTime = cameraDisplayDiagnostics.lastUpdateTime ?? 0;
+      cameraDisplayDebug.missingElements = cameraDisplayDiagnostics.missingElements ?? 0;
+      cameraDisplayDebug.lastMissingTimestamp =
+        cameraDisplayDiagnostics.lastMissingTimestamp ?? null;
     }
     if (simulationInfo.audio) {
       simulationInfo.audio.enabled = ambientAudioState.enabled;
