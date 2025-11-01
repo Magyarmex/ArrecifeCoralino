@@ -2511,12 +2511,11 @@ const CLOUD_PUFF_SUBDIVISIONS = 1;
 const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
-const STAR_COUNT = 360;
-const STAR_FIELD_RADIUS = 940;
-const STAR_MIN_SIZE = 2.6;
-const STAR_MAX_SIZE = 5.8;
-const STAR_BRIGHT_THRESHOLD = 0.72;
-const STAR_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+const STAR_COUNT = 180;
+const STAR_FIELD_RADIUS = 900;
+const STAR_MIN_SIZE = 3.2;
+const STAR_MAX_SIZE = 7.6;
+const STAR_BRIGHT_THRESHOLD = 0.74;
 
 const weatherState = {
   wind: {
@@ -2562,14 +2561,9 @@ const starFieldState = {
     lastDrawTime: 0,
     rebuilds: 0,
     lastError: null,
-    coverageScore: 0,
-    verticalSkew: 0,
-    invalidStars: 0,
-    distributionIssue: null,
   },
   flags: {
     geometryValid: false,
-    distributionValid: true,
   },
   needsUpload: true,
 };
@@ -2598,7 +2592,13 @@ const terrainInfo = {
     ravine: 0,
     cliffs: 0,
   },
-  massDiagnostics: null,
+  surfaceStyle: 'arena clásica',
+  colorVariance: 0,
+  flags: {
+    flatColor: false,
+    textured: true,
+    lowSpecular: true,
+  },
 };
 if (volumetricEngine) {
   terrainInfo.massDiagnostics = volumetricEngine.metrics;
@@ -3486,63 +3486,39 @@ function initializeStarField(seedString) {
   const baseSeed = stringToSeed(`${seedString ?? currentSeed}-stars`);
   const random = createRandomGenerator(baseSeed);
   const stars = [];
-  const count = Math.max(0, Math.floor(STAR_COUNT));
   let bright = 0;
   let dim = 0;
-  let coverageAccumulator = 0;
-  let verticalBalance = 0;
-  let invalidStars = 0;
 
-  for (let i = 0; i < count; i++) {
-    const jitter = randomInRange(random, -0.35, 0.35);
-    const normalizedIndex = (i + 0.5 + jitter) / count;
-    const clampedIndex = clamp(normalizedIndex, 0.001, 0.999);
-    const y = 1 - clampedIndex * 2;
-    const azimuth = (i + randomInRange(random, 0, 1)) * STAR_GOLDEN_ANGLE;
-    const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
-    let direction = normalize([
-      Math.cos(azimuth) * ringRadius,
-      y,
-      Math.sin(azimuth) * ringRadius,
-    ]);
-
-    if (
-      !Number.isFinite(direction[0]) ||
-      !Number.isFinite(direction[1]) ||
-      !Number.isFinite(direction[2])
-    ) {
-      invalidStars += 1;
-      direction = [0, 1, 0];
-    }
-
-    const radius = STAR_FIELD_RADIUS + randomInRange(random, -140, 140);
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const polar = randomInRange(random, 0.05, Math.PI * 0.48);
+    const azimuth = randomInRange(random, 0, Math.PI * 2);
+    const sinPolar = Math.sin(polar);
+    const direction = [
+      sinPolar * Math.cos(azimuth),
+      Math.cos(polar),
+      sinPolar * Math.sin(azimuth),
+    ];
+    const radius = STAR_FIELD_RADIUS + randomInRange(random, -120, 120);
     const position = [
       direction[0] * radius,
       direction[1] * radius,
       direction[2] * radius,
     ];
     const size = randomInRange(random, STAR_MIN_SIZE, STAR_MAX_SIZE);
-    const brightness = clamp(randomInRange(random, 0.58, 1.18), 0.4, 1.3);
+    const brightness = clamp(randomInRange(random, 0.55, 1.12), 0.4, 1.25);
     if (brightness >= STAR_BRIGHT_THRESHOLD) {
       bright += 1;
     } else {
       dim += 1;
     }
-    coverageAccumulator += 1 - Math.abs(direction[1]);
-    verticalBalance += direction[1];
     stars.push({
       position,
       direction,
       size,
       brightness,
-      colorShift: randomInRange(random, -0.12, 0.18),
       twinklePhase: randomInRange(random, 0, Math.PI * 2),
     });
   }
-
-  const coverageScore = stars.length ? coverageAccumulator / stars.length : 0;
-  const verticalSkew = stars.length ? verticalBalance / stars.length : 0;
-  const distributionValid = invalidStars === 0 && coverageScore >= 0.35;
 
   starFieldState.random = random;
   starFieldState.stars = stars;
@@ -3558,24 +3534,9 @@ function initializeStarField(seedString) {
   starFieldState.metrics.lastVisibility = 0;
   starFieldState.metrics.lastDrawTime = 0;
   starFieldState.metrics.rebuilds = 0;
-  starFieldState.metrics.coverageScore = coverageScore;
-  starFieldState.metrics.verticalSkew = verticalSkew;
-  starFieldState.metrics.invalidStars = invalidStars;
-  starFieldState.metrics.distributionIssue = distributionValid
-    ? null
-    : `Distribución irregular: cobertura=${coverageScore.toFixed(2)} estrellas inválidas=${invalidStars}`;
   starFieldState.flags.geometryValid = false;
-  starFieldState.flags.distributionValid = distributionValid;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
-
-  if (!distributionValid) {
-    recordRuntimeIssue(
-      'warning',
-      'star-distribution',
-      new Error(starFieldState.metrics.distributionIssue || 'Distribución de estrellas inválida'),
-    );
-  }
 }
 
 function updateCloudField(deltaTime) {
@@ -3871,11 +3832,10 @@ function rebuildStarFieldGeometry() {
       dim += 1;
     }
     const shimmer = Math.sin(star?.twinklePhase ?? 0) * 0.05;
-    const colorShift = clamp(star?.colorShift ?? 0, -0.2, 0.25);
     const baseColor = [
-      clamp01(0.76 + brightness * 0.26 + shimmer * 0.28 + colorShift * 0.18),
-      clamp01(0.78 + brightness * 0.2 + shimmer * 0.22 + colorShift * -0.12),
-      clamp01(0.86 + brightness * 0.3 + shimmer * 0.34 + colorShift * -0.18),
+      clamp01(0.78 + brightness * 0.22 + shimmer * 0.3),
+      clamp01(0.78 + brightness * 0.18 + shimmer * 0.2),
+      clamp01(0.82 + brightness * 0.28 + shimmer * 0.4),
     ];
 
     const topRight = add(add(position, rightVec), upVec);
@@ -5786,12 +5746,57 @@ function generateTerrainVertices(seedString) {
   }
 
   const colors = new Array(blocksPerSide + 1);
+  const colorSum = [0, 0, 0];
+  const colorSumSq = [0, 0, 0];
+  let colorSamples = 0;
   for (let z = 0; z <= blocksPerSide; z++) {
     colors[z] = new Array(blocksPerSide + 1);
     for (let x = 0; x <= blocksPerSide; x++) {
-      void heights[z][x];
-      colors[z][x] = sandFlatColor;
+      const height = heights[z][x];
+      const normalizedHeight = maxTerrainHeight > 0 ? height / maxTerrainHeight : 0;
+
+      const sampleHeight = (xi, zi) => {
+        const clampedX = Math.max(0, Math.min(blocksPerSide, xi));
+        const clampedZ = Math.max(0, Math.min(blocksPerSide, zi));
+        return heights[clampedZ][clampedX];
+      };
+
+      const left = sampleHeight(x - 1, z);
+      const right = sampleHeight(x + 1, z);
+      const down = sampleHeight(x, z - 1);
+      const up = sampleHeight(x, z + 1);
+
+      const tangentX = [blockSize * 2, right - left, 0];
+      const tangentZ = [0, up - down, blockSize * 2];
+      const normal = normalize(cross(tangentZ, tangentX));
+      const diffuse = clamp01(dot(normal, lightDirection));
+      const ambient = 0.4;
+      const shading = clamp01(ambient + diffuse * 0.6);
+      const coastalBoost = clamp01(islandMask[z][x]) * 0.2;
+      const colorMix = clamp01(shading * 0.7 + normalizedHeight * 0.3 + coastalBoost * 0.5);
+      const color = mixColor(sandDarkColor, sandLightColor, colorMix);
+
+      colors[z][x] = color;
+      colorSum[0] += color[0];
+      colorSum[1] += color[1];
+      colorSum[2] += color[2];
+      colorSumSq[0] += color[0] * color[0];
+      colorSumSq[1] += color[1] * color[1];
+      colorSumSq[2] += color[2] * color[2];
+      colorSamples += 1;
     }
+  }
+
+  let colorVariance = 0;
+  if (colorSamples > 0) {
+    const inv = 1 / colorSamples;
+    const meanR = colorSum[0] * inv;
+    const meanG = colorSum[1] * inv;
+    const meanB = colorSum[2] * inv;
+    const varR = Math.max(0, colorSumSq[0] * inv - meanR * meanR);
+    const varG = Math.max(0, colorSumSq[1] * inv - meanG * meanG);
+    const varB = Math.max(0, colorSumSq[2] * inv - meanB * meanB);
+    colorVariance = clamp((varR + varG + varB) / 3, 0, 1);
   }
 
   let offset = 0;
@@ -5846,6 +5851,7 @@ function generateTerrainVertices(seedString) {
     heightfield: heights,
     maskfield: islandMask,
     featureStats,
+    colorVariance,
   };
 }
 
@@ -7022,6 +7028,7 @@ function regenerateTerrain(seedString) {
     heightfield,
     maskfield,
     featureStats,
+    colorVariance,
   } = generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
@@ -7050,13 +7057,14 @@ function regenerateTerrain(seedString) {
     ? visibleVertices / baseplateVertexCount
     : 0;
   terrainInfo.featureStats = featureStats;
-  terrainInfo.surfaceStyle = 'arena uniforme';
+  terrainInfo.surfaceStyle = 'arena clásica';
   if (!terrainInfo.flags || typeof terrainInfo.flags !== 'object') {
     terrainInfo.flags = {};
   }
-  terrainInfo.flags.flatColor = true;
-  terrainInfo.flags.textured = false;
+  terrainInfo.flags.flatColor = false;
+  terrainInfo.flags.textured = true;
   terrainInfo.flags.lowSpecular = true;
+  terrainInfo.colorVariance = colorVariance;
   resetWaterSwells(seedString);
   initializeCloudField(seedString);
   initializeStarField(seedString);
@@ -7766,6 +7774,16 @@ const simulationInfo = {
   displayedTps,
   ticksLastFrame,
   dayNight: dayNightCycleState,
+  terrain: {
+    surfaceStyle: terrainInfo.surfaceStyle,
+    colorVariance: terrainInfo.colorVariance,
+    minHeight: terrainInfo.minHeight,
+    maxHeight: terrainInfo.maxHeight,
+    vertexCount: terrainInfo.vertexCount,
+    visibleVertices: terrainInfo.visibleVertices,
+    visibleRatio: terrainInfo.visibleVertexRatio,
+    flags: { ...terrainInfo.flags },
+  },
   weather: {
     windActive: 0,
     windSpawned: 0,
@@ -7808,9 +7826,7 @@ const simulationInfo = {
     geometryMetrics: celestialGeometryState.metrics,
     stars: starFieldState.metrics.count,
     starMetrics: starFieldState.metrics,
-    starsHealthy:
-      starFieldState.flags.geometryValid && starFieldState.flags.distributionValid !== false,
-    starDistributionHealthy: starFieldState.flags.distributionValid !== false,
+    starsHealthy: starFieldState.flags.geometryValid,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -8634,23 +8650,10 @@ function updateDebugConsole(deltaTime) {
     ? `${cloudMetrics.lastBuildMs.toFixed(2)}ms`
     : '---';
   const starMetrics = starFieldState.metrics ?? {};
-  const geometryHealthy = starFieldState.flags?.geometryValid !== false;
-  const distributionHealthy = starFieldState.flags?.distributionValid !== false;
-  const starStatus = geometryHealthy
-    ? distributionHealthy
-      ? 'OK'
-      : 'WARN'
-    : 'ERROR';
+  const starStatus = starFieldState.flags?.geometryValid ? 'OK' : 'ERROR';
   const starVisibility = Number.isFinite(starMetrics.lastVisibility)
     ? starMetrics.lastVisibility.toFixed(2)
     : '0.00';
-  const starCoverage = Number.isFinite(starMetrics.coverageScore)
-    ? starMetrics.coverageScore.toFixed(2)
-    : '0.00';
-  const starSkew = Number.isFinite(starMetrics.verticalSkew)
-    ? starMetrics.verticalSkew.toFixed(2)
-    : '0.00';
-  const starInvalid = Math.max(0, starMetrics.invalidStars ?? 0);
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -8678,9 +8681,10 @@ function updateDebugConsole(deltaTime) {
     `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
       featureStats.ravine,
     )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
-    `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} especular=${
-      terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'
-    })`,
+    `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
+      terrainInfo.flags?.textured ? 'sí' : 'no'
+    } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'})`,
+    `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
     `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
@@ -8693,7 +8697,7 @@ function updateDebugConsole(deltaTime) {
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} cobertura=${starCoverage} balance=${starSkew} defectuosas=${starInvalid} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -8772,9 +8776,6 @@ function updateDebugConsole(deltaTime) {
 
   if (cloudMetrics.lastError) {
     info.push(`Nubes error: ${cloudMetrics.lastError}`);
-  }
-  if (starMetrics.distributionIssue) {
-    info.push(`Estrellas alerta: ${starMetrics.distributionIssue}`);
   }
   if (starMetrics.lastError) {
     info.push(`Estrellas error: ${starMetrics.lastError}`);
@@ -8873,6 +8874,14 @@ function loop(currentTime) {
     simulationInfo.displayedTps = displayedTps;
     simulationInfo.ticksLastFrame = ticksLastFrame;
     simulationInfo.dayNight = dayNightCycleState;
+    simulationInfo.terrain.surfaceStyle = terrainInfo.surfaceStyle;
+    simulationInfo.terrain.colorVariance = terrainInfo.colorVariance ?? 0;
+    simulationInfo.terrain.minHeight = terrainInfo.minHeight ?? 0;
+    simulationInfo.terrain.maxHeight = terrainInfo.maxHeight ?? 0;
+    simulationInfo.terrain.vertexCount = terrainInfo.vertexCount ?? 0;
+    simulationInfo.terrain.visibleVertices = terrainInfo.visibleVertices ?? 0;
+    simulationInfo.terrain.visibleRatio = terrainInfo.visibleVertexRatio ?? 0;
+    simulationInfo.terrain.flags = { ...terrainInfo.flags };
     const cloudMetrics = weatherState.clouds?.metrics ?? {};
     const starMetrics = starFieldState.metrics ?? {};
     simulationInfo.weather.windActive = weatherState.wind.metrics.active;
