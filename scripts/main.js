@@ -2454,11 +2454,12 @@ const CLOUD_PUFF_SUBDIVISIONS = 1;
 const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
-const STAR_COUNT = 180;
-const STAR_FIELD_RADIUS = 900;
-const STAR_MIN_SIZE = 3.2;
-const STAR_MAX_SIZE = 7.6;
-const STAR_BRIGHT_THRESHOLD = 0.74;
+const STAR_COUNT = 360;
+const STAR_FIELD_RADIUS = 940;
+const STAR_MIN_SIZE = 2.6;
+const STAR_MAX_SIZE = 5.8;
+const STAR_BRIGHT_THRESHOLD = 0.72;
+const STAR_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 const weatherState = {
   wind: {
@@ -2504,9 +2505,14 @@ const starFieldState = {
     lastDrawTime: 0,
     rebuilds: 0,
     lastError: null,
+    coverageScore: 0,
+    verticalSkew: 0,
+    invalidStars: 0,
+    distributionIssue: null,
   },
   flags: {
     geometryValid: false,
+    distributionValid: true,
   },
   needsUpload: true,
 };
@@ -3423,39 +3429,63 @@ function initializeStarField(seedString) {
   const baseSeed = stringToSeed(`${seedString ?? currentSeed}-stars`);
   const random = createRandomGenerator(baseSeed);
   const stars = [];
+  const count = Math.max(0, Math.floor(STAR_COUNT));
   let bright = 0;
   let dim = 0;
+  let coverageAccumulator = 0;
+  let verticalBalance = 0;
+  let invalidStars = 0;
 
-  for (let i = 0; i < STAR_COUNT; i++) {
-    const polar = randomInRange(random, 0.05, Math.PI * 0.48);
-    const azimuth = randomInRange(random, 0, Math.PI * 2);
-    const sinPolar = Math.sin(polar);
-    const direction = [
-      sinPolar * Math.cos(azimuth),
-      Math.cos(polar),
-      sinPolar * Math.sin(azimuth),
-    ];
-    const radius = STAR_FIELD_RADIUS + randomInRange(random, -120, 120);
+  for (let i = 0; i < count; i++) {
+    const jitter = randomInRange(random, -0.35, 0.35);
+    const normalizedIndex = (i + 0.5 + jitter) / count;
+    const clampedIndex = clamp(normalizedIndex, 0.001, 0.999);
+    const y = 1 - clampedIndex * 2;
+    const azimuth = (i + randomInRange(random, 0, 1)) * STAR_GOLDEN_ANGLE;
+    const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
+    let direction = normalize([
+      Math.cos(azimuth) * ringRadius,
+      y,
+      Math.sin(azimuth) * ringRadius,
+    ]);
+
+    if (
+      !Number.isFinite(direction[0]) ||
+      !Number.isFinite(direction[1]) ||
+      !Number.isFinite(direction[2])
+    ) {
+      invalidStars += 1;
+      direction = [0, 1, 0];
+    }
+
+    const radius = STAR_FIELD_RADIUS + randomInRange(random, -140, 140);
     const position = [
       direction[0] * radius,
       direction[1] * radius,
       direction[2] * radius,
     ];
     const size = randomInRange(random, STAR_MIN_SIZE, STAR_MAX_SIZE);
-    const brightness = clamp(randomInRange(random, 0.55, 1.12), 0.4, 1.25);
+    const brightness = clamp(randomInRange(random, 0.58, 1.18), 0.4, 1.3);
     if (brightness >= STAR_BRIGHT_THRESHOLD) {
       bright += 1;
     } else {
       dim += 1;
     }
+    coverageAccumulator += 1 - Math.abs(direction[1]);
+    verticalBalance += direction[1];
     stars.push({
       position,
       direction,
       size,
       brightness,
+      colorShift: randomInRange(random, -0.12, 0.18),
       twinklePhase: randomInRange(random, 0, Math.PI * 2),
     });
   }
+
+  const coverageScore = stars.length ? coverageAccumulator / stars.length : 0;
+  const verticalSkew = stars.length ? verticalBalance / stars.length : 0;
+  const distributionValid = invalidStars === 0 && coverageScore >= 0.35;
 
   starFieldState.random = random;
   starFieldState.stars = stars;
@@ -3471,9 +3501,24 @@ function initializeStarField(seedString) {
   starFieldState.metrics.lastVisibility = 0;
   starFieldState.metrics.lastDrawTime = 0;
   starFieldState.metrics.rebuilds = 0;
+  starFieldState.metrics.coverageScore = coverageScore;
+  starFieldState.metrics.verticalSkew = verticalSkew;
+  starFieldState.metrics.invalidStars = invalidStars;
+  starFieldState.metrics.distributionIssue = distributionValid
+    ? null
+    : `Distribución irregular: cobertura=${coverageScore.toFixed(2)} estrellas inválidas=${invalidStars}`;
   starFieldState.flags.geometryValid = false;
+  starFieldState.flags.distributionValid = distributionValid;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
+
+  if (!distributionValid) {
+    recordRuntimeIssue(
+      'warning',
+      'star-distribution',
+      new Error(starFieldState.metrics.distributionIssue || 'Distribución de estrellas inválida'),
+    );
+  }
 }
 
 function updateCloudField(deltaTime) {
@@ -3769,10 +3814,11 @@ function rebuildStarFieldGeometry() {
       dim += 1;
     }
     const shimmer = Math.sin(star?.twinklePhase ?? 0) * 0.05;
+    const colorShift = clamp(star?.colorShift ?? 0, -0.2, 0.25);
     const baseColor = [
-      clamp01(0.78 + brightness * 0.22 + shimmer * 0.3),
-      clamp01(0.78 + brightness * 0.18 + shimmer * 0.2),
-      clamp01(0.82 + brightness * 0.28 + shimmer * 0.4),
+      clamp01(0.76 + brightness * 0.26 + shimmer * 0.28 + colorShift * 0.18),
+      clamp01(0.78 + brightness * 0.2 + shimmer * 0.22 + colorShift * -0.12),
+      clamp01(0.86 + brightness * 0.3 + shimmer * 0.34 + colorShift * -0.18),
     ];
 
     const topRight = add(add(position, rightVec), upVec);
@@ -7596,7 +7642,9 @@ const simulationInfo = {
     geometryMetrics: celestialGeometryState.metrics,
     stars: starFieldState.metrics.count,
     starMetrics: starFieldState.metrics,
-    starsHealthy: starFieldState.flags.geometryValid,
+    starsHealthy:
+      starFieldState.flags.geometryValid && starFieldState.flags.distributionValid !== false,
+    starDistributionHealthy: starFieldState.flags.distributionValid !== false,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -8420,10 +8468,23 @@ function updateDebugConsole(deltaTime) {
     ? `${cloudMetrics.lastBuildMs.toFixed(2)}ms`
     : '---';
   const starMetrics = starFieldState.metrics ?? {};
-  const starStatus = starFieldState.flags?.geometryValid ? 'OK' : 'ERROR';
+  const geometryHealthy = starFieldState.flags?.geometryValid !== false;
+  const distributionHealthy = starFieldState.flags?.distributionValid !== false;
+  const starStatus = geometryHealthy
+    ? distributionHealthy
+      ? 'OK'
+      : 'WARN'
+    : 'ERROR';
   const starVisibility = Number.isFinite(starMetrics.lastVisibility)
     ? starMetrics.lastVisibility.toFixed(2)
     : '0.00';
+  const starCoverage = Number.isFinite(starMetrics.coverageScore)
+    ? starMetrics.coverageScore.toFixed(2)
+    : '0.00';
+  const starSkew = Number.isFinite(starMetrics.verticalSkew)
+    ? starMetrics.verticalSkew.toFixed(2)
+    : '0.00';
+  const starInvalid = Math.max(0, starMetrics.invalidStars ?? 0);
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -8466,7 +8527,7 @@ function updateDebugConsole(deltaTime) {
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} cobertura=${starCoverage} balance=${starSkew} defectuosas=${starInvalid} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -8511,6 +8572,9 @@ function updateDebugConsole(deltaTime) {
 
   if (cloudMetrics.lastError) {
     info.push(`Nubes error: ${cloudMetrics.lastError}`);
+  }
+  if (starMetrics.distributionIssue) {
+    info.push(`Estrellas alerta: ${starMetrics.distributionIssue}`);
   }
   if (starMetrics.lastError) {
     info.push(`Estrellas error: ${starMetrics.lastError}`);
