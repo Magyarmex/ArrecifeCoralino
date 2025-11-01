@@ -131,9 +131,17 @@ function ensureDebugPanelHeartbeat() {
     return;
   }
   debugConsoleHeartbeatId = scheduleInterval(() => {
+    debugConsoleDiagnostics.lastHeartbeatTime = Date.now();
     try {
       updateDebugConsole(0);
     } catch (error) {
+      debugConsoleDiagnostics.heartbeatFailures = Math.max(
+        0,
+        (debugConsoleDiagnostics.heartbeatFailures ?? 0) + 1,
+      );
+      debugConsoleDiagnostics.lastError = String(
+        error && error.message ? error.message : error ?? 'Error desconocido',
+      );
       console.error('Error al actualizar el panel de depuración (latido)', error);
     }
   }, DEBUG_PANEL_HEARTBEAT_MS);
@@ -155,6 +163,20 @@ const runtimeIssues = Array.isArray(runtimeState.issues)
   ? runtimeState.issues
   : (runtimeState.issues = []);
 const MAX_RUNTIME_ISSUES = 8;
+
+const debugConsoleDiagnostics =
+  runtimeState.debugConsoleDiagnostics && typeof runtimeState.debugConsoleDiagnostics === 'object'
+    ? runtimeState.debugConsoleDiagnostics
+    : (runtimeState.debugConsoleDiagnostics = {
+        updates: 0,
+        lastUpdateTime: 0,
+        lastDeltaTime: 0,
+        lastError: null,
+        heartbeatFailures: 0,
+        lastHeartbeatTime: 0,
+      });
+
+runtimeGlobal.__ARRECIFE_DEBUG_CONSOLE__ = debugConsoleDiagnostics;
 
 const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   ? runtimeState.pendingIssues
@@ -215,6 +237,8 @@ const ambientAudioState = {
     issues: 0,
     lastError: null,
     transitions: 0,
+    pendingGesture: false,
+    lastResumeAttempt: null,
   },
   flags: {
     musicLoadFailed: false,
@@ -944,13 +968,20 @@ function setAmbientMusicEnabled(isEnabled) {
       : 'inactivo';
     ambientAudioState.diagnostics.underwater = false;
     ambientAudioState.diagnostics.windTarget = 0;
+    ambientAudioState.diagnostics.pendingGesture = false;
     return;
   }
 
-  const context = ensureAmbientAudioContext();
+  const context = ambientAudioState.context;
   if (!context) {
+    if (ambientAudioState.diagnostics.musicStatus !== 'error') {
+      ambientAudioState.diagnostics.musicStatus = 'pendiente';
+    }
+    ambientAudioState.diagnostics.pendingGesture = true;
     return;
   }
+
+  ambientAudioState.diagnostics.pendingGesture = false;
 
   ensureAmbientMusicNodes();
 
@@ -967,6 +998,10 @@ function setAmbientMusicEnabled(isEnabled) {
 
   if (context.state === 'running') {
     fadeAmbientMusic(ambientAudioState.defaultGain);
+  }
+
+  if (context.state === 'suspended') {
+    ambientAudioState.diagnostics.pendingGesture = true;
   }
 
   updateAmbientAudioMix(ambientAudioState.underwater);
@@ -989,13 +1024,34 @@ function handleAmbientMusicUserGesture() {
     ensureAmbientMusicNodes();
     fadeAmbientMusic(ambientAudioState.defaultGain);
     updateAmbientAudioMix(ambientAudioState.underwater);
+    ambientAudioState.diagnostics.pendingGesture = false;
   };
+
+  ambientAudioState.diagnostics.lastResumeAttempt = Date.now();
 
   if (context.state === 'suspended' && typeof context.resume === 'function') {
     try {
+      ambientAudioState.diagnostics.pendingGesture = true;
       const resumeResult = context.resume();
       if (resumeResult && typeof resumeResult.then === 'function') {
-        resumeResult.then(activate).catch(() => {});
+        resumeResult
+          .then(() => {
+            activate();
+          })
+          .catch((error) => {
+            ambientAudioState.diagnostics.pendingGesture = true;
+            if (!ambientAudioState.reportedInitFailure) {
+              ambientAudioState.reportedInitFailure = true;
+              const message =
+                'No se pudo activar el audio ambiental. ' +
+                String(error && error.message ? error.message : error ?? 'Error desconocido');
+              pendingRuntimeIssueQueue.push({
+                severity: 'warning',
+                context: 'audio',
+                error: message,
+              });
+            }
+          });
         return;
       }
     } catch (error) {
@@ -1010,6 +1066,7 @@ function handleAmbientMusicUserGesture() {
           error: message,
         });
       }
+      ambientAudioState.diagnostics.pendingGesture = true;
       return;
     }
   }
@@ -7989,7 +8046,8 @@ const simulationInfo = {
     vertexCount: terrainInfo.vertexCount,
     visibleVertices: terrainInfo.visibleVertices,
     visibleRatio: terrainInfo.visibleVertexRatio,
-    flags: { ...terrainInfo.flags },
+    flags:
+      terrainInfo.flags && typeof terrainInfo.flags === 'object' ? { ...terrainInfo.flags } : {},
     flatLighting: {
       color: terrainInfo.flatLighting.color.slice(),
       luma: terrainInfo.flatLighting.luma,
@@ -7998,23 +8056,23 @@ const simulationInfo = {
     },
   },
   weather: {
-    windActive: 0,
-    windSpawned: 0,
-    windCulled: 0,
-    windGeometryRejected: 0,
-    clouds: 0,
-    cloudPuffs: weatherState.clouds.metrics.puffs,
-    cloudClumps: weatherState.clouds.metrics.clumps,
-    cloudMetrics: weatherState.clouds.metrics,
-    cloudsHealthy: weatherState.clouds.flags.geometryValid,
+    windActive: weatherState.wind.metrics.active,
+    windSpawned: weatherState.wind.metrics.spawned,
+    windCulled: weatherState.wind.metrics.culled,
+    windGeometryRejected: weatherState.wind.metrics.geometryRejected,
+    clouds: weatherState.clouds.metrics?.count ?? 0,
+    cloudPuffs: weatherState.clouds.metrics?.puffs ?? 0,
+    cloudClumps: weatherState.clouds.metrics?.clumps ?? 0,
+    cloudMetrics: weatherState.clouds.metrics ?? {},
+    cloudsHealthy: Boolean(weatherState.clouds.flags?.geometryValid),
     swells: {
-      active: 0,
-      spawned: 0,
-      culled: 0,
-      overflowed: 0,
-      bufferUtilization: 0,
-      pending: 0,
-      lastSpawnTime: null,
+      active: waterSwellState?.metrics?.active ?? 0,
+      spawned: waterSwellState?.metrics?.spawned ?? 0,
+      culled: waterSwellState?.metrics?.culled ?? 0,
+      overflowed: waterSwellState?.metrics?.overflowed ?? 0,
+      bufferUtilization: waterSwellState?.metrics?.bufferUtilization ?? 0,
+      pending: waterSwellState?.metrics?.pending ?? 0,
+      lastSpawnTime: waterSwellState?.metrics?.lastSpawnTime ?? null,
     },
     diagnostics: {
       swells: {
@@ -8022,8 +8080,26 @@ const simulationInfo = {
         oversubscribedFrames: waterSwellDiagnostics.oversubscribedFrames,
         lastUpdateDurationMs: waterSwellDiagnostics.lastUpdateDurationMs,
         lastError: waterSwellDiagnostics.lastError,
+        spawnBacklog: Boolean(waterSwellState?.flags?.spawnBacklog),
+        overCapacity: Boolean(waterSwellState?.flags?.overCapacity),
       },
     },
+  },
+  debug: {
+    panel: {
+      updates: 0,
+      lastUpdateTime: 0,
+      lastDeltaTime: 0,
+      heartbeatFailures: 0,
+      lastHeartbeatTime: 0,
+      lastError: null,
+    },
+  },
+  audio: {
+    enabled: ambientAudioState.enabled,
+    musicStatus: ambientAudioState.diagnostics.musicStatus,
+    pendingGesture: ambientAudioState.diagnostics.pendingGesture,
+    lastResumeAttempt: ambientAudioState.diagnostics.lastResumeAttempt,
   },
   celestial: {
     sunAltitude: dayNightCycleState.sunAltitude,
@@ -8949,6 +9025,14 @@ function updateDebugConsole(deltaTime) {
     return;
   }
 
+  debugConsoleDiagnostics.lastUpdateTime = Date.now();
+  debugConsoleDiagnostics.lastDeltaTime = Number.isFinite(deltaTime) ? deltaTime : 0;
+  debugConsoleDiagnostics.updates = Math.max(
+    0,
+    (debugConsoleDiagnostics.updates ?? 0) + 1,
+  );
+  debugConsoleDiagnostics.lastError = null;
+
   fpsAccumulator += deltaTime;
   fpsSamples += 1;
   if (fpsAccumulator >= 0.5) {
@@ -8958,8 +9042,10 @@ function updateDebugConsole(deltaTime) {
   }
 
   const pointerLocked = document.pointerLockElement === canvas;
-  const activeMovement = Object.entries(movementState)
-    .filter(([, active]) => active)
+  const movementEntries =
+    movementState && typeof movementState === 'object' ? Object.entries(movementState) : [];
+  const activeMovement = movementEntries
+    .filter(([, active]) => Boolean(active))
     .map(([key]) => key)
     .join(', ');
 
@@ -9149,11 +9235,37 @@ function updateDebugConsole(deltaTime) {
       audioDiagnostics.musicLoadTimeMs !== null
         ? `${audioDiagnostics.musicLoadTimeMs} ms`
         : 'n/d';
+    const pendingGesture = audioDiagnostics.pendingGesture ? 'sí' : 'no';
+    const lastResume = audioDiagnostics.lastResumeAttempt
+      ? new Date(audioDiagnostics.lastResumeAttempt).toISOString()
+      : 'n/d';
     info.push(
       `Audio: pista=${audioDiagnostics.musicTrack ?? 'desconocida'} estado=${musicStatus} filtro=${filterFrequency}Hz bajo_agua=${underwaterStatus} viento=${windLevel}/${windTarget} carga=${loadTime} incidencias=${audioDiagnostics.issues ?? 0}`,
     );
+    info.push(
+      `Audio control: pendiente_gesto=${pendingGesture} último_reanudar=${lastResume}`,
+    );
     if (audioDiagnostics.lastError) {
       info.push(`Audio último error: ${audioDiagnostics.lastError}`);
+    }
+  }
+
+  const debugDiagnostics = debugConsoleDiagnostics;
+  if (debugDiagnostics) {
+    const lastUpdateLabel = debugDiagnostics.lastUpdateTime
+      ? new Date(debugDiagnostics.lastUpdateTime).toISOString()
+      : 'n/d';
+    const lastHeartbeatLabel = debugDiagnostics.lastHeartbeatTime
+      ? new Date(debugDiagnostics.lastHeartbeatTime).toISOString()
+      : 'n/d';
+    const lastDelta = Number.isFinite(debugDiagnostics.lastDeltaTime)
+      ? debugDiagnostics.lastDeltaTime.toFixed(4)
+      : 'n/d';
+    info.push(
+      `Panel depuración: actualizaciones=${debugDiagnostics.updates ?? 0} Δt=${lastDelta}s último=${lastUpdateLabel} latido=${lastHeartbeatLabel} fallos=${debugDiagnostics.heartbeatFailures ?? 0}`,
+    );
+    if (debugDiagnostics.lastError) {
+      info.push(`Panel depuración último error: ${debugDiagnostics.lastError}`);
     }
   }
 
@@ -9277,24 +9389,26 @@ function loop(currentTime) {
     simulationInfo.terrain.vertexCount = terrainInfo.vertexCount ?? 0;
     simulationInfo.terrain.visibleVertices = terrainInfo.visibleVertices ?? 0;
     simulationInfo.terrain.visibleRatio = terrainInfo.visibleVertexRatio ?? 0;
-    simulationInfo.terrain.flags = { ...terrainInfo.flags };
+    simulationInfo.terrain.flags =
+      terrainInfo.flags && typeof terrainInfo.flags === 'object' ? { ...terrainInfo.flags } : {};
     simulationInfo.terrain.flatLighting = {
       color: terrainInfo.flatLighting?.color ? terrainInfo.flatLighting.color.slice() : [1, 1, 1],
       luma: terrainInfo.flatLighting?.luma ?? 1,
       daylight: terrainInfo.flatLighting?.daylight ?? 0,
       moonlight: terrainInfo.flatLighting?.moonlight ?? 0,
     };
-    const cloudMetrics = weatherState.clouds?.metrics ?? {};
+    const cloudState = weatherState.clouds ?? {};
+    const cloudMetrics = cloudState.metrics ?? {};
     const starMetrics = starFieldState.metrics ?? {};
     simulationInfo.weather.windActive = weatherState.wind.metrics.active;
     simulationInfo.weather.windSpawned = weatherState.wind.metrics.spawned;
     simulationInfo.weather.windCulled = weatherState.wind.metrics.culled;
     simulationInfo.weather.windGeometryRejected = weatherState.wind.metrics.geometryRejected;
-    simulationInfo.weather.clouds = cloudMetrics.count ?? weatherState.clouds.metrics.count;
-    simulationInfo.weather.cloudPuffs = cloudMetrics.puffs ?? weatherState.clouds.metrics.puffs ?? 0;
-    simulationInfo.weather.cloudClumps = cloudMetrics.clumps ?? weatherState.clouds.metrics.clumps ?? 0;
-    simulationInfo.weather.cloudsHealthy = Boolean(weatherState.clouds.flags?.geometryValid);
-    simulationInfo.weather.cloudMetrics = weatherState.clouds.metrics;
+    simulationInfo.weather.clouds = cloudMetrics.count ?? 0;
+    simulationInfo.weather.cloudPuffs = cloudMetrics.puffs ?? 0;
+    simulationInfo.weather.cloudClumps = cloudMetrics.clumps ?? 0;
+    simulationInfo.weather.cloudsHealthy = Boolean(cloudState.flags?.geometryValid);
+    simulationInfo.weather.cloudMetrics = cloudMetrics;
     const swellMetrics = waterSwellState?.metrics;
     const swellInfo = simulationInfo.weather.swells;
     if (swellInfo) {
@@ -9343,6 +9457,23 @@ function loop(currentTime) {
     simulationInfo.celestial.sunGeometryValid = celestialGeometryState.flags.sunGeometryValid;
     simulationInfo.celestial.moonGeometryValid = celestialGeometryState.flags.moonGeometryValid;
     simulationInfo.celestial.geometryMetrics = celestialGeometryState.metrics;
+    if (simulationInfo.debug && simulationInfo.debug.panel) {
+      simulationInfo.debug.panel.updates = debugConsoleDiagnostics.updates ?? 0;
+      simulationInfo.debug.panel.lastUpdateTime = debugConsoleDiagnostics.lastUpdateTime ?? 0;
+      simulationInfo.debug.panel.lastDeltaTime = debugConsoleDiagnostics.lastDeltaTime ?? 0;
+      simulationInfo.debug.panel.heartbeatFailures =
+        debugConsoleDiagnostics.heartbeatFailures ?? 0;
+      simulationInfo.debug.panel.lastHeartbeatTime =
+        debugConsoleDiagnostics.lastHeartbeatTime ?? 0;
+      simulationInfo.debug.panel.lastError = debugConsoleDiagnostics.lastError ?? null;
+    }
+    if (simulationInfo.audio) {
+      simulationInfo.audio.enabled = ambientAudioState.enabled;
+      simulationInfo.audio.musicStatus = ambientAudioState.diagnostics.musicStatus;
+      simulationInfo.audio.pendingGesture = ambientAudioState.diagnostics.pendingGesture;
+      simulationInfo.audio.lastResumeAttempt =
+        ambientAudioState.diagnostics.lastResumeAttempt;
+    }
     simulationInfo.lighting.global = lightingDiagnostics.latestLightColor.slice();
     simulationInfo.lighting.ambient = lightingDiagnostics.latestAmbientColor.slice();
     simulationInfo.lighting.daylight = lightingDiagnostics.latestDaylight;
