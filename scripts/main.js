@@ -197,6 +197,32 @@ const ambientAudioState = {
   underwater: false,
 };
 
+const DEFAULT_CAMERA_NEAR_PLANE = 0.1;
+const DEFAULT_CAMERA_FAR_PLANE = 500;
+const CAMERA_NEAR_PLANE =
+  Number.isFinite(runtimeGlobal.CAMERA_NEAR_PLANE) && runtimeGlobal.CAMERA_NEAR_PLANE > 0
+    ? runtimeGlobal.CAMERA_NEAR_PLANE
+    : DEFAULT_CAMERA_NEAR_PLANE;
+const CAMERA_FAR_PLANE =
+  Number.isFinite(runtimeGlobal.CAMERA_FAR_PLANE) && runtimeGlobal.CAMERA_FAR_PLANE > CAMERA_NEAR_PLANE
+    ? runtimeGlobal.CAMERA_FAR_PLANE
+    : DEFAULT_CAMERA_FAR_PLANE;
+
+runtimeGlobal.CAMERA_NEAR_PLANE = CAMERA_NEAR_PLANE;
+runtimeGlobal.CAMERA_FAR_PLANE = CAMERA_FAR_PLANE;
+
+const cameraClipPlanes =
+  runtimeState.cameraClipPlanes && typeof runtimeState.cameraClipPlanes === 'object'
+    ? runtimeState.cameraClipPlanes
+    : (runtimeState.cameraClipPlanes = { near: CAMERA_NEAR_PLANE, far: CAMERA_FAR_PLANE, lastUpdated: 0 });
+
+cameraClipPlanes.near = CAMERA_NEAR_PLANE;
+cameraClipPlanes.far = CAMERA_FAR_PLANE;
+cameraClipPlanes.lastUpdated =
+  typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+
+runtimeGlobal.__ARRECIFE_CAMERA_CLIP__ = cameraClipPlanes;
+
 function ensureAmbientAudioContext() {
   if (!ambientAudioState.supported) {
     return null;
@@ -1996,11 +2022,10 @@ const fragmentSource = `
       return;
     }
 
-    if (renderMode == RENDER_MODE_TERRAIN && terrainFlatShading > 0) {
-      vec3 litTerrain = clamp(baseColor * terrainFlatLightColor, 0.0, 1.0);
-      gl_FragColor = vec4(litTerrain, terrainAlpha);
-      return;
-    }
+      if (renderMode == RENDER_MODE_TERRAIN && terrainFlatShading > 0) {
+        gl_FragColor = vec4(baseColor, terrainAlpha);
+        return;
+      }
 
     vec3 texturedColor = baseColor;
     bool applySurfaceTexture = renderMode != RENDER_MODE_CLOUD;
@@ -2302,7 +2327,7 @@ const blockLineColor = [0.93, 0.9, 0.8];
 const chunkLineColor = [0.74, 0.68, 0.55];
 const sandDarkColor = [0.73, 0.64, 0.48];
 const sandLightColor = [0.97, 0.91, 0.74];
-const sandFlatColor = mixColor(sandDarkColor, sandLightColor, 0.58);
+const sandFlatColor = [0.93, 0.86, 0.7];
 const terrainNoiseScale = 4.8;
 const terrainWarpScale = 2.6;
 const terrainWarpStrength = 0.45;
@@ -5785,29 +5810,7 @@ function generateTerrainVertices(seedString) {
   for (let z = 0; z <= blocksPerSide; z++) {
     colors[z] = new Array(blocksPerSide + 1);
     for (let x = 0; x <= blocksPerSide; x++) {
-      const height = heights[z][x];
-      const normalizedHeight = maxTerrainHeight > 0 ? height / maxTerrainHeight : 0;
-
-      const sampleHeight = (xi, zi) => {
-        const clampedX = Math.max(0, Math.min(blocksPerSide, xi));
-        const clampedZ = Math.max(0, Math.min(blocksPerSide, zi));
-        return heights[clampedZ][clampedX];
-      };
-
-      const left = sampleHeight(x - 1, z);
-      const right = sampleHeight(x + 1, z);
-      const down = sampleHeight(x, z - 1);
-      const up = sampleHeight(x, z + 1);
-
-      const tangentX = [blockSize * 2, right - left, 0];
-      const tangentZ = [0, up - down, blockSize * 2];
-      const normal = normalize(cross(tangentZ, tangentX));
-      const diffuse = clamp01(dot(normal, lightDirection));
-      const ambient = 0.4;
-      const shading = clamp01(ambient + diffuse * 0.6);
-      const coastalBoost = clamp01(islandMask[z][x]) * 0.2;
-      const colorMix = clamp01(shading * 0.7 + normalizedHeight * 0.3 + coastalBoost * 0.5);
-      const color = mixColor(sandDarkColor, sandLightColor, colorMix);
+      const color = sandFlatColor;
 
       colors[z][x] = color;
       colorSum[0] += color[0];
@@ -7809,6 +7812,12 @@ const simulationInfo = {
   totalTicks,
   displayedTps,
   ticksLastFrame,
+  camera: {
+    position: [cameraPosition[0], cameraPosition[1], cameraPosition[2]],
+    yaw,
+    pitch,
+    clip: { near: CAMERA_NEAR_PLANE, far: CAMERA_FAR_PLANE },
+  },
   dayNight: dayNightCycleState,
   terrain: {
     surfaceStyle: terrainInfo.surfaceStyle,
@@ -8096,7 +8105,12 @@ function update(deltaTime) {
   updateAmbientAudioMix(isUnderwater);
 
   const target = add(cameraPosition, forwardDirection);
-  const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, frustum.near, frustum.far);
+  const projection = createPerspectiveMatrix(
+    (60 * Math.PI) / 180,
+    canvas.width / canvas.height,
+    CAMERA_NEAR_PLANE,
+    CAMERA_FAR_PLANE,
+  );
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
   const viewProjection = multiplyMatrices(projection, view);
   inverseViewProjectionMatrix = invertMatrix(viewProjection);
@@ -8113,6 +8127,13 @@ function update(deltaTime) {
   }
 
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
+
+  cameraClipPlanes.near = CAMERA_NEAR_PLANE;
+  cameraClipPlanes.far = CAMERA_FAR_PLANE;
+  cameraClipPlanes.lastUpdated =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
 }
 
 function bindGeometry(buffer) {
@@ -8827,6 +8848,7 @@ function updateDebugConsole(deltaTime) {
     `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
     `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
+    `Planos cámara: cerca=${CAMERA_NEAR_PLANE.toFixed(2)} lejos=${CAMERA_FAR_PLANE.toFixed(1)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
     `Luz global: rgb=${lightingDiagnostics.latestLightColor
@@ -9042,6 +9064,15 @@ function loop(currentTime) {
     simulationInfo.totalTicks = totalTicks;
     simulationInfo.displayedTps = displayedTps;
     simulationInfo.ticksLastFrame = ticksLastFrame;
+    simulationInfo.camera.position = [
+      cameraPosition[0],
+      cameraPosition[1],
+      cameraPosition[2],
+    ];
+    simulationInfo.camera.yaw = yaw;
+    simulationInfo.camera.pitch = pitch;
+    simulationInfo.camera.clip.near = CAMERA_NEAR_PLANE;
+    simulationInfo.camera.clip.far = CAMERA_FAR_PLANE;
     simulationInfo.dayNight = dayNightCycleState;
     simulationInfo.terrain.surfaceStyle = terrainInfo.surfaceStyle;
     simulationInfo.terrain.colorVariance = terrainInfo.colorVariance ?? 0;
