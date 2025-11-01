@@ -9,26 +9,40 @@ const runtimeGlobal =
     ? global
     : {};
 
-let canvas = document.getElementById('scene');
-const overlay = document.getElementById('overlay');
-const simulationHud = document.getElementById('simulation-hud');
-const startButton = document.getElementById('start-button');
-let debugConsole = document.getElementById('debug-console');
-let debugPanel = document.getElementById('debug-panel');
-let debugToggleButton = document.getElementById('debug-toggle');
-const settingsToggle = document.getElementById('settings-toggle');
-const settingsPanel = document.getElementById('settings-panel');
-const seedInput = document.getElementById('seed-input');
-const randomSeedButton = document.getElementById('random-seed');
-const simulationClock = document.getElementById('simulation-clock');
-const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
-const simulationSpeedSlider = document.getElementById('simulation-speed');
-const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
-const simulationSpeedSettingsDisplay = document.getElementById(
+const uiDiagnostics = {
+  rebinds: 0,
+  lastRebindId: null,
+  lastMismatchOwner: null,
+};
+
+function getCurrentDocumentElement(id) {
+  if (typeof document === 'undefined' || typeof document.getElementById !== 'function') {
+    return null;
+  }
+  const element = document.getElementById(id);
+  return ensureCurrentDocumentElement(element, id);
+}
+
+let canvas = getCurrentDocumentElement('scene');
+const overlay = getCurrentDocumentElement('overlay');
+const simulationHud = getCurrentDocumentElement('simulation-hud');
+const startButton = getCurrentDocumentElement('start-button');
+let debugConsole = getCurrentDocumentElement('debug-console');
+let debugPanel = getCurrentDocumentElement('debug-panel');
+let debugToggleButton = getCurrentDocumentElement('debug-toggle');
+const settingsToggle = getCurrentDocumentElement('settings-toggle');
+const settingsPanel = getCurrentDocumentElement('settings-panel');
+const seedInput = getCurrentDocumentElement('seed-input');
+const randomSeedButton = getCurrentDocumentElement('random-seed');
+const simulationClock = getCurrentDocumentElement('simulation-clock');
+const simulationSpeedIndicator = getCurrentDocumentElement('simulation-speed-indicator');
+const simulationSpeedSlider = getCurrentDocumentElement('simulation-speed');
+const simulationSpeedDisplay = getCurrentDocumentElement('simulation-speed-display');
+const simulationSpeedSettingsDisplay = getCurrentDocumentElement(
   'simulation-speed-display-settings'
 );
-const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
-const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
+const dayCycleProgressTrack = getCurrentDocumentElement('day-cycle-progress-track');
+const dayCycleProgressFill = getCurrentDocumentElement('day-cycle-progress-fill');
 const dayCyclePhaseIcons = Array.from(
   document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
 );
@@ -38,7 +52,38 @@ const dayCyclePhaseIconMap = new Map(
     .filter(([phase, element]) => phase && element),
 );
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
-const musicToggle = document.getElementById('audio-music-toggle');
+const musicToggle = getCurrentDocumentElement('audio-music-toggle');
+
+function ensureCurrentDocumentElement(element, id) {
+  if (!element || typeof document === 'undefined') {
+    return element;
+  }
+  const owner = element.ownerDocument;
+  if (owner && owner !== document) {
+    let mismatchOrigin = null;
+    try {
+      mismatchOrigin =
+        typeof owner.URL === 'string'
+          ? owner.URL
+          : owner?.location && typeof owner.location.href === 'string'
+          ? owner.location.href
+          : null;
+    } catch (error) {
+      mismatchOrigin = null;
+    }
+    uiDiagnostics.rebinds += 1;
+    uiDiagnostics.lastRebindId = typeof id === 'string' ? id : null;
+    uiDiagnostics.lastMismatchOwner = mismatchOrigin;
+    if (typeof id === 'string') {
+      const replacement = document.getElementById(id);
+      if (replacement && replacement !== element) {
+        return replacement;
+      }
+    }
+    return null;
+  }
+  return element;
+}
 
 function createFallbackDebugPanel() {
   const supportsDom =
@@ -1678,6 +1723,9 @@ const lightingDiagnostics = {
   latestAmbientColor: [0, 0, 0],
   latestDaylight: 0,
   latestSunAltitude: 0,
+  latestNightFactor: 0,
+  latestNightRetention: 0,
+  latestIntensity: 0,
 };
 
 if (!derivativesSupported) {
@@ -1919,6 +1967,8 @@ const fragmentSource = `
   uniform float specularPower;
   uniform float surfaceSpecularStrength;
   uniform float emissiveStrength;
+  uniform float daylightLevel;
+  uniform float nightColorRetention;
 
   const int RENDER_MODE_TERRAIN = 0;
   const int RENDER_MODE_WATER = 1;
@@ -1998,7 +2048,17 @@ const fragmentSource = `
         float speckleNoise = layeredNoise(sandCoords * 5.0 - patternTime * 0.07);
         float pattern = duneWave * 0.18 + (grainNoise - 0.5) * 0.22 + (speckleNoise - 0.5) * 0.12;
         float sparkle = smoothstep(0.65, 1.0, speckleNoise) * 0.08;
-        sandColor = clamp(baseColor + pattern * vec3(0.14, 0.11, 0.05) + sparkle * vec3(0.16, 0.15, 0.1), 0.0, 1.0);
+        float daylightMix = clamp(daylightLevel, 0.0, 1.0);
+        float friendlyWarmth = mix(0.22, 0.16, daylightMix);
+        float mellowShade = mix(0.1, 0.04, daylightMix);
+        sandColor = clamp(
+          baseColor +
+            pattern * vec3(0.16, 0.12, 0.05) +
+            sparkle * vec3(0.2, 0.17, 0.1) +
+            vec3(friendlyWarmth * 0.12, friendlyWarmth * 0.09, mellowShade * 0.06),
+          0.0,
+          1.2
+        );
       }
 
       vec3 rockColor = baseColor;
@@ -2057,6 +2117,14 @@ const fragmentSource = `
       finalColor = clamp(mix(finalColor, vec3(1.0), 0.12), 0.0, 1.15);
     }
 
+    if (nightColorRetention > 0.0) {
+      float retention = clamp(nightColorRetention, 0.0, 1.0);
+      float nightMix = clamp(1.0 - daylightLevel, 0.0, 1.0);
+      vec3 preserved = clamp(texturedColor * (0.55 + nightMix * 0.45), 0.0, 1.3);
+      finalColor = mix(finalColor, preserved, retention);
+      finalColor = clamp(finalColor + texturedColor * nightMix * 0.08, 0.0, 1.2);
+    }
+
     if (emissiveStrength > 0.0) {
       finalColor = clamp(finalColor + texturedColor * emissiveStrength, 0.0, 1.35);
     }
@@ -2100,6 +2168,8 @@ const moonSpecularStrengthUniform = gl.getUniformLocation(program, 'moonSpecular
 const specularPowerUniform = gl.getUniformLocation(program, 'specularPower');
 const surfaceSpecularStrengthUniform = gl.getUniformLocation(program, 'surfaceSpecularStrength');
 const emissiveStrengthUniform = gl.getUniformLocation(program, 'emissiveStrength');
+const daylightLevelUniform = gl.getUniformLocation(program, 'daylightLevel');
+const nightColorRetentionUniform = gl.getUniformLocation(program, 'nightColorRetention');
 const uniformLocations = {
   renderMode: gl.getUniformLocation(program, 'renderMode'),
 };
@@ -2268,10 +2338,10 @@ function createBuffer(data) {
 }
 
 const blockLineColor = [0.93, 0.9, 0.8];
-const chunkLineColor = [0.74, 0.68, 0.55];
-const sandDarkColor = [0.73, 0.64, 0.48];
-const sandLightColor = [0.97, 0.91, 0.74];
-const sandFlatColor = mixColor(sandDarkColor, sandLightColor, 0.58);
+const chunkLineColor = [0.56, 0.62, 0.78];
+const sandDarkColor = [0.82, 0.7, 0.5];
+const sandLightColor = [0.99, 0.92, 0.78];
+const sandFlatColor = mixColor(sandDarkColor, sandLightColor, 0.62);
 const terrainNoiseScale = 4.8;
 const terrainWarpScale = 2.6;
 const terrainWarpStrength = 0.45;
@@ -2454,11 +2524,34 @@ const CLOUD_PUFF_SUBDIVISIONS = 1;
 const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
-const STAR_COUNT = 180;
-const STAR_FIELD_RADIUS = 900;
-const STAR_MIN_SIZE = 3.2;
-const STAR_MAX_SIZE = 7.6;
-const STAR_BRIGHT_THRESHOLD = 0.74;
+const STAR_COUNT = 360;
+const STAR_FIELD_RADIUS = 940;
+const STAR_MIN_SIZE = 2.6;
+const STAR_MAX_SIZE = 5.8;
+const STAR_BRIGHT_THRESHOLD = 0.72;
+const STAR_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+const CAMERA_NEAR_PLANE = 0.1;
+const CAMERA_BASE_FAR_PLANE = 500;
+const CAMERA_STAR_MARGIN = 220;
+
+const cameraDiagnostics = {
+  near: CAMERA_NEAR_PLANE,
+  far: CAMERA_BASE_FAR_PLANE,
+  baseFar: CAMERA_BASE_FAR_PLANE,
+  starMargin: CAMERA_STAR_MARGIN,
+  adjustments: 0,
+  lastUpdateTime: 0,
+  metrics: {
+    starFarthest: 0,
+    starShortfall: 0,
+  },
+  flags: {
+    frustumClipping: false,
+    baseFrustumExceeded: false,
+  },
+  warnedFrustum: false,
+};
 
 const weatherState = {
   wind: {
@@ -2504,9 +2597,18 @@ const starFieldState = {
     lastDrawTime: 0,
     rebuilds: 0,
     lastError: null,
+    coverageScore: 0,
+    verticalSkew: 0,
+    invalidStars: 0,
+    distributionIssue: null,
+    farthestDistance: 0,
+    frustumMargin: 0,
+    baseFarShortfall: 0,
   },
   flags: {
     geometryValid: false,
+    distributionValid: true,
+    frustumSafe: true,
   },
   needsUpload: true,
 };
@@ -2538,6 +2640,7 @@ const terrainInfo = {
   surfaceStyle: 'uniform-sand',
   flags: {
     flatColor: true,
+    chunkGridEnabled: false,
   },
 };
 let seeThroughTerrain = false;
@@ -2564,6 +2667,13 @@ const drawStats = {
   chunkGrid: 0,
   selection: 0,
   total: 0,
+};
+
+const geometryDiagnostics = {
+  lastFailureLabel: null,
+  lastFailureTime: 0,
+  failures: 0,
+  warnedLabels: Object.create(null),
 };
 
 const plantSpeciesDefinitions = [
@@ -3423,39 +3533,70 @@ function initializeStarField(seedString) {
   const baseSeed = stringToSeed(`${seedString ?? currentSeed}-stars`);
   const random = createRandomGenerator(baseSeed);
   const stars = [];
+  const count = Math.max(0, Math.floor(STAR_COUNT));
   let bright = 0;
   let dim = 0;
+  let coverageAccumulator = 0;
+  let verticalBalance = 0;
+  let invalidStars = 0;
+  let farthestDistance = 0;
 
-  for (let i = 0; i < STAR_COUNT; i++) {
-    const polar = randomInRange(random, 0.05, Math.PI * 0.48);
-    const azimuth = randomInRange(random, 0, Math.PI * 2);
-    const sinPolar = Math.sin(polar);
-    const direction = [
-      sinPolar * Math.cos(azimuth),
-      Math.cos(polar),
-      sinPolar * Math.sin(azimuth),
-    ];
-    const radius = STAR_FIELD_RADIUS + randomInRange(random, -120, 120);
+  for (let i = 0; i < count; i++) {
+    const jitter = randomInRange(random, -0.35, 0.35);
+    const normalizedIndex = (i + 0.5 + jitter) / count;
+    const clampedIndex = clamp(normalizedIndex, 0.001, 0.999);
+    const y = 1 - clampedIndex * 2;
+    const azimuth = (i + randomInRange(random, 0, 1)) * STAR_GOLDEN_ANGLE;
+    const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
+    let direction = normalize([
+      Math.cos(azimuth) * ringRadius,
+      y,
+      Math.sin(azimuth) * ringRadius,
+    ]);
+
+    if (
+      !Number.isFinite(direction[0]) ||
+      !Number.isFinite(direction[1]) ||
+      !Number.isFinite(direction[2])
+    ) {
+      invalidStars += 1;
+      direction = [0, 1, 0];
+    }
+
+    const radius = STAR_FIELD_RADIUS + randomInRange(random, -140, 140);
     const position = [
       direction[0] * radius,
       direction[1] * radius,
       direction[2] * radius,
     ];
     const size = randomInRange(random, STAR_MIN_SIZE, STAR_MAX_SIZE);
-    const brightness = clamp(randomInRange(random, 0.55, 1.12), 0.4, 1.25);
+    const brightness = clamp(randomInRange(random, 0.58, 1.18), 0.4, 1.3);
     if (brightness >= STAR_BRIGHT_THRESHOLD) {
       bright += 1;
     } else {
       dim += 1;
+    }
+    coverageAccumulator += 1 - Math.abs(direction[1]);
+    verticalBalance += direction[1];
+    const distance = Math.hypot(position[0], position[1], position[2]);
+    if (Number.isFinite(distance)) {
+      farthestDistance = Math.max(farthestDistance, distance);
     }
     stars.push({
       position,
       direction,
       size,
       brightness,
+      colorShift: randomInRange(random, -0.12, 0.18),
       twinklePhase: randomInRange(random, 0, Math.PI * 2),
     });
   }
+
+  const coverageScore = stars.length ? coverageAccumulator / stars.length : 0;
+  const verticalSkew = stars.length ? verticalBalance / stars.length : 0;
+  const distributionValid = invalidStars === 0 && coverageScore >= 0.35;
+  const baseFarShortfall = Math.max(0, farthestDistance - CAMERA_BASE_FAR_PLANE);
+  const estimatedMargin = CAMERA_BASE_FAR_PLANE - farthestDistance;
 
   starFieldState.random = random;
   starFieldState.stars = stars;
@@ -3471,9 +3612,33 @@ function initializeStarField(seedString) {
   starFieldState.metrics.lastVisibility = 0;
   starFieldState.metrics.lastDrawTime = 0;
   starFieldState.metrics.rebuilds = 0;
+  starFieldState.metrics.coverageScore = coverageScore;
+  starFieldState.metrics.verticalSkew = verticalSkew;
+  starFieldState.metrics.invalidStars = invalidStars;
+  starFieldState.metrics.distributionIssue = distributionValid
+    ? null
+    : `Distribución irregular: cobertura=${coverageScore.toFixed(2)} estrellas inválidas=${invalidStars}`;
+  starFieldState.metrics.farthestDistance = farthestDistance;
+  starFieldState.metrics.baseFarShortfall = baseFarShortfall;
+  starFieldState.metrics.frustumMargin = estimatedMargin;
   starFieldState.flags.geometryValid = false;
+  starFieldState.flags.distributionValid = distributionValid;
+  starFieldState.flags.frustumSafe = baseFarShortfall <= 0;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
+
+  cameraDiagnostics.metrics.starFarthest = farthestDistance;
+  cameraDiagnostics.metrics.starShortfall = baseFarShortfall;
+  cameraDiagnostics.flags.baseFrustumExceeded = baseFarShortfall > 0;
+  cameraDiagnostics.warnedFrustum = false;
+
+  if (!distributionValid) {
+    recordRuntimeIssue(
+      'warning',
+      'star-distribution',
+      new Error(starFieldState.metrics.distributionIssue || 'Distribución de estrellas inválida'),
+    );
+  }
 }
 
 function updateCloudField(deltaTime) {
@@ -3769,10 +3934,11 @@ function rebuildStarFieldGeometry() {
       dim += 1;
     }
     const shimmer = Math.sin(star?.twinklePhase ?? 0) * 0.05;
+    const colorShift = clamp(star?.colorShift ?? 0, -0.2, 0.25);
     const baseColor = [
-      clamp01(0.78 + brightness * 0.22 + shimmer * 0.3),
-      clamp01(0.78 + brightness * 0.18 + shimmer * 0.2),
-      clamp01(0.82 + brightness * 0.28 + shimmer * 0.4),
+      clamp01(0.76 + brightness * 0.26 + shimmer * 0.28 + colorShift * 0.18),
+      clamp01(0.78 + brightness * 0.2 + shimmer * 0.22 + colorShift * -0.12),
+      clamp01(0.86 + brightness * 0.3 + shimmer * 0.34 + colorShift * -0.18),
     ];
 
     const topRight = add(add(position, rightVec), upVec);
@@ -4062,6 +4228,8 @@ const dayNightCycleState = {
   moonlightIntensity: 0,
   moonAltitude: 1,
   ambientLightColor: nightLightTint.slice(),
+  nightFactor: 1,
+  nightColorRetention: 0.6,
   skyGradient: {
     top: defaultSkyGradient.top.slice(),
     middle: defaultSkyGradient.middle.slice(),
@@ -4180,22 +4348,24 @@ function updateDayNightCycleState(currentSimulationTime) {
 
   const daylight = clamp01(sunDirection[1] * 0.55 + 0.5);
   const rawMoonVisibility = clamp01((1 - daylight) * 0.85 + (moonDirection[1] * 0.6 + 0.4));
-  const moonlight = clamp01(rawMoonVisibility);
-  const intensity = 0.25 + daylight * 0.75;
+  const moonlight = clamp01(rawMoonVisibility * (1 - daylight * 0.25));
+  const intensity = 0.32 + daylight * 0.68;
   const tint = mixColor(nightLightTint, dayLightTint, daylight);
   const lightColor = [
-    clamp01(tint[0] * (0.35 + daylight * 0.95)),
-    clamp01(tint[1] * (0.35 + daylight * 0.95)),
-    clamp01(tint[2] * (0.35 + daylight * 0.95)),
+    clamp01(tint[0] * (0.55 + daylight * 0.85)),
+    clamp01(tint[1] * (0.55 + daylight * 0.85)),
+    clamp01(tint[2] * (0.55 + daylight * 0.85)),
   ];
 
-  const ambientNight = [0.08, 0.11, 0.18];
+  const ambientNight = [0.2, 0.24, 0.32];
   const ambientDay = [0.42, 0.48, 0.56];
   const ambientLightColor = [
     clamp01(lerp(ambientNight[0], ambientDay[0], daylight)),
     clamp01(lerp(ambientNight[1], ambientDay[1], daylight)),
     clamp01(lerp(ambientNight[2], ambientDay[2], daylight)),
   ];
+  const nightFactor = clamp01(1 - daylight);
+  const nightColorRetention = clamp01(0.18 + nightFactor * 0.58 + moonlight * 0.12);
 
   const baseSunColor = mixColor([1, 0.82, 0.6], [1, 0.96, 0.85], clamp01(daylight * 0.9));
   const sunLightColor = [
@@ -4205,9 +4375,9 @@ function updateDayNightCycleState(currentSimulationTime) {
   ];
   const baseMoonColor = [0.45, 0.52, 0.78];
   const moonLightColor = [
-    clamp01(baseMoonColor[0] * (0.18 + moonlight * 0.5)),
-    clamp01(baseMoonColor[1] * (0.2 + moonlight * 0.48)),
-    clamp01(baseMoonColor[2] * (0.24 + moonlight * 0.55)),
+    clamp01(baseMoonColor[0] * (0.28 + moonlight * 0.54)),
+    clamp01(baseMoonColor[1] * (0.3 + moonlight * 0.52)),
+    clamp01(baseMoonColor[2] * (0.34 + moonlight * 0.6)),
   ];
   const sunSpecularStrength = clamp01(0.45 + daylight * 0.7);
   const moonSpecularStrength = clamp01(0.22 + moonlight * 0.35);
@@ -4278,11 +4448,16 @@ function updateDayNightCycleState(currentSimulationTime) {
   dayNightCycleState.moonlightIntensity = moonlight;
   dayNightCycleState.moonAltitude = moonPosition[1];
   dayNightCycleState.ambientLightColor = ambientLightColor;
+  dayNightCycleState.nightFactor = nightFactor;
+  dayNightCycleState.nightColorRetention = nightColorRetention;
 
   lightingDiagnostics.latestLightColor = lightColor.slice();
   lightingDiagnostics.latestAmbientColor = ambientLightColor.slice();
   lightingDiagnostics.latestDaylight = daylight;
   lightingDiagnostics.latestSunAltitude = sunPosition[1];
+  lightingDiagnostics.latestNightFactor = nightFactor;
+  lightingDiagnostics.latestNightRetention = nightColorRetention;
+  lightingDiagnostics.latestIntensity = intensity;
   if (!lightingDiagnostics.startupRecorded) {
     lightingDiagnostics.startupRecorded = true;
     lightingDiagnostics.startupLightColor = lightColor.slice();
@@ -4404,15 +4579,18 @@ function updateGridBuffers(heightField) {
   gl.bufferData(gl.ARRAY_BUFFER, blockVertices, gl.STATIC_DRAW);
   blockGridVertexCount = blockVertices.length / floatsPerVertex;
 
+  gl.bindBuffer(gl.ARRAY_BUFFER, chunkGridBuffer);
   const chunkVertices = createTerrainGridVertices(
     heightField,
     blocksPerChunk,
     chunkLineColor,
-    0.12
+    0.02
   );
-  gl.bindBuffer(gl.ARRAY_BUFFER, chunkGridBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, chunkVertices, gl.STATIC_DRAW);
   chunkGridVertexCount = chunkVertices.length / floatsPerVertex;
+  if (terrainInfo?.flags) {
+    terrainInfo.flags.chunkGridEnabled = chunkGridVertexCount > 0;
+  }
 }
 
 function clearWaterSurface() {
@@ -6914,9 +7092,11 @@ const movementState = {
   down: false,
 };
 
+const initialCameraPosition = [0, 5, 20];
+
 let yaw = 0; // Comienza mirando hacia -Z
 let pitch = -0.35; // Inclina ligeramente la cámara hacia abajo para mostrar la baseplate inicial
-const cameraPosition = [0, 5, 20];
+const cameraPosition = initialCameraPosition.slice();
 
 const pointerSensitivity = 0.002;
 
@@ -7539,6 +7719,14 @@ let tickSamples = 0;
 let displayedTps = 0;
 let totalTicks = 0;
 let ticksLastFrame = 0;
+const visibilityDiagnostics = {
+  lastHiddenAt: null,
+  lastVisibleAt: previousTime,
+  suppressedDeltaMs: 0,
+  totalSuppressedMs: 0,
+  resets: 0,
+  pendingReset: false,
+};
 
 simulationTime = dayNightCycleDuration * defaultDayStartFraction;
 lightingDiagnostics.startupNormalizedTime = defaultDayStartFraction;
@@ -7596,16 +7784,51 @@ const simulationInfo = {
     geometryMetrics: celestialGeometryState.metrics,
     stars: starFieldState.metrics.count,
     starMetrics: starFieldState.metrics,
-    starsHealthy: starFieldState.flags.geometryValid,
+    starsHealthy:
+      starFieldState.flags.geometryValid && starFieldState.flags.distributionValid !== false,
+    starDistributionHealthy: starFieldState.flags.distributionValid !== false,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
     ambient: lightingDiagnostics.latestAmbientColor.slice(),
     daylight: lightingDiagnostics.latestDaylight,
     sunAltitude: lightingDiagnostics.latestSunAltitude,
+    nightFactor: lightingDiagnostics.latestNightFactor,
+    nightRetention: lightingDiagnostics.latestNightRetention,
+    intensity: lightingDiagnostics.latestIntensity,
     startupNormalizedTime: lightingDiagnostics.startupNormalizedTime,
     startupLightColor: lightingDiagnostics.startupLightColor.slice(),
     startupSunAltitude: lightingDiagnostics.startupSunAltitude,
+  },
+  camera: {
+    position: initialCameraPosition.slice(),
+    near: CAMERA_NEAR_PLANE,
+    far: CAMERA_BASE_FAR_PLANE,
+    starMargin: CAMERA_STAR_MARGIN,
+    starFarthest: 0,
+    starShortfall: 0,
+    adjustments: 0,
+    flags: {
+      frustumClipping: false,
+      baseFrustumExceeded: false,
+    },
+  },
+  visibility: {
+    lastHiddenAt: visibilityDiagnostics.lastHiddenAt,
+    lastVisibleAt: visibilityDiagnostics.lastVisibleAt,
+    suppressedDeltaMs: visibilityDiagnostics.suppressedDeltaMs,
+    totalSuppressedMs: visibilityDiagnostics.totalSuppressedMs,
+    resets: visibilityDiagnostics.resets,
+  },
+  geometry: {
+    lastFailureLabel: geometryDiagnostics.lastFailureLabel,
+    lastFailureTime: geometryDiagnostics.lastFailureTime,
+    failures: geometryDiagnostics.failures,
+  },
+  ui: {
+    rebinds: uiDiagnostics.rebinds,
+    lastRebindId: uiDiagnostics.lastRebindId,
+    lastMismatchOwner: uiDiagnostics.lastMismatchOwner,
   },
 };
 
@@ -7614,6 +7837,31 @@ if (typeof window !== 'undefined') {
 }
 
 setSimulationSpeed(simulationSpeed);
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      visibilityDiagnostics.lastHiddenAt = performance.now();
+      visibilityDiagnostics.pendingReset = true;
+      return;
+    }
+    const now = performance.now();
+    visibilityDiagnostics.lastVisibleAt = now;
+    if (visibilityDiagnostics.pendingReset) {
+      const suppressed = Math.max(0, now - previousTime);
+      visibilityDiagnostics.suppressedDeltaMs = suppressed;
+      visibilityDiagnostics.totalSuppressedMs += suppressed;
+      visibilityDiagnostics.resets += 1;
+      visibilityDiagnostics.pendingReset = false;
+      tickAccumulator = 0;
+      tickStatsAccumulator = 0;
+      tickSamples = 0;
+      fpsAccumulator = 0;
+      fpsSamples = 0;
+      previousTime = now;
+    }
+  });
+}
 
 function normalizeSimulationSpeed(value) {
   if (!Number.isFinite(value)) {
@@ -7719,7 +7967,51 @@ function tickSimulation(deltaTime) {
   tickPlants(deltaTime);
 }
 
+function computeCameraFrustum() {
+  const farthestStar = Math.max(0, starFieldState.metrics?.farthestDistance ?? STAR_FIELD_RADIUS);
+  const desiredFar = Math.max(CAMERA_BASE_FAR_PLANE, farthestStar + CAMERA_STAR_MARGIN);
+  const near = CAMERA_NEAR_PLANE;
+  const previousFar = cameraDiagnostics.far;
+
+  cameraDiagnostics.near = near;
+  cameraDiagnostics.metrics.starFarthest = farthestStar;
+  cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - CAMERA_BASE_FAR_PLANE);
+  cameraDiagnostics.starMargin = desiredFar - farthestStar;
+  cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
+  cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
+
+  if (Math.abs(desiredFar - previousFar) > 0.5) {
+    cameraDiagnostics.adjustments += 1;
+  }
+
+  cameraDiagnostics.far = desiredFar;
+  cameraDiagnostics.lastUpdateTime = getTimestamp();
+
+  starFieldState.metrics.frustumMargin = cameraDiagnostics.starMargin;
+  starFieldState.metrics.baseFarShortfall = cameraDiagnostics.metrics.starShortfall;
+  starFieldState.metrics.farthestDistance = farthestStar;
+  starFieldState.flags.frustumSafe = !cameraDiagnostics.flags.frustumClipping;
+
+  if (cameraDiagnostics.flags.baseFrustumExceeded && !cameraDiagnostics.warnedFrustum) {
+    recordRuntimeIssue(
+      'warning',
+      'camera-frustum',
+      new Error(
+        `Plano lejano base insuficiente para estrellas (déficit ${cameraDiagnostics.metrics.starShortfall.toFixed(
+          1,
+        )} m); se amplió automáticamente a ${desiredFar.toFixed(1)} m.`,
+      ),
+    );
+    cameraDiagnostics.warnedFrustum = true;
+  } else if (!cameraDiagnostics.flags.baseFrustumExceeded) {
+    cameraDiagnostics.warnedFrustum = false;
+  }
+
+  return { near, far: desiredFar };
+}
+
 function update(deltaTime) {
+  const frustum = computeCameraFrustum();
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),
@@ -7767,7 +8059,7 @@ function update(deltaTime) {
   updateAmbientAudioMix(isUnderwater);
 
   const target = add(cameraPosition, forwardDirection);
-  const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 500);
+  const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, frustum.near, frustum.far);
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
   const viewProjection = multiplyMatrices(projection, view);
   inverseViewProjectionMatrix = invertMatrix(viewProjection);
@@ -7786,10 +8078,30 @@ function update(deltaTime) {
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
 }
 
-function bindGeometry(buffer) {
+function bindGeometry(buffer, label = 'geometry') {
+  if (!buffer) {
+    const hasPerformanceNow =
+      typeof performance === 'object' && performance && typeof performance.now === 'function';
+    const now = hasPerformanceNow ? performance.now() : Date.now();
+    geometryDiagnostics.failures += 1;
+    geometryDiagnostics.lastFailureLabel = label;
+    geometryDiagnostics.lastFailureTime = now;
+    if (!geometryDiagnostics.warnedLabels[label]) {
+      geometryDiagnostics.warnedLabels[label] = 1;
+      recordRuntimeIssue(
+        'warning',
+        'geometry-bind',
+        new Error(`Intento de dibujar ${label} sin buffer válido.`),
+      );
+    } else {
+      geometryDiagnostics.warnedLabels[label] += 1;
+    }
+    return false;
+  }
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.vertexAttribPointer(positionAttribute, 3, gl.FLOAT, false, vertexStride, 0);
   gl.vertexAttribPointer(colorAttribute, 3, gl.FLOAT, false, vertexStride, 12);
+  return true;
 }
 
 function renderStarField() {
@@ -7826,7 +8138,9 @@ function renderStarField() {
   }
 
   gl.uniform1i(uniformLocations.renderMode, renderModes.celestial);
-  bindGeometry(starBuffer);
+  if (!bindGeometry(starBuffer, 'campo-estelar')) {
+    return false;
+  }
   gl.drawArrays(gl.TRIANGLES, 0, starVertexCount);
   drawStats.celestial += 1;
   drawStats.total += 1;
@@ -7955,10 +8269,11 @@ function renderCelestialBodies() {
     if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(emissiveStrengthUniform, 1.65);
     }
-    bindGeometry(sunBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, sunVertexCount);
-    drawStats.celestial += 1;
-    drawStats.total += 1;
+    if (bindGeometry(sunBuffer, 'sol')) {
+      gl.drawArrays(gl.TRIANGLES, 0, sunVertexCount);
+      drawStats.celestial += 1;
+      drawStats.total += 1;
+    }
   }
 
   if (moonVertexCount > 0) {
@@ -7966,10 +8281,11 @@ function renderCelestialBodies() {
     if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(emissiveStrengthUniform, 0.45);
     }
-    bindGeometry(moonBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, moonVertexCount);
-    drawStats.celestial += 1;
-    drawStats.total += 1;
+    if (bindGeometry(moonBuffer, 'luna')) {
+      gl.drawArrays(gl.TRIANGLES, 0, moonVertexCount);
+      drawStats.celestial += 1;
+      drawStats.total += 1;
+    }
   }
 
   resetSpecular();
@@ -8003,10 +8319,11 @@ function renderCloudLayer() {
   if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(surfaceSpecularStrengthUniform, 0.25);
   }
-  bindGeometry(cloudBuffer);
-  gl.drawArrays(gl.TRIANGLES, 0, cloudVertexCount);
-  drawStats.clouds += 1;
-  drawStats.total += 1;
+  if (bindGeometry(cloudBuffer, 'nubes')) {
+    gl.drawArrays(gl.TRIANGLES, 0, cloudVertexCount);
+    drawStats.clouds += 1;
+    drawStats.total += 1;
+  }
 
   if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
@@ -8117,6 +8434,14 @@ function render() {
     const ambient = dayNightCycleState.ambientLightColor || [0.2, 0.24, 0.3];
     gl.uniform3f(ambientLightColorUniform, ambient[0], ambient[1], ambient[2]);
   }
+  if (daylightLevelUniform) {
+    const daylightLevel = clamp01(dayNightCycleState.daylight ?? 0);
+    gl.uniform1f(daylightLevelUniform, daylightLevel);
+  }
+  if (nightColorRetentionUniform) {
+    const retention = clamp01(dayNightCycleState.nightColorRetention ?? 0);
+    gl.uniform1f(nightColorRetentionUniform, retention);
+  }
   if (sunLightDirectionUniform) {
     const dir = dayNightCycleState.sunDirection || [0, -1, 0];
     gl.uniform3f(sunLightDirectionUniform, dir[0], dir[1], dir[2]);
@@ -8211,10 +8536,11 @@ function render() {
     if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(surfaceSpecularStrengthUniform, 0.05);
     }
-    bindGeometry(baseplateBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
-    drawStats.terrain += 1;
-    drawStats.total += 1;
+    if (bindGeometry(baseplateBuffer, 'terreno')) {
+      gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
+      drawStats.terrain += 1;
+      drawStats.total += 1;
+    }
     if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
     }
@@ -8249,10 +8575,11 @@ function render() {
       gl.uniform1f(surfaceSpecularStrengthUniform, 1.25);
     }
 
-    bindGeometry(waterBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
-    drawStats.water += 1;
-    drawStats.total += 1;
+    if (bindGeometry(waterBuffer, 'agua')) {
+      gl.drawArrays(gl.TRIANGLES, 0, waterVertexCount);
+      drawStats.water += 1;
+      drawStats.total += 1;
+    }
 
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
@@ -8281,10 +8608,11 @@ function render() {
     if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(surfaceSpecularStrengthUniform, 0.55);
     }
-    bindGeometry(rockBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
-    drawStats.rocks += 1;
-    drawStats.total += 1;
+    if (bindGeometry(rockBuffer, 'rocas')) {
+      gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
+      drawStats.rocks += 1;
+      drawStats.total += 1;
+    }
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
     }
@@ -8304,10 +8632,11 @@ function render() {
     if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(surfaceSpecularStrengthUniform, 0.3);
     }
-    bindGeometry(plantBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, plantVertexCount);
-    drawStats.plants += 1;
-    drawStats.total += 1;
+    if (bindGeometry(plantBuffer, 'plantas')) {
+      gl.drawArrays(gl.TRIANGLES, 0, plantVertexCount);
+      drawStats.plants += 1;
+      drawStats.total += 1;
+    }
     if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
     }
@@ -8326,18 +8655,18 @@ function render() {
       gl.depthMask(false);
     }
 
-    if (blockGridVertexCount > 0) {
-      bindGeometry(blockGridBuffer);
+    if (blockGridVertexCount > 0 && bindGeometry(blockGridBuffer, 'grid-bloques')) {
       gl.drawArrays(gl.LINES, 0, blockGridVertexCount);
       drawStats.blockGrid += 1;
       drawStats.total += 1;
     }
 
     if (chunkGridVertexCount > 0) {
-      bindGeometry(chunkGridBuffer);
-      gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
-      drawStats.chunkGrid += 1;
-      drawStats.total += 1;
+      if (bindGeometry(chunkGridBuffer, 'grid-chunks')) {
+        gl.drawArrays(gl.LINES, 0, chunkGridVertexCount);
+        drawStats.chunkGrid += 1;
+        drawStats.total += 1;
+      }
     }
 
     if (typeof gl.depthMask === 'function') {
@@ -8349,10 +8678,11 @@ function render() {
     if (typeof gl.disable === 'function') {
       gl.disable(gl.DEPTH_TEST);
     }
-    bindGeometry(selectionHighlightBuffer);
-    gl.drawArrays(gl.LINES, 0, selectionHighlightVertexCount);
-    drawStats.selection += 1;
-    drawStats.total += 1;
+    if (bindGeometry(selectionHighlightBuffer, 'seleccion')) {
+      gl.drawArrays(gl.LINES, 0, selectionHighlightVertexCount);
+      drawStats.selection += 1;
+      drawStats.total += 1;
+    }
     if (typeof gl.enable === 'function') {
       gl.enable(gl.DEPTH_TEST);
     }
@@ -8420,10 +8750,42 @@ function updateDebugConsole(deltaTime) {
     ? `${cloudMetrics.lastBuildMs.toFixed(2)}ms`
     : '---';
   const starMetrics = starFieldState.metrics ?? {};
-  const starStatus = starFieldState.flags?.geometryValid ? 'OK' : 'ERROR';
+  const geometryHealthy = starFieldState.flags?.geometryValid !== false;
+  const distributionHealthy = starFieldState.flags?.distributionValid !== false;
+  const starStatus = geometryHealthy
+    ? distributionHealthy
+      ? 'OK'
+      : 'WARN'
+    : 'ERROR';
   const starVisibility = Number.isFinite(starMetrics.lastVisibility)
     ? starMetrics.lastVisibility.toFixed(2)
     : '0.00';
+  const starCoverage = Number.isFinite(starMetrics.coverageScore)
+    ? starMetrics.coverageScore.toFixed(2)
+    : '0.00';
+  const starSkew = Number.isFinite(starMetrics.verticalSkew)
+    ? starMetrics.verticalSkew.toFixed(2)
+    : '0.00';
+  const starInvalid = Math.max(0, starMetrics.invalidStars ?? 0);
+  const starRange = Number.isFinite(starMetrics.farthestDistance)
+    ? starMetrics.farthestDistance.toFixed(1)
+    : '0.0';
+  const starMargin = Number.isFinite(starMetrics.frustumMargin)
+    ? starMetrics.frustumMargin.toFixed(1)
+    : '0.0';
+  const starShortfall = Number.isFinite(starMetrics.baseFarShortfall)
+    ? starMetrics.baseFarShortfall.toFixed(1)
+    : '0.0';
+  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'WARN' : 'OK';
+  const cameraFarDisplay = Number.isFinite(cameraDiagnostics.far)
+    ? cameraDiagnostics.far.toFixed(1)
+    : '---';
+  const cameraMarginDisplay = Number.isFinite(cameraDiagnostics.starMargin)
+    ? cameraDiagnostics.starMargin.toFixed(1)
+    : '---';
+  const cameraShortfallDisplay = Number.isFinite(cameraDiagnostics.metrics.starShortfall)
+    ? cameraDiagnostics.metrics.starShortfall.toFixed(1)
+    : '0.0';
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -8435,17 +8797,21 @@ function updateDebugConsole(deltaTime) {
     `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
     `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
     `Tiempo sim: ${simulationTime.toFixed(2)}s`,
+    `Visibilidad: reanudaciones=${visibilityDiagnostics.resets} pausa_ms=${visibilityDiagnostics.suppressedDeltaMs.toFixed(1)} acumulado_ms=${visibilityDiagnostics.totalSuppressedMs.toFixed(1)}`,
     `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
     `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
+    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
     `Luz global: rgb=${lightingDiagnostics.latestLightColor
       .map((value) => value.toFixed(2))
       .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
       .map((value) => value.toFixed(2))
       .join(', ')} sol=${lightingDiagnostics.latestSunAltitude.toFixed(1)} luz=${(lightingDiagnostics.latestDaylight * 100).toFixed(0)}%`,
+    `Luz noche: factor=${(lightingDiagnostics.latestNightFactor * 100).toFixed(0)}% retención=${(lightingDiagnostics.latestNightRetention * 100).toFixed(0)}% intensidad=${(lightingDiagnostics.latestIntensity * 100).toFixed(0)}%`,
     `Terreno seed: ${terrainInfo.seed}`,
     `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
+    `UI rebinds: ${uiDiagnostics.rebinds} último=${uiDiagnostics.lastRebindId ?? 'n/d'}`,
     `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
     `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
     `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
@@ -8466,7 +8832,8 @@ function updateDebugConsole(deltaTime) {
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} cobertura=${starCoverage} balance=${starSkew} rango=${starRange} margen=${starMargin} déficit_base=${starShortfall} defectuosas=${starInvalid} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Geometría diag: fallos=${geometryDiagnostics.failures} último=${geometryDiagnostics.lastFailureLabel ?? 'ninguno'}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -8512,8 +8879,16 @@ function updateDebugConsole(deltaTime) {
   if (cloudMetrics.lastError) {
     info.push(`Nubes error: ${cloudMetrics.lastError}`);
   }
+  if (starMetrics.distributionIssue) {
+    info.push(`Estrellas alerta: ${starMetrics.distributionIssue}`);
+  }
   if (starMetrics.lastError) {
     info.push(`Estrellas error: ${starMetrics.lastError}`);
+  }
+  if (cameraDiagnostics.flags.baseFrustumExceeded) {
+    info.push(
+      `Cámara alerta: plano base corto por ${cameraShortfallDisplay}m (margen actual ${cameraMarginDisplay}m)`,
+    );
   }
 
   if (pointerLockErrors > 0) {
@@ -8668,9 +9043,41 @@ function loop(currentTime) {
     simulationInfo.lighting.ambient = lightingDiagnostics.latestAmbientColor.slice();
     simulationInfo.lighting.daylight = lightingDiagnostics.latestDaylight;
     simulationInfo.lighting.sunAltitude = lightingDiagnostics.latestSunAltitude;
+    simulationInfo.lighting.nightFactor = lightingDiagnostics.latestNightFactor;
+    simulationInfo.lighting.nightRetention = lightingDiagnostics.latestNightRetention;
+    simulationInfo.lighting.intensity = lightingDiagnostics.latestIntensity;
     simulationInfo.lighting.startupNormalizedTime = lightingDiagnostics.startupNormalizedTime;
     simulationInfo.lighting.startupLightColor = lightingDiagnostics.startupLightColor.slice();
     simulationInfo.lighting.startupSunAltitude = lightingDiagnostics.startupSunAltitude;
+    simulationInfo.visibility.lastHiddenAt = visibilityDiagnostics.lastHiddenAt;
+    simulationInfo.visibility.lastVisibleAt = visibilityDiagnostics.lastVisibleAt;
+    simulationInfo.visibility.suppressedDeltaMs = visibilityDiagnostics.suppressedDeltaMs;
+    simulationInfo.visibility.totalSuppressedMs = visibilityDiagnostics.totalSuppressedMs;
+    simulationInfo.visibility.resets = visibilityDiagnostics.resets;
+    simulationInfo.geometry.lastFailureLabel = geometryDiagnostics.lastFailureLabel;
+    simulationInfo.geometry.lastFailureTime = geometryDiagnostics.lastFailureTime;
+    simulationInfo.geometry.failures = geometryDiagnostics.failures;
+    simulationInfo.ui.rebinds = uiDiagnostics.rebinds;
+    simulationInfo.ui.lastRebindId = uiDiagnostics.lastRebindId;
+    simulationInfo.ui.lastMismatchOwner = uiDiagnostics.lastMismatchOwner;
+
+    if (simulationInfo.camera) {
+      const cameraInfo = simulationInfo.camera;
+      cameraInfo.position[0] = cameraPosition[0];
+      cameraInfo.position[1] = cameraPosition[1];
+      cameraInfo.position[2] = cameraPosition[2];
+      cameraInfo.near = cameraDiagnostics.near;
+      cameraInfo.far = cameraDiagnostics.far;
+      cameraInfo.starMargin = cameraDiagnostics.starMargin;
+      cameraInfo.starFarthest = cameraDiagnostics.metrics.starFarthest;
+      cameraInfo.starShortfall = cameraDiagnostics.metrics.starShortfall;
+      cameraInfo.adjustments = cameraDiagnostics.adjustments;
+      if (!cameraInfo.flags || typeof cameraInfo.flags !== 'object') {
+        cameraInfo.flags = {};
+      }
+      cameraInfo.flags.frustumClipping = cameraDiagnostics.flags.frustumClipping;
+      cameraInfo.flags.baseFrustumExceeded = cameraDiagnostics.flags.baseFrustumExceeded;
+    }
 
     update(deltaTime);
     render();
