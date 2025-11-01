@@ -2401,6 +2401,7 @@ const windBuffer = createBuffer(new Float32Array(0));
 const cloudBuffer = createBuffer(new Float32Array(0));
 const sunBuffer = createBuffer(new Float32Array(0));
 const moonBuffer = createBuffer(new Float32Array(0));
+const starBuffer = createBuffer(new Float32Array(0));
 
 let blockGridVertexCount = 0;
 let chunkGridVertexCount = 0;
@@ -2414,6 +2415,7 @@ let windVertexCount = 0;
 let cloudVertexCount = 0;
 let sunVertexCount = 0;
 let moonVertexCount = 0;
+let starVertexCount = 0;
 let sunVertexData = null;
 let moonVertexData = null;
 const celestialGeometryState = {
@@ -2443,9 +2445,15 @@ const MAX_WIND_EFFECTS = 12;
 const CLOUD_COUNT = 28;
 const CLOUD_ALTITUDE = 150;
 const CLOUD_EXTENT_MULTIPLIER = 2.6;
+const CLOUD_PUFF_SUBDIVISIONS = 1;
 const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
+const STAR_COUNT = 180;
+const STAR_FIELD_RADIUS = 900;
+const STAR_MIN_SIZE = 3.2;
+const STAR_MAX_SIZE = 7.6;
+const STAR_BRIGHT_THRESHOLD = 0.74;
 
 const weatherState = {
   wind: {
@@ -2457,9 +2465,45 @@ const weatherState = {
     random: null,
     clouds: [],
     vertexData: new Float32Array(0),
-    metrics: { count: 0 },
+    metrics: {
+      count: 0,
+      puffs: 0,
+      clumps: 0,
+      vertexCount: 0,
+      lastBuildMs: 0,
+      lastRebuildTime: 0,
+      lastUploadTime: 0,
+      rebuilds: 0,
+      lastError: null,
+    },
+    flags: {
+      geometryValid: false,
+    },
     needsUpload: true,
   },
+};
+
+const starFieldState = {
+  random: null,
+  stars: [],
+  vertexData: new Float32Array(0),
+  metrics: {
+    count: 0,
+    bright: 0,
+    dim: 0,
+    vertexCount: 0,
+    lastBuildMs: 0,
+    lastRebuildTime: 0,
+    lastUploadTime: 0,
+    lastVisibility: 0,
+    lastDrawTime: 0,
+    rebuilds: 0,
+    lastError: null,
+  },
+  flags: {
+    geometryValid: false,
+  },
+  needsUpload: true,
 };
 
 let cloudDriftAccumulator = 0;
@@ -2485,6 +2529,13 @@ const terrainInfo = {
     canyon: 0,
     ravine: 0,
     cliffs: 0,
+  },
+  surfaceStyle: 'arena clásica',
+  colorVariance: 0,
+  flags: {
+    flatColor: false,
+    textured: true,
+    lowSpecular: true,
   },
 };
 let seeThroughTerrain = false;
@@ -3264,6 +3315,8 @@ function initializeCloudField(seedString) {
   const random = createRandomGenerator(baseSeed);
   const half = (baseplateSize / 2) * CLOUD_EXTENT_MULTIPLIER;
   const clouds = [];
+  let totalPuffs = 0;
+  let totalClumps = 0;
 
   for (let i = 0; i < CLOUD_COUNT; i++) {
     const x = randomInRange(random, -half, half);
@@ -3271,12 +3324,62 @@ function initializeCloudField(seedString) {
     const baseAltitude = CLOUD_ALTITUDE + randomInRange(random, -4, 4);
     const radius = randomInRange(random, 12, 26);
     const depth = randomInRange(random, radius * 0.45, radius * 0.75);
+    const thickness = randomInRange(random, 6, 12);
     const driftAngle = randomInRange(random, 0, Math.PI * 2);
     const driftSpeed = randomInRange(random, 0.35, 0.95);
+    const clusterCount = 2 + Math.floor(randomInRange(random, 0, 3.999));
+    const clusters = [];
+    for (let clusterIndex = 0; clusterIndex < clusterCount; clusterIndex++) {
+      const spread = randomInRange(random, radius * 0.2, radius * 0.55);
+      const angle = randomInRange(random, 0, Math.PI * 2);
+      const distance = randomInRange(random, radius * 0.15, radius * 0.75);
+      clusters.push({
+        center: [
+          Math.cos(angle) * distance,
+          randomInRange(random, -thickness * 0.45, thickness * 0.45),
+          Math.sin(angle) * distance,
+        ],
+        spread,
+        puffCount: 2 + Math.floor(randomInRange(random, 1, 3.999)),
+      });
+    }
+
+    const puffs = [];
+    for (const cluster of clusters) {
+      const perCluster = Math.max(2, cluster.puffCount);
+      for (let j = 0; j < perCluster; j++) {
+        const jitterAngle = randomInRange(random, 0, Math.PI * 2);
+        const jitterDistance = randomInRange(random, 0, cluster.spread);
+        const jitterHeight = randomInRange(random, -thickness * 0.25, thickness * 0.35);
+        puffs.push({
+          offset: [
+            cluster.center[0] + Math.cos(jitterAngle) * jitterDistance,
+            cluster.center[1] + jitterHeight,
+            cluster.center[2] + Math.sin(jitterAngle) * jitterDistance,
+          ],
+          radius: randomInRange(random, radius * 0.18, radius * 0.42),
+          brightness: clamp(randomInRange(random, 0.72, 1.08), 0.6, 1.2),
+          softness: randomInRange(random, 0.15, 0.32),
+        });
+      }
+    }
+
+    if (puffs.length === 0) {
+      puffs.push({
+        offset: [0, 0, 0],
+        radius: radius * 0.3,
+        brightness: 0.95,
+        softness: 0.22,
+      });
+    }
+
+    totalPuffs += puffs.length;
+    totalClumps += clusters.length;
+
     const color = [
-      clamp(randomInRange(random, 0.88, 0.96), 0, 1),
       clamp(randomInRange(random, 0.9, 0.98), 0, 1),
       clamp(randomInRange(random, 0.92, 0.99), 0, 1),
+      clamp(randomInRange(random, 0.94, 1), 0, 1),
     ];
 
     clouds.push({
@@ -3284,14 +3387,16 @@ function initializeCloudField(seedString) {
       baseAltitude,
       radius,
       depth,
-      thickness: randomInRange(random, 6, 12),
+      thickness,
       driftDirection: [Math.cos(driftAngle), Math.sin(driftAngle)],
       driftSpeed,
       wobble: randomInRange(random, 0.35, 0.8),
       phase: randomInRange(random, 0, Math.PI * 2),
-      puffCount: 3 + Math.floor(randomInRange(random, 0, 2.999)),
       color,
       rotation: randomInRange(random, 0, Math.PI * 2),
+      puffs,
+      clumpCount: clusters.length,
+      softness: randomInRange(random, 0.2, 0.45),
     });
   }
 
@@ -3300,7 +3405,73 @@ function initializeCloudField(seedString) {
   weatherState.clouds.vertexData = new Float32Array(0);
   weatherState.clouds.needsUpload = true;
   weatherState.clouds.metrics.count = clouds.length;
+  weatherState.clouds.metrics.puffs = totalPuffs;
+  weatherState.clouds.metrics.clumps = totalClumps;
+  weatherState.clouds.metrics.vertexCount = 0;
+  weatherState.clouds.metrics.lastError = null;
+  weatherState.clouds.metrics.lastBuildMs = 0;
+  weatherState.clouds.metrics.lastRebuildTime = 0;
+  weatherState.clouds.metrics.lastUploadTime = 0;
+  weatherState.clouds.metrics.rebuilds = 0;
+  weatherState.clouds.flags.geometryValid = false;
   cloudVertexCount = 0;
+}
+
+function initializeStarField(seedString) {
+  const baseSeed = stringToSeed(`${seedString ?? currentSeed}-stars`);
+  const random = createRandomGenerator(baseSeed);
+  const stars = [];
+  let bright = 0;
+  let dim = 0;
+
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const polar = randomInRange(random, 0.05, Math.PI * 0.48);
+    const azimuth = randomInRange(random, 0, Math.PI * 2);
+    const sinPolar = Math.sin(polar);
+    const direction = [
+      sinPolar * Math.cos(azimuth),
+      Math.cos(polar),
+      sinPolar * Math.sin(azimuth),
+    ];
+    const radius = STAR_FIELD_RADIUS + randomInRange(random, -120, 120);
+    const position = [
+      direction[0] * radius,
+      direction[1] * radius,
+      direction[2] * radius,
+    ];
+    const size = randomInRange(random, STAR_MIN_SIZE, STAR_MAX_SIZE);
+    const brightness = clamp(randomInRange(random, 0.55, 1.12), 0.4, 1.25);
+    if (brightness >= STAR_BRIGHT_THRESHOLD) {
+      bright += 1;
+    } else {
+      dim += 1;
+    }
+    stars.push({
+      position,
+      direction,
+      size,
+      brightness,
+      twinklePhase: randomInRange(random, 0, Math.PI * 2),
+    });
+  }
+
+  starFieldState.random = random;
+  starFieldState.stars = stars;
+  starFieldState.vertexData = new Float32Array(0);
+  starFieldState.metrics.count = stars.length;
+  starFieldState.metrics.bright = bright;
+  starFieldState.metrics.dim = dim;
+  starFieldState.metrics.vertexCount = 0;
+  starFieldState.metrics.lastError = null;
+  starFieldState.metrics.lastBuildMs = 0;
+  starFieldState.metrics.lastRebuildTime = 0;
+  starFieldState.metrics.lastUploadTime = 0;
+  starFieldState.metrics.lastVisibility = 0;
+  starFieldState.metrics.lastDrawTime = 0;
+  starFieldState.metrics.rebuilds = 0;
+  starFieldState.flags.geometryValid = false;
+  starFieldState.needsUpload = true;
+  starVertexCount = 0;
 }
 
 function updateCloudField(deltaTime) {
@@ -3347,27 +3518,121 @@ function updateCloudField(deltaTime) {
   }
 }
 
+function getCloudPuffTemplate(subdivisions) {
+  if (!cloudPuffTopologyCache.has(subdivisions)) {
+    let topology = createBaseIcosahedron();
+    for (let i = 0; i < subdivisions; i++) {
+      topology = subdivideTopology(topology);
+    }
+    cloudPuffTopologyCache.set(subdivisions, topology);
+  }
+  const template = cloudPuffTopologyCache.get(subdivisions);
+  if (!template) {
+    return null;
+  }
+  return {
+    vertices: template.vertices.map((vertex) => vertex.slice()),
+    faces: template.faces,
+  };
+}
+
+function computeCloudPuffColor(cloud, puff, normal) {
+  const baseColor = Array.isArray(cloud?.color)
+    ? cloud.color
+    : [0.92, 0.95, 0.99];
+  const brightness = clamp(puff?.brightness ?? 1, 0.5, 1.35);
+  const softness = clamp01(puff?.softness ?? cloud?.softness ?? 0.25);
+  const daylight = clamp01(dayNightCycleState.daylight ?? 0);
+  const moonlight = clamp01(dayNightCycleState.moonlightIntensity ?? 0);
+  const vertical = clamp(normal?.[1] ?? 0, -1, 1);
+  const highlight = clamp01(0.6 + vertical * 0.4);
+  const tone = brightness * (0.82 + highlight * 0.18);
+  const warmTint = daylight * 0.18;
+  const coolTint = (1 - daylight) * 0.12 + moonlight * 0.2;
+  const scatter = clamp01(0.55 + softness * 0.45);
+
+  const r = clamp01(baseColor[0] * tone + warmTint * highlight + scatter * 0.02);
+  const g = clamp01(baseColor[1] * tone + warmTint * 0.6 * highlight + scatter * 0.018);
+  const b = clamp01(baseColor[2] * tone + coolTint * (0.65 + vertical * 0.15));
+  const shading = clamp01(0.78 + vertical * 0.22);
+
+  return [
+    clamp01(r * shading),
+    clamp01(g * shading),
+    clamp01(b * (0.9 + softness * 0.08)),
+  ];
+}
+
 function rebuildCloudGeometry() {
   const field = weatherState.clouds;
   const clouds = field.clouds;
+  const start = getTimestamp();
+  field.metrics.lastError = null;
+  field.flags.geometryValid = false;
+
   if (!clouds || clouds.length === 0) {
     field.vertexData = new Float32Array(0);
     cloudVertexCount = 0;
     field.metrics.count = 0;
+    field.metrics.puffs = 0;
+    field.metrics.clumps = 0;
+    field.metrics.vertexCount = 0;
+    field.metrics.rebuilds = (field.metrics.rebuilds ?? 0) + 1;
+    field.metrics.lastRebuildTime = getTimestamp();
+    field.metrics.lastBuildMs = Math.max(0, field.metrics.lastRebuildTime - start);
     try {
       gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, field.vertexData, gl.DYNAMIC_DRAW);
+      field.metrics.lastUploadTime = getTimestamp();
+      field.flags.geometryValid = true;
     } catch (error) {
+      field.metrics.lastError = error?.message || String(error);
       recordRuntimeIssue('warning', 'cloud-buffer', error);
     }
     field.needsUpload = false;
     return;
   }
 
+  const template = getCloudPuffTemplate(CLOUD_PUFF_SUBDIVISIONS);
+  if (!template) {
+    recordRuntimeIssue('error', 'cloud-geometry', 'Plantilla de nubes no disponible.');
+    field.vertexData = new Float32Array(0);
+    field.metrics.lastError = 'Plantilla no disponible';
+    field.metrics.count = clouds.length;
+    field.metrics.vertexCount = 0;
+    field.metrics.lastRebuildTime = getTimestamp();
+    field.metrics.lastBuildMs = Math.max(0, field.metrics.lastRebuildTime - start);
+    field.needsUpload = false;
+    cloudVertexCount = 0;
+    return;
+  }
+
+  const faces = template.faces;
+  const vertices = template.vertices;
   let totalVertices = 0;
+  let puffTotal = 0;
+  let clumpTotal = 0;
+
   for (const cloud of clouds) {
-    const puffCount = Math.max(2, cloud?.puffCount ?? 3);
-    totalVertices += puffCount * 6;
+    const puffs = Array.isArray(cloud?.puffs) ? cloud.puffs : [];
+    puffTotal += puffs.length;
+    clumpTotal += cloud?.clumpCount ?? 0;
+    totalVertices += puffs.length * faces.length * 3;
+  }
+
+  if (totalVertices <= 0) {
+    field.vertexData = new Float32Array(0);
+    field.metrics.count = clouds.length;
+    field.metrics.puffs = puffTotal;
+    field.metrics.clumps = clumpTotal;
+    field.metrics.vertexCount = 0;
+    field.metrics.lastRebuildTime = getTimestamp();
+    field.metrics.lastBuildMs = Math.max(0, field.metrics.lastRebuildTime - start);
+    field.needsUpload = false;
+    cloudVertexCount = 0;
+    field.metrics.rebuilds = (field.metrics.rebuilds ?? 0) + 1;
+    field.flags.geometryValid = true;
+    return;
   }
 
   const vertexData = new Float32Array(totalVertices * floatsPerVertex);
@@ -3377,71 +3642,172 @@ function rebuildCloudGeometry() {
     if (!cloud || !cloud.center) {
       continue;
     }
-    const puffCount = Math.max(2, cloud.puffCount ?? 3);
-    const halfHeight = Math.max(1.5, (cloud.thickness ?? 6) / 2);
     const center = cloud.center;
-    for (let i = 0; i < puffCount; i++) {
-      const angle = (Math.PI / puffCount) * i + (cloud.rotation ?? 0);
-      const cosA = Math.cos(angle);
-      const sinA = Math.sin(angle);
-      const halfWidth = Math.max(3.5, cloud.radius * (0.4 + (i / puffCount) * 0.35));
-      const offsetStrength = cloud.depth ?? cloud.radius * 0.6;
-      const offsetX = Math.cos(angle * 1.7) * offsetStrength * 0.12;
-      const offsetZ = Math.sin(angle * 1.7) * offsetStrength * 0.12;
-      const quadCenter = [center[0] + offsetX, center[1], center[2] + offsetZ];
-      const right = [cosA, 0, sinA];
-      const topColor = [
-        Math.min(1, (cloud.color?.[0] ?? 0.9) + 0.05),
-        Math.min(1, (cloud.color?.[1] ?? 0.92) + 0.04),
-        Math.min(1, (cloud.color?.[2] ?? 0.95) + 0.05),
+    const puffs = Array.isArray(cloud.puffs) ? cloud.puffs : [];
+    for (const puff of puffs) {
+      const offsetVector = Array.isArray(puff?.offset)
+        ? puff.offset
+        : [0, 0, 0];
+      const base = [
+        center[0] + (offsetVector[0] ?? 0),
+        center[1] + (offsetVector[1] ?? 0),
+        center[2] + (offsetVector[2] ?? 0),
       ];
-      const baseColor = [
-        Math.max(0, (cloud.color?.[0] ?? 0.9) - 0.02),
-        Math.max(0, (cloud.color?.[1] ?? 0.92) - 0.02),
-        Math.max(0, (cloud.color?.[2] ?? 0.95) - 0.03),
-      ];
+      const radius = Math.max(1.2, puff?.radius ?? Math.max(2.5, cloud?.radius ?? 8) * 0.25);
 
-      const topLeft = [
-        quadCenter[0] - right[0] * halfWidth,
-        quadCenter[1] + halfHeight,
-        quadCenter[2] - right[2] * halfWidth,
-      ];
-      const topRight = [
-        quadCenter[0] + right[0] * halfWidth,
-        quadCenter[1] + halfHeight,
-        quadCenter[2] + right[2] * halfWidth,
-      ];
-      const bottomRight = [
-        quadCenter[0] + right[0] * halfWidth,
-        quadCenter[1] - halfHeight,
-        quadCenter[2] + right[2] * halfWidth,
-      ];
-      const bottomLeft = [
-        quadCenter[0] - right[0] * halfWidth,
-        quadCenter[1] - halfHeight,
-        quadCenter[2] - right[2] * halfWidth,
-      ];
-
-      offset = pushVertex(vertexData, offset, topLeft[0], topLeft[1], topLeft[2], topColor);
-      offset = pushVertex(vertexData, offset, topRight[0], topRight[1], topRight[2], topColor);
-      offset = pushVertex(vertexData, offset, bottomRight[0], bottomRight[1], bottomRight[2], baseColor);
-      offset = pushVertex(vertexData, offset, topLeft[0], topLeft[1], topLeft[2], topColor);
-      offset = pushVertex(vertexData, offset, bottomRight[0], bottomRight[1], bottomRight[2], baseColor);
-      offset = pushVertex(vertexData, offset, bottomLeft[0], bottomLeft[1], bottomLeft[2], baseColor);
+      for (let faceIndex = 0; faceIndex < faces.length; faceIndex++) {
+        const face = faces[faceIndex];
+        for (let vertexIndex = 0; vertexIndex < 3; vertexIndex++) {
+          const templateIndex = face[vertexIndex];
+          const templateVertex = vertices[templateIndex];
+          const normal = normalize(templateVertex);
+          const worldPosition = [
+            base[0] + templateVertex[0] * radius,
+            base[1] + templateVertex[1] * radius,
+            base[2] + templateVertex[2] * radius,
+          ];
+          const color = computeCloudPuffColor(cloud, puff, normal);
+          offset = pushVertex(
+            vertexData,
+            offset,
+            worldPosition[0],
+            worldPosition[1],
+            worldPosition[2],
+            color,
+          );
+        }
+      }
     }
   }
 
   cloudVertexCount = vertexData.length / floatsPerVertex;
-  weatherState.clouds.vertexData = vertexData;
-  weatherState.clouds.needsUpload = false;
-  weatherState.clouds.metrics.count = clouds.length;
+  field.vertexData = vertexData;
+  field.needsUpload = false;
+  field.metrics.count = clouds.length;
+  field.metrics.puffs = puffTotal;
+  field.metrics.clumps = clumpTotal;
+  field.metrics.vertexCount = cloudVertexCount;
+  field.metrics.rebuilds = (field.metrics.rebuilds ?? 0) + 1;
+  field.metrics.lastRebuildTime = getTimestamp();
+  field.metrics.lastBuildMs = Math.max(0, field.metrics.lastRebuildTime - start);
 
   try {
     gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+    field.metrics.lastUploadTime = getTimestamp();
+    field.flags.geometryValid = true;
   } catch (error) {
+    field.metrics.lastError = error?.message || String(error);
     recordRuntimeIssue('warning', 'cloud-buffer', error);
+    field.flags.geometryValid = false;
   }
+}
+
+function rebuildStarFieldGeometry() {
+  const state = starFieldState;
+  const stars = state.stars;
+  const start = getTimestamp();
+  state.metrics.lastError = null;
+  state.flags.geometryValid = false;
+
+  if (!stars || stars.length === 0) {
+    state.vertexData = new Float32Array(0);
+    starVertexCount = 0;
+    state.metrics.count = 0;
+    state.metrics.bright = 0;
+    state.metrics.dim = 0;
+    state.metrics.vertexCount = 0;
+    state.metrics.rebuilds = (state.metrics.rebuilds ?? 0) + 1;
+    state.metrics.lastRebuildTime = getTimestamp();
+    state.metrics.lastBuildMs = Math.max(0, state.metrics.lastRebuildTime - start);
+    try {
+      gl.bindBuffer(gl.ARRAY_BUFFER, starBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, state.vertexData, gl.DYNAMIC_DRAW);
+      state.metrics.lastUploadTime = getTimestamp();
+      state.flags.geometryValid = true;
+    } catch (error) {
+      state.metrics.lastError = error?.message || String(error);
+      recordRuntimeIssue('warning', 'star-buffer', error);
+    }
+    state.needsUpload = false;
+    return;
+  }
+
+  const vertexData = new Float32Array(stars.length * 6 * floatsPerVertex);
+  let offset = 0;
+  let bright = 0;
+  let dim = 0;
+
+  for (const star of stars) {
+    const direction = normalize(Array.isArray(star?.direction) ? star.direction : star?.position ?? [0, 1, 0]);
+    const position = Array.isArray(star?.position)
+      ? star.position
+      : [direction[0] * STAR_FIELD_RADIUS, direction[1] * STAR_FIELD_RADIUS, direction[2] * STAR_FIELD_RADIUS];
+    let right = cross(direction, [0, 1, 0]);
+    if (Math.hypot(right[0], right[1], right[2]) < 0.001) {
+      right = cross(direction, [1, 0, 0]);
+    }
+    const rightLength = Math.hypot(right[0], right[1], right[2]) || 1;
+    right = [right[0] / rightLength, right[1] / rightLength, right[2] / rightLength];
+    let up = cross(right, direction);
+    const upLength = Math.hypot(up[0], up[1], up[2]);
+    if (upLength < 0.001) {
+      up = [0, 1, 0];
+    } else {
+      up = [up[0] / upLength, up[1] / upLength, up[2] / upLength];
+    }
+    const halfSize = Math.max(STAR_MIN_SIZE * 0.35, (star?.size ?? STAR_MIN_SIZE) * 0.5);
+    const rightVec = scale(right, halfSize);
+    const upVec = scale(up, halfSize);
+
+    const brightness = clamp(star?.brightness ?? 0.8, 0.3, 1.4);
+    if (brightness >= STAR_BRIGHT_THRESHOLD) {
+      bright += 1;
+    } else {
+      dim += 1;
+    }
+    const shimmer = Math.sin(star?.twinklePhase ?? 0) * 0.05;
+    const baseColor = [
+      clamp01(0.78 + brightness * 0.22 + shimmer * 0.3),
+      clamp01(0.78 + brightness * 0.18 + shimmer * 0.2),
+      clamp01(0.82 + brightness * 0.28 + shimmer * 0.4),
+    ];
+
+    const topRight = add(add(position, rightVec), upVec);
+    const topLeft = add(add(position, scale(rightVec, -1)), upVec);
+    const bottomRight = add(add(position, rightVec), scale(upVec, -1));
+    const bottomLeft = add(add(position, scale(rightVec, -1)), scale(upVec, -1));
+
+    offset = pushVertex(vertexData, offset, topRight[0], topRight[1], topRight[2], baseColor);
+    offset = pushVertex(vertexData, offset, topLeft[0], topLeft[1], topLeft[2], baseColor);
+    offset = pushVertex(vertexData, offset, bottomRight[0], bottomRight[1], bottomRight[2], baseColor);
+    offset = pushVertex(vertexData, offset, topLeft[0], topLeft[1], topLeft[2], baseColor);
+    offset = pushVertex(vertexData, offset, bottomLeft[0], bottomLeft[1], bottomLeft[2], baseColor);
+    offset = pushVertex(vertexData, offset, bottomRight[0], bottomRight[1], bottomRight[2], baseColor);
+  }
+
+  starVertexCount = vertexData.length / floatsPerVertex;
+  state.vertexData = vertexData;
+  state.metrics.vertexCount = starVertexCount;
+  state.metrics.rebuilds = (state.metrics.rebuilds ?? 0) + 1;
+  state.metrics.lastRebuildTime = getTimestamp();
+  state.metrics.lastBuildMs = Math.max(0, state.metrics.lastRebuildTime - start);
+  state.metrics.count = stars.length;
+  state.metrics.bright = bright;
+  state.metrics.dim = dim;
+
+  try {
+    gl.bindBuffer(gl.ARRAY_BUFFER, starBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+    state.metrics.lastUploadTime = getTimestamp();
+    state.flags.geometryValid = true;
+  } catch (error) {
+    state.metrics.lastError = error?.message || String(error);
+    recordRuntimeIssue('warning', 'star-buffer', error);
+    state.flags.geometryValid = false;
+  }
+
+  state.needsUpload = false;
 }
 
 function composeWindStreakGeometry(effect, now) {
@@ -5315,6 +5681,9 @@ function generateTerrainVertices(seedString) {
   }
 
   const colors = new Array(blocksPerSide + 1);
+  const colorSum = [0, 0, 0];
+  const colorSumSq = [0, 0, 0];
+  let colorSamples = 0;
   for (let z = 0; z <= blocksPerSide; z++) {
     colors[z] = new Array(blocksPerSide + 1);
     for (let x = 0; x <= blocksPerSide; x++) {
@@ -5340,8 +5709,29 @@ function generateTerrainVertices(seedString) {
       const shading = clamp01(ambient + diffuse * 0.6);
       const coastalBoost = clamp01(islandMask[z][x]) * 0.2;
       const colorMix = clamp01(shading * 0.7 + normalizedHeight * 0.3 + coastalBoost * 0.5);
-      colors[z][x] = mixColor(sandDarkColor, sandLightColor, colorMix);
+      const color = mixColor(sandDarkColor, sandLightColor, colorMix);
+
+      colors[z][x] = color;
+      colorSum[0] += color[0];
+      colorSum[1] += color[1];
+      colorSum[2] += color[2];
+      colorSumSq[0] += color[0] * color[0];
+      colorSumSq[1] += color[1] * color[1];
+      colorSumSq[2] += color[2] * color[2];
+      colorSamples += 1;
     }
+  }
+
+  let colorVariance = 0;
+  if (colorSamples > 0) {
+    const inv = 1 / colorSamples;
+    const meanR = colorSum[0] * inv;
+    const meanG = colorSum[1] * inv;
+    const meanB = colorSum[2] * inv;
+    const varR = Math.max(0, colorSumSq[0] * inv - meanR * meanR);
+    const varG = Math.max(0, colorSumSq[1] * inv - meanG * meanG);
+    const varB = Math.max(0, colorSumSq[2] * inv - meanB * meanB);
+    colorVariance = clamp((varR + varG + varB) / 3, 0, 1);
   }
 
   let offset = 0;
@@ -5396,6 +5786,7 @@ function generateTerrainVertices(seedString) {
     heightfield: heights,
     maskfield: islandMask,
     featureStats,
+    colorVariance,
   };
 }
 
@@ -5429,6 +5820,7 @@ const phosphorusContentProfiles = [
 ];
 
 const rockTopologyCache = new Map();
+const cloudPuffTopologyCache = new Map();
 
 function createBaseIcosahedron() {
   const t = (1 + Math.sqrt(5)) / 2;
@@ -6472,6 +6864,7 @@ function regenerateTerrain(seedString) {
     heightfield,
     maskfield,
     featureStats,
+    colorVariance,
   } = generateTerrainVertices(seedString);
   gl.bindBuffer(gl.ARRAY_BUFFER, baseplateBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW);
@@ -6490,8 +6883,17 @@ function regenerateTerrain(seedString) {
     ? visibleVertices / baseplateVertexCount
     : 0;
   terrainInfo.featureStats = featureStats;
+  terrainInfo.surfaceStyle = 'arena clásica';
+  if (!terrainInfo.flags || typeof terrainInfo.flags !== 'object') {
+    terrainInfo.flags = {};
+  }
+  terrainInfo.flags.flatColor = false;
+  terrainInfo.flags.textured = true;
+  terrainInfo.flags.lowSpecular = true;
+  terrainInfo.colorVariance = colorVariance;
   resetWaterSwells(seedString);
   initializeCloudField(seedString);
+  initializeStarField(seedString);
   regenerateRocks(seedString, heightfield, maskfield);
   regeneratePlants(seedString, heightfield, maskfield);
 }
@@ -7198,12 +7600,26 @@ const simulationInfo = {
   displayedTps,
   ticksLastFrame,
   dayNight: dayNightCycleState,
+  terrain: {
+    surfaceStyle: terrainInfo.surfaceStyle,
+    colorVariance: terrainInfo.colorVariance,
+    minHeight: terrainInfo.minHeight,
+    maxHeight: terrainInfo.maxHeight,
+    vertexCount: terrainInfo.vertexCount,
+    visibleVertices: terrainInfo.visibleVertices,
+    visibleRatio: terrainInfo.visibleVertexRatio,
+    flags: { ...terrainInfo.flags },
+  },
   weather: {
     windActive: 0,
     windSpawned: 0,
     windCulled: 0,
     windGeometryRejected: 0,
     clouds: 0,
+    cloudPuffs: weatherState.clouds.metrics.puffs,
+    cloudClumps: weatherState.clouds.metrics.clumps,
+    cloudMetrics: weatherState.clouds.metrics,
+    cloudsHealthy: weatherState.clouds.flags.geometryValid,
     swells: {
       active: 0,
       spawned: 0,
@@ -7234,6 +7650,9 @@ const simulationInfo = {
     sunGeometryValid: celestialGeometryState.flags.sunGeometryValid,
     moonGeometryValid: celestialGeometryState.flags.moonGeometryValid,
     geometryMetrics: celestialGeometryState.metrics,
+    stars: starFieldState.metrics.count,
+    starMetrics: starFieldState.metrics,
+    starsHealthy: starFieldState.flags.geometryValid,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -7429,6 +7848,56 @@ function bindGeometry(buffer) {
   gl.vertexAttribPointer(colorAttribute, 3, gl.FLOAT, false, vertexStride, 12);
 }
 
+function renderStarField() {
+  if (!uniformLocations.renderMode || typeof gl.uniform1i !== 'function') {
+    return false;
+  }
+
+  if (starFieldState.needsUpload) {
+    rebuildStarFieldGeometry();
+  }
+
+  if (starVertexCount <= 0) {
+    starFieldState.metrics.lastVisibility = 0;
+    return false;
+  }
+
+  const daylight = clamp01(dayNightCycleState.daylight ?? 0);
+  const moonlight = clamp01(dayNightCycleState.moonlightIntensity ?? 0);
+  const visibility = clamp01(1 - daylight * 1.35 + moonlight * 0.22);
+  starFieldState.metrics.lastVisibility = visibility;
+
+  if (visibility <= 0.001) {
+    return false;
+  }
+
+  if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(surfaceSpecularStrengthUniform, 0);
+  }
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, visibility * 0.82);
+  }
+  if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(emissiveStrengthUniform, 0.6 + visibility * 0.55);
+  }
+
+  gl.uniform1i(uniformLocations.renderMode, renderModes.celestial);
+  bindGeometry(starBuffer);
+  gl.drawArrays(gl.TRIANGLES, 0, starVertexCount);
+  drawStats.celestial += 1;
+  drawStats.total += 1;
+  starFieldState.metrics.lastDrawTime = getTimestamp();
+
+  if (emissiveStrengthUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(emissiveStrengthUniform, 0);
+  }
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, 1);
+  }
+
+  return true;
+}
+
 function renderSkybox() {
   if (!skyboxProgram || !skyboxBuffer || skyboxVertexCount <= 0 || !skyboxViewProjectionMatrix) {
     return;
@@ -7527,6 +7996,12 @@ function renderCelestialBodies() {
   if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(surfaceSpecularStrengthUniform, 0);
   }
+  if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+    gl.uniform1f(terrainAlphaUniform, 1);
+  }
+
+  renderStarField();
+
   if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(terrainAlphaUniform, 1);
   }
@@ -7995,6 +8470,16 @@ function updateDebugConsole(deltaTime) {
   const absorbedMetric = formatMetric(plantMetrics.energyAbsorbed);
   const consumedMetric = formatMetric(plantMetrics.energyConsumed);
   const growthEventsMetric = Math.max(0, plantMetrics.growthEvents ?? 0);
+  const cloudMetrics = weatherState.clouds?.metrics ?? {};
+  const cloudStatus = weatherState.clouds?.flags?.geometryValid ? 'OK' : 'ERROR';
+  const cloudBuild = Number.isFinite(cloudMetrics.lastBuildMs)
+    ? `${cloudMetrics.lastBuildMs.toFixed(2)}ms`
+    : '---';
+  const starMetrics = starFieldState.metrics ?? {};
+  const starStatus = starFieldState.flags?.geometryValid ? 'OK' : 'ERROR';
+  const starVisibility = Number.isFinite(starMetrics.lastVisibility)
+    ? starMetrics.lastVisibility.toFixed(2)
+    : '0.00';
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -8022,6 +8507,10 @@ function updateDebugConsole(deltaTime) {
     `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
       featureStats.ravine,
     )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
+    `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
+      terrainInfo.flags?.textured ? 'sí' : 'no'
+    } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'})`,
+    `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
     `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
@@ -8029,10 +8518,12 @@ function updateDebugConsole(deltaTime) {
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
     `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
+    `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
     `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -8073,6 +8564,13 @@ function updateDebugConsole(deltaTime) {
     if (audioDiagnostics.lastError) {
       info.push(`Audio último error: ${audioDiagnostics.lastError}`);
     }
+  }
+
+  if (cloudMetrics.lastError) {
+    info.push(`Nubes error: ${cloudMetrics.lastError}`);
+  }
+  if (starMetrics.lastError) {
+    info.push(`Estrellas error: ${starMetrics.lastError}`);
   }
 
   if (pointerLockErrors > 0) {
@@ -8168,11 +8666,25 @@ function loop(currentTime) {
     simulationInfo.displayedTps = displayedTps;
     simulationInfo.ticksLastFrame = ticksLastFrame;
     simulationInfo.dayNight = dayNightCycleState;
+    simulationInfo.terrain.surfaceStyle = terrainInfo.surfaceStyle;
+    simulationInfo.terrain.colorVariance = terrainInfo.colorVariance ?? 0;
+    simulationInfo.terrain.minHeight = terrainInfo.minHeight ?? 0;
+    simulationInfo.terrain.maxHeight = terrainInfo.maxHeight ?? 0;
+    simulationInfo.terrain.vertexCount = terrainInfo.vertexCount ?? 0;
+    simulationInfo.terrain.visibleVertices = terrainInfo.visibleVertices ?? 0;
+    simulationInfo.terrain.visibleRatio = terrainInfo.visibleVertexRatio ?? 0;
+    simulationInfo.terrain.flags = { ...terrainInfo.flags };
+    const cloudMetrics = weatherState.clouds?.metrics ?? {};
+    const starMetrics = starFieldState.metrics ?? {};
     simulationInfo.weather.windActive = weatherState.wind.metrics.active;
     simulationInfo.weather.windSpawned = weatherState.wind.metrics.spawned;
     simulationInfo.weather.windCulled = weatherState.wind.metrics.culled;
     simulationInfo.weather.windGeometryRejected = weatherState.wind.metrics.geometryRejected;
-    simulationInfo.weather.clouds = weatherState.clouds.metrics.count;
+    simulationInfo.weather.clouds = cloudMetrics.count ?? weatherState.clouds.metrics.count;
+    simulationInfo.weather.cloudPuffs = cloudMetrics.puffs ?? weatherState.clouds.metrics.puffs ?? 0;
+    simulationInfo.weather.cloudClumps = cloudMetrics.clumps ?? weatherState.clouds.metrics.clumps ?? 0;
+    simulationInfo.weather.cloudsHealthy = Boolean(weatherState.clouds.flags?.geometryValid);
+    simulationInfo.weather.cloudMetrics = weatherState.clouds.metrics;
     const swellMetrics = waterSwellState?.metrics;
     const swellInfo = simulationInfo.weather.swells;
     if (swellInfo) {
@@ -8207,6 +8719,10 @@ function loop(currentTime) {
     simulationInfo.celestial.moonAltitude = dayNightCycleState.moonAltitude;
     simulationInfo.celestial.sunlight = dayNightCycleState.sunlightIntensity;
     simulationInfo.celestial.moonlight = dayNightCycleState.moonlightIntensity;
+    simulationInfo.celestial.stars = starMetrics.count ?? 0;
+    simulationInfo.celestial.starMetrics = starFieldState.metrics;
+    simulationInfo.celestial.starsHealthy = Boolean(starFieldState.flags?.geometryValid);
+    simulationInfo.celestial.starVisibility = starMetrics.lastVisibility ?? 0;
     simulationInfo.celestial.skyboxMetrics = dayNightCycleState.metrics;
     simulationInfo.celestial.skyboxHealthy = dayNightCycleState.flags.skyGradientValid;
     simulationInfo.celestial.templateHealthy = celestialGeometryState.flags.templateValid;
