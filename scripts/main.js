@@ -40,6 +40,9 @@ const dayCyclePhaseIconMap = new Map(
 const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
 const musicToggle = document.getElementById('audio-music-toggle');
 
+let debugConsoleHeartbeatId = null;
+const DEBUG_PANEL_HEARTBEAT_MS = 1000;
+
 function createFallbackDebugPanel() {
   const supportsDom =
     typeof document?.createElement === 'function' && typeof document?.body === 'object';
@@ -112,6 +115,28 @@ function createFallbackDebugPanel() {
   }
 
   return { panel, toggle, console: consoleElement };
+}
+
+function ensureDebugPanelHeartbeat() {
+  if (debugConsoleHeartbeatId !== null) {
+    return;
+  }
+  const scheduleInterval =
+    typeof window !== 'undefined' && typeof window.setInterval === 'function'
+      ? window.setInterval.bind(window)
+      : typeof setInterval === 'function'
+      ? setInterval
+      : null;
+  if (!scheduleInterval) {
+    return;
+  }
+  debugConsoleHeartbeatId = scheduleInterval(() => {
+    try {
+      updateDebugConsole(0);
+    } catch (error) {
+      console.error('Error al actualizar el panel de depuración (latido)', error);
+    }
+  }, DEBUG_PANEL_HEARTBEAT_MS);
 }
 
 const runtimeState =
@@ -222,6 +247,16 @@ runtimeGlobal.CAMERA_BASE_NEAR_PLANE = CAMERA_BASE_NEAR_PLANE;
 runtimeGlobal.CAMERA_BASE_FAR_PLANE = CAMERA_BASE_FAR_PLANE;
 runtimeGlobal.CAMERA_NEAR_PLANE = CAMERA_NEAR_PLANE;
 runtimeGlobal.CAMERA_FAR_PLANE = CAMERA_FAR_PLANE;
+
+const MIN_CAMERA_STAR_MARGIN = 40;
+const DEFAULT_CAMERA_STAR_MARGIN = 120;
+const CAMERA_STAR_MARGIN =
+  Number.isFinite(runtimeGlobal.CAMERA_STAR_MARGIN) &&
+  runtimeGlobal.CAMERA_STAR_MARGIN >= MIN_CAMERA_STAR_MARGIN
+    ? runtimeGlobal.CAMERA_STAR_MARGIN
+    : DEFAULT_CAMERA_STAR_MARGIN;
+
+runtimeGlobal.CAMERA_STAR_MARGIN = CAMERA_STAR_MARGIN;
 
 const cameraClipPlanes =
   runtimeState.cameraClipPlanes && typeof runtimeState.cameraClipPlanes === 'object'
@@ -1073,6 +1108,8 @@ if (!debugPanel || !debugToggleButton || !debugConsole) {
   }
 }
 
+ensureDebugPanelHeartbeat();
+
 const selectionInfoPanel =
   document.getElementById('selection-info') ?? fallbackFactories.infoPanel();
 const selectionBlockField =
@@ -1718,6 +1755,13 @@ function handleFatalRuntimeError(error, context) {
   fatalRuntimeError = entry;
   loopHalted = true;
   showOverlayIssue(entry);
+  ensureDebugPanelHeartbeat();
+  setDebugPanelExpanded(true);
+  try {
+    updateDebugConsole(0);
+  } catch (panelError) {
+    console.error('No se pudo actualizar el panel de depuración tras un error crítico', panelError);
+  }
   console.error(`Error crítico en ${context}`, error);
   return entry;
 }
@@ -2631,10 +2675,24 @@ const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
 const STAR_COUNT = 180;
-const STAR_FIELD_RADIUS = 900;
+const STAR_FIELD_MARGIN = Math.max(
+  MIN_CAMERA_STAR_MARGIN,
+  Math.min(CAMERA_STAR_MARGIN, Math.max(MIN_CAMERA_STAR_MARGIN, CAMERA_FAR_PLANE * 0.6)),
+);
+const STAR_FIELD_RADIUS = Math.max(180, CAMERA_FAR_PLANE - STAR_FIELD_MARGIN);
+const STAR_FIELD_RADIUS_JITTER = Math.max(
+  30,
+  Math.min(120, Math.max(0, STAR_FIELD_RADIUS * 0.35)),
+);
+const STAR_FIELD_MIN_RADIUS = Math.max(120, STAR_FIELD_RADIUS - STAR_FIELD_RADIUS_JITTER);
 const STAR_MIN_SIZE = 3.2;
 const STAR_MAX_SIZE = 7.6;
 const STAR_BRIGHT_THRESHOLD = 0.74;
+
+runtimeGlobal.STAR_FIELD_MARGIN = STAR_FIELD_MARGIN;
+runtimeGlobal.STAR_FIELD_RADIUS = STAR_FIELD_RADIUS;
+runtimeGlobal.STAR_FIELD_MIN_RADIUS = STAR_FIELD_MIN_RADIUS;
+runtimeGlobal.STAR_FIELD_RADIUS_JITTER = STAR_FIELD_RADIUS_JITTER;
 
 const weatherState = {
   wind: {
@@ -2680,9 +2738,15 @@ const starFieldState = {
     lastDrawTime: 0,
     rebuilds: 0,
     lastError: null,
+    margin: STAR_FIELD_MARGIN,
+    radiusMax: STAR_FIELD_RADIUS,
+    radiusMin: STAR_FIELD_MIN_RADIUS,
+    radiusJitter: STAR_FIELD_RADIUS_JITTER,
+    farPlane: CAMERA_FAR_PLANE,
   },
   flags: {
     geometryValid: false,
+    clipSafe: STAR_FIELD_RADIUS < CAMERA_FAR_PLANE,
   },
   needsUpload: true,
 };
@@ -3624,7 +3688,7 @@ function initializeStarField(seedString) {
       Math.cos(polar),
       sinPolar * Math.sin(azimuth),
     ];
-    const radius = STAR_FIELD_RADIUS + randomInRange(random, -120, 120);
+    const radius = randomInRange(random, STAR_FIELD_MIN_RADIUS, STAR_FIELD_RADIUS);
     const position = [
       direction[0] * radius,
       direction[1] * radius,
@@ -3660,7 +3724,13 @@ function initializeStarField(seedString) {
   starFieldState.metrics.lastVisibility = 0;
   starFieldState.metrics.lastDrawTime = 0;
   starFieldState.metrics.rebuilds = 0;
+  starFieldState.metrics.margin = STAR_FIELD_MARGIN;
+  starFieldState.metrics.radiusMax = STAR_FIELD_RADIUS;
+  starFieldState.metrics.radiusMin = STAR_FIELD_MIN_RADIUS;
+  starFieldState.metrics.radiusJitter = STAR_FIELD_RADIUS_JITTER;
+  starFieldState.metrics.farPlane = CAMERA_FAR_PLANE;
   starFieldState.flags.geometryValid = false;
+  starFieldState.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= CAMERA_FAR_PLANE;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
 }
@@ -3900,6 +3970,12 @@ function rebuildStarFieldGeometry() {
   const start = getTimestamp();
   state.metrics.lastError = null;
   state.flags.geometryValid = false;
+  state.metrics.margin = STAR_FIELD_MARGIN;
+  state.metrics.radiusMax = STAR_FIELD_RADIUS;
+  state.metrics.radiusMin = STAR_FIELD_MIN_RADIUS;
+  state.metrics.radiusJitter = STAR_FIELD_RADIUS_JITTER;
+  state.metrics.farPlane = CAMERA_FAR_PLANE;
+  state.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= CAMERA_FAR_PLANE;
 
   if (!stars || stars.length === 0) {
     state.vertexData = new Float32Array(0);
@@ -7964,6 +8040,10 @@ const simulationInfo = {
     stars: starFieldState.metrics.count,
     starMetrics: starFieldState.metrics,
     starsHealthy: starFieldState.flags.geometryValid,
+    starRadius: STAR_FIELD_RADIUS,
+    starRadiusMin: STAR_FIELD_MIN_RADIUS,
+    starMargin: STAR_FIELD_MARGIN,
+    starClipSafe: STAR_FIELD_RADIUS + 1 <= CAMERA_FAR_PLANE,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -8920,6 +9000,16 @@ function updateDebugConsole(deltaTime) {
   const starVisibility = Number.isFinite(starMetrics.lastVisibility)
     ? starMetrics.lastVisibility.toFixed(2)
     : '0.00';
+  const starRadiusMax = Number.isFinite(starMetrics.radiusMax)
+    ? starMetrics.radiusMax.toFixed(1)
+    : STAR_FIELD_RADIUS.toFixed(1);
+  const starRadiusMin = Number.isFinite(starMetrics.radiusMin)
+    ? starMetrics.radiusMin.toFixed(1)
+    : STAR_FIELD_MIN_RADIUS.toFixed(1);
+  const starMargin = Number.isFinite(starMetrics.margin)
+    ? starMetrics.margin.toFixed(1)
+    : STAR_FIELD_MARGIN.toFixed(1);
+  const starClipStatus = starFieldState.flags?.clipSafe === false ? 'riesgo' : 'seguro';
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -8990,7 +9080,7 @@ function updateDebugConsole(deltaTime) {
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} radio=${starRadiusMin}–${starRadiusMax} margen=${starMargin} clip=${starClipStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -9243,6 +9333,10 @@ function loop(currentTime) {
     simulationInfo.celestial.starMetrics = starFieldState.metrics;
     simulationInfo.celestial.starsHealthy = Boolean(starFieldState.flags?.geometryValid);
     simulationInfo.celestial.starVisibility = starMetrics.lastVisibility ?? 0;
+    simulationInfo.celestial.starRadius = starMetrics.radiusMax ?? STAR_FIELD_RADIUS;
+    simulationInfo.celestial.starRadiusMin = starMetrics.radiusMin ?? STAR_FIELD_MIN_RADIUS;
+    simulationInfo.celestial.starMargin = starMetrics.margin ?? STAR_FIELD_MARGIN;
+    simulationInfo.celestial.starClipSafe = Boolean(starFieldState.flags?.clipSafe);
     simulationInfo.celestial.skyboxMetrics = dayNightCycleState.metrics;
     simulationInfo.celestial.skyboxHealthy = dayNightCycleState.flags.skyGradientValid;
     simulationInfo.celestial.templateHealthy = celestialGeometryState.flags.templateValid;
