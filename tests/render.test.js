@@ -408,6 +408,12 @@ function runGameScript(options = {}) {
   sandbox.self = windowStub;
   sandbox.global = sandbox;
 
+  const volumetricPath = path.resolve(__dirname, '..', 'scripts', 'volumetric-engine.js');
+  if (fs.existsSync(volumetricPath)) {
+    const volumetricCode = fs.readFileSync(volumetricPath, 'utf8');
+    vm.runInNewContext(volumetricCode, sandbox, { filename: volumetricPath });
+  }
+
   const scriptPath = path.resolve(__dirname, '..', 'scripts', 'main.js');
   const code = fs.readFileSync(scriptPath, 'utf8');
   vm.runInNewContext(code, sandbox, { filename: scriptPath });
@@ -691,6 +697,45 @@ function runTests() {
   assert(
     terrainInfo.featureStats && typeof terrainInfo.featureStats.canyon === 'number',
     'Las métricas de rasgos del terreno deben almacenarse en terrainInfo.featureStats',
+  );
+
+  assert(
+    terrainInfo.massDiagnostics &&
+      typeof terrainInfo.massDiagnostics.computations === 'number',
+    'El sistema volumétrico debe exponer métricas de masa en terrainInfo.massDiagnostics',
+  );
+  assert(
+    terrainInfo.massDiagnostics.computations > 0,
+    'El motor volumétrico debe registrar cálculos de masa durante la generación',
+  );
+  assert(
+    Array.isArray(terrainInfo.massDiagnostics.flaggedEntities),
+    'Las métricas de masa deben incluir la lista de entidades señaladas',
+  );
+  assert(
+    typeof terrainInfo.massDiagnostics.terrainSamples === 'number' &&
+      terrainInfo.massDiagnostics.terrainSamples >= 0,
+    'Las métricas de masa deben contabilizar las muestras de terreno aplicadas',
+  );
+  assert(
+    terrainInfo.massDiagnostics.reasonCounts &&
+      typeof terrainInfo.massDiagnostics.reasonCounts === 'object',
+    'Las métricas de masa deben registrar el conteo por motivo de alerta',
+  );
+  assert(
+    terrainInfo.massDiagnostics.lastSpecSummary &&
+      typeof terrainInfo.massDiagnostics.lastSpecSummary === 'object',
+    'Las métricas de masa deben conservar el último resumen de cálculo',
+  );
+  const volumetricEngineApi =
+    windowApi.__ARRECIFE_VOLUME_ENGINE__ || windowApi.__arrecifeVolumeEngine || null;
+  assert(
+    volumetricEngineApi && typeof volumetricEngineApi.computeMass === 'function',
+    'El motor volumétrico debe estar accesible desde la ventana',
+  );
+  assert(
+    debugConsole.textContent.includes('Masa diag:'),
+    'La consola de depuración debe mostrar diagnósticos de masa',
   );
 
   stepFrame(8);
