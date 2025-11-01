@@ -147,6 +147,8 @@ const uiFallbackEvents = Array.isArray(runtimeState.uiFallbackEvents)
   ? runtimeState.uiFallbackEvents
   : (runtimeState.uiFallbackEvents = []);
 
+let volumetricEngine = null;
+
 const AMBIENT_MUSIC_TRACK_URL = 'aquatic-downtime-363761.mp3';
 
 const ambientAudioState = {
@@ -1473,6 +1475,25 @@ function recordRuntimeIssue(severity, context, error) {
   return entry;
 }
 
+function reportVolumetricAnomaly(flaggedEntry, context = {}) {
+  if (!flaggedEntry) {
+    return;
+  }
+  const labels = [];
+  if (context.type) {
+    labels.push(context.type);
+  }
+  if (context.id) {
+    labels.push(context.id);
+  } else if (context.name) {
+    labels.push(context.name);
+  }
+  const label = labels.length > 0 ? labels.join(' ') : 'Entidad volumétrica';
+  recordRuntimeIssue('warning', 'volumetric-mass', {
+    message: `${label} fuera de rango (${flaggedEntry.reason})`,
+  });
+}
+
 while (pendingRuntimeIssueQueue.length > 0) {
   const pendingIssue = pendingRuntimeIssueQueue.shift();
   recordRuntimeIssue(pendingIssue.severity, pendingIssue.context, pendingIssue.error);
@@ -2138,6 +2159,42 @@ const lightDirection = (() => {
   return [0.37 / length, 0.84 / length, 0.4 / length];
 })();
 const waterSurfaceLevel = 19;
+
+const volumetricEngineFactory =
+  typeof runtimeGlobal.createVolumetricMassEngine === 'function'
+    ? runtimeGlobal.createVolumetricMassEngine
+    : null;
+
+if (volumetricEngineFactory) {
+  try {
+    volumetricEngine = volumetricEngineFactory({
+      tileSize: blockSize,
+      baseplateSize,
+      minY: 0,
+      maxY: maxTerrainHeight,
+      waterLevel: waterSurfaceLevel,
+    });
+    runtimeGlobal.__ARRECIFE_VOLUME_ENGINE__ = volumetricEngine;
+    runtimeGlobal.__arrecifeVolumeEngine = volumetricEngine;
+    if (typeof window !== 'undefined') {
+      window.__ARRECIFE_VOLUME_ENGINE__ = volumetricEngine;
+      window.__arrecifeVolumeEngine = volumetricEngine;
+    }
+  } catch (error) {
+    volumetricEngine = null;
+    pendingRuntimeIssueQueue.push({
+      severity: 'warning',
+      context: 'volumetric-engine',
+      error,
+    });
+  }
+} else {
+  pendingRuntimeIssueQueue.push({
+    severity: 'warning',
+    context: 'volumetric-engine',
+    error: new Error('createVolumetricMassEngine no disponible'),
+  });
+}
 const waterAlpha = 0.62;
 const waterDeepColor = [0.06, 0.32, 0.66];
 const waterShallowColor = [0.28, 0.74, 0.86];
@@ -2260,7 +2317,11 @@ const terrainInfo = {
     ravine: 0,
     cliffs: 0,
   },
+  massDiagnostics: null,
 };
+if (volumetricEngine) {
+  terrainInfo.massDiagnostics = volumetricEngine.metrics;
+}
 let seeThroughTerrain = false;
 let selectedBlock = null;
 let inverseViewProjectionMatrix = null;
@@ -4911,10 +4972,16 @@ function rebuildPlantGeometry() {
 
 function computePlantVolume(plant) {
   const height = Math.max(0, plant?.currentHeight ?? 0);
+  if (height <= 0) {
+    return 0;
+  }
   const baseRadius = Math.max(0.01, plant?.currentRadius ?? 0.1);
   const topRadius = Math.max(0.01, plant?.tipRadius ?? baseRadius * 0.6);
-  const averageRadius = (baseRadius + topRadius) / 2;
-  return Math.PI * averageRadius * averageRadius * height;
+  return (
+    (Math.PI * height *
+      (baseRadius * baseRadius + baseRadius * topRadius + topRadius * topRadius)) /
+    3
+  );
 }
 
 function computePlantMass(plant) {
@@ -4923,7 +4990,59 @@ function computePlantMass(plant) {
   }
   const species = plant.species ?? plantSimulation.speciesById.get(plant.speciesId);
   const density = species?.density ?? 300;
-  return computePlantVolume(plant) * density;
+  if (!volumetricEngine) {
+    return computePlantVolume(plant) * density;
+  }
+
+  const height = Math.max(0, plant?.currentHeight ?? 0);
+  if (height <= 0) {
+    return 0;
+  }
+
+  const baseRadius = Math.max(0.01, plant?.currentRadius ?? 0.1);
+  const topRadius = Math.max(0.01, plant?.tipRadius ?? baseRadius * 0.6);
+  const position = plant.position || [0, 0, 0];
+  const baseY = Number.isFinite(position[1])
+    ? position[1]
+    : sampleTerrainHeight(position[0] ?? 0, position[2] ?? 0);
+  const center = [
+    Number.isFinite(position[0]) ? position[0] : 0,
+    (Number.isFinite(baseY) ? baseY : 0) + height / 2,
+    Number.isFinite(position[2]) ? position[2] : 0,
+  ];
+  const result = volumetricEngine.computeMass({
+    shape: 'truncated-cone',
+    center,
+    dimensions: {
+      height,
+      bottomRadius: baseRadius,
+      topRadius,
+      baseY: Number.isFinite(baseY) ? baseY : center[1] - height / 2,
+    },
+    materialId: species?.volumetricMaterialId ?? 'plant-generic',
+    density,
+    metadata: {
+      type: 'planta',
+      id: plant.id,
+      speciesId: species?.id,
+      category: 'plant',
+      clipBelowTerrain: true,
+    },
+    expectedRange: {
+      min: 0,
+      max: Math.max(0.5, height * baseRadius * baseRadius * density * 2.2),
+    },
+  });
+
+  if (result.flagged) {
+    reportVolumetricAnomaly(result.flagged, {
+      type: 'Planta',
+      id: plant.id,
+      name: species?.name,
+    });
+  }
+
+  return Math.max(0, result.mass ?? 0);
 }
 
 function regeneratePlants(seedString, heightfield, maskfield) {
@@ -5450,9 +5569,45 @@ function regenerateRocks(seedString, heightfield, maskfield) {
     const embedFactor = randomInRange(random, -0.25, 0.12);
     const position = [x, groundHeight + scale[1] * embedFactor, z];
 
-    const volume = Math.max(0, ((4 / 3) * Math.PI * scale[0] * scale[1] * scale[2]) || 0);
+    const fallbackVolume = Math.max(0, ((4 / 3) * Math.PI * scale[0] * scale[1] * scale[2]) || 0);
     const density = randomInRange(random, 2200, 2800);
-    const totalMass = Math.max(0, volume * density);
+    const rockId = `rock-${generatedRocks.length + 1}`;
+    let massResult;
+    if (volumetricEngine) {
+      massResult = volumetricEngine.computeMass({
+        shape: 'ellipsoid',
+        center: position,
+        dimensions: { radii: scale },
+        materialId: 'rock-generic',
+        density,
+        metadata: {
+          type: 'roca',
+          id: rockId,
+          category: 'rock',
+        },
+        expectedRange: {
+          min: 2,
+          max: Math.max(800, fallbackVolume * density * 1.2),
+        },
+      });
+      if (massResult.flagged) {
+        reportVolumetricAnomaly(massResult.flagged, {
+          type: 'Roca',
+          id: rockId,
+          name: type.name,
+        });
+      }
+    } else {
+      massResult = {
+        volume: fallbackVolume,
+        rawVolume: fallbackVolume,
+        density,
+        mass: Math.max(0, fallbackVolume * density),
+        clippedRatio: 1,
+      };
+    }
+    const totalMass = Math.max(0, massResult.mass ?? 0);
+    const volume = Math.max(0, massResult.volume ?? fallbackVolume);
     const composition = createRockComposition(random, totalMass);
     const tintedColor = tintRockBaseColor(baseTone, composition);
 
@@ -5467,7 +5622,7 @@ function regenerateRocks(seedString, heightfield, maskfield) {
       : type.name ?? 'Roca';
 
     generatedRocks.push({
-      id: `rock-${generatedRocks.length + 1}`,
+      id: rockId,
       typeName: typeLabel,
       position,
       rotation,
@@ -5476,11 +5631,16 @@ function regenerateRocks(seedString, heightfield, maskfield) {
       matrixMass: composition.matrixMass,
       compositionEntries: composition.entries,
       formationSimulationTime: simulationTime,
-      density,
+      density: massResult.density ?? density,
       volume,
       boundingRadius,
       sulfurPercent: composition.sulfurPercent,
       phosphorusPercent: composition.phosphorusPercent,
+      massDiagnostics: {
+        clippedRatio: massResult.clippedRatio ?? 1,
+        gridFootprint: massResult.gridFootprint ?? null,
+        flaggedReason: massResult.flagged?.reason ?? null,
+      },
     });
 
     vertices.push(...rockVertices);
@@ -5510,6 +5670,16 @@ function regenerateTerrain(seedString) {
   baseplateVertexCount = vertexData.length / floatsPerVertex;
   terrainHeightField = heightfield;
   terrainMaskField = maskfield;
+  if (volumetricEngine) {
+    volumetricEngine.updateTerrainContext({
+      baseplateSize,
+      minY: Math.max(0, minHeight),
+      maxY: Math.min(maxTerrainHeight, maxHeight),
+      heightField: heightfield,
+      waterLevel: waterSurfaceLevel,
+    });
+    terrainInfo.massDiagnostics = volumetricEngine.metrics;
+  }
   updateGridBuffers(heightfield);
   rebuildWaterSurface(heightfield);
   refreshSelectionAfterTerrain();
@@ -6736,6 +6906,52 @@ function updateDebugConsole(deltaTime) {
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
+
+  if (terrainInfo.massDiagnostics) {
+    const diagnostics = terrainInfo.massDiagnostics;
+    const flaggedCount = Array.isArray(diagnostics.flaggedEntities)
+      ? diagnostics.flaggedEntities.length
+      : 0;
+    const lastError = diagnostics.lastError?.message ?? 'ninguno';
+    const computations = Number.isFinite(diagnostics.computations)
+      ? Math.max(0, diagnostics.computations)
+      : 0;
+    const clipped = Number.isFinite(diagnostics.clippedComputations)
+      ? Math.max(0, diagnostics.clippedComputations)
+      : 0;
+    const terrainSamples = Number.isFinite(diagnostics.terrainSamples)
+      ? Math.max(0, diagnostics.terrainSamples)
+      : 0;
+    info.push(
+      `Masa diag: cálculos=${computations} recortes=${clipped} alertas=${flaggedCount} muestreos=${terrainSamples} error=${lastError}`,
+    );
+    const reasonEntries = Object.entries(diagnostics.reasonCounts ?? {}).filter(
+      ([, count]) => Number.isFinite(count) && count > 0,
+    );
+    if (reasonEntries.length > 0) {
+      const summary = reasonEntries
+        .map(([reason, count]) => `${reason}=${Math.round(count)}`)
+        .join(' ');
+      info.push(`Masa diag alertas: ${summary}`);
+    }
+    const lastSpec = diagnostics.lastSpecSummary;
+    if (lastSpec) {
+      const lastMass = Number.isFinite(lastSpec.mass) ? lastSpec.mass.toFixed(2) : 'n/d';
+      const lastVolume = Number.isFinite(lastSpec.volume) ? lastSpec.volume.toFixed(3) : 'n/d';
+      const clippedPercent = Number.isFinite(lastSpec.clippedRatio)
+        ? Math.round(lastSpec.clippedRatio * 100)
+        : null;
+      const clipText = clippedPercent !== null ? `${clippedPercent}%` : 'n/d';
+      info.push(
+        `Masa diag última: forma=${lastSpec.shape ?? 'n/d'} material=${
+          lastSpec.materialId ?? 'n/d'
+        } masa=${lastMass}kg volumen=${lastVolume}m³ recorte=${clipText}`,
+      );
+      if (lastSpec.issue) {
+        info.push(`Masa diag última alerta: ${lastSpec.issue}`);
+      }
+    }
+  }
 
   const audioDiagnostics = ambientAudioState?.diagnostics;
   if (audioDiagnostics) {
