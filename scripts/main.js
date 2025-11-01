@@ -8110,6 +8110,14 @@ const simulationInfo = {
     position: [cameraPosition[0], cameraPosition[1], cameraPosition[2]],
     yaw,
     pitch,
+    near: CAMERA_NEAR_PLANE,
+    far: CAMERA_BASE_FAR_PLANE,
+    starMargin: CAMERA_STAR_MARGIN,
+    starFarthest: 0,
+    starShortfall: 0,
+    adjustments: 0,
+    marginEstimate: cameraDiagnostics.metrics?.marginEstimate ?? CAMERA_STAR_MARGIN,
+    failedDiagnostics: cameraDiagnostics.metrics?.failedUpdates ?? 0,
     clip: snapshotCameraClipDiagnostics(),
     clipFlags: {
       overrideActive: Boolean(cameraDiagnostics.flags?.overrideActive),
@@ -8118,6 +8126,10 @@ const simulationInfo = {
     clipOverrides: {
       count: Math.max(0, cameraDiagnostics.overrides ?? 0),
       lastTimestamp: cameraDiagnostics.lastOverrideTimestamp ?? null,
+    },
+    flags: {
+      frustumClipping: Boolean(cameraDiagnostics.flags?.frustumClipping),
+      baseFrustumExceeded: Boolean(cameraDiagnostics.flags?.baseFrustumExceeded),
     },
   },
   dayNight: dayNightCycleState,
@@ -8212,19 +8224,6 @@ const simulationInfo = {
     startupNormalizedTime: lightingDiagnostics.startupNormalizedTime,
     startupLightColor: lightingDiagnostics.startupLightColor.slice(),
     startupSunAltitude: lightingDiagnostics.startupSunAltitude,
-  },
-  camera: {
-    position: initialCameraPosition.slice(),
-    near: CAMERA_NEAR_PLANE,
-    far: CAMERA_BASE_FAR_PLANE,
-    starMargin: CAMERA_STAR_MARGIN,
-    starFarthest: 0,
-    starShortfall: 0,
-    adjustments: 0,
-    flags: {
-      frustumClipping: false,
-      baseFrustumExceeded: false,
-    },
   },
 };
 
