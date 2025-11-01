@@ -3058,12 +3058,57 @@ function updateWaterSwells(deltaTime) {
   flags.buffersDirty = false;
 }
 
-function getTimestamp() {
-  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-    return performance.now();
+const runtimeTimingDiagnostics =
+  runtimeState && typeof runtimeState === 'object'
+    ? (runtimeState.timingDiagnostics =
+        runtimeState.timingDiagnostics && typeof runtimeState.timingDiagnostics === 'object'
+          ? runtimeState.timingDiagnostics
+          : {
+              getTimestampCalls: 0,
+              lastTimestampMs: null,
+              flags: {},
+            })
+    : { getTimestampCalls: 0, lastTimestampMs: null, flags: {} };
+
+const getTimestamp = (() => {
+  const timingFlags =
+    runtimeTimingDiagnostics && typeof runtimeTimingDiagnostics.flags === 'object'
+      ? runtimeTimingDiagnostics.flags
+      : (runtimeTimingDiagnostics.flags = {});
+
+  if (typeof runtimeTimingDiagnostics.getTimestamp === 'function') {
+    timingFlags.reusedImplementation = true;
+    timingFlags.reusedAt = Date.now();
+    if (!timingFlags.reuseReported && typeof recordRuntimeIssue === 'function') {
+      recordRuntimeIssue(
+        'info',
+        'runtime-timing',
+        'getTimestamp reutilizado tras una recarga del script; se conservan las métricas previas.',
+      );
+      timingFlags.reuseReported = true;
+    }
+    return runtimeTimingDiagnostics.getTimestamp;
   }
-  return Date.now();
-}
+
+  const baseImplementation =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? () => performance.now()
+      : () => Date.now();
+
+  const instrumentedImplementation = () => {
+    const value = baseImplementation();
+    runtimeTimingDiagnostics.getTimestampCalls =
+      (runtimeTimingDiagnostics.getTimestampCalls ?? 0) + 1;
+    runtimeTimingDiagnostics.lastTimestampMs = value;
+    return value;
+  };
+
+  runtimeTimingDiagnostics.getTimestamp = instrumentedImplementation;
+  timingFlags.reusedImplementation = false;
+  timingFlags.reusedAt = null;
+
+  return instrumentedImplementation;
+})();
 
 function ensureCelestialMeshTemplate() {
   if (celestialGeometryState.template) {
@@ -3458,130 +3503,6 @@ function composeWindStreakGeometry(effect, now) {
   offset = pushVertex(vertices, offset, tail[0] + lateral[0], tail[1], tail[2] + lateral[2], tailColor);
 
   return { vertices, alpha: clamp01(alpha * 0.65 + 0.2), progress: clamp01(progress) };
-}
-
-function getTimestamp() {
-  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-    return performance.now();
-  }
-  return Date.now();
-}
-
-function updateCelestialGeometry() {
-  if (!celestialGeometryState.template || !celestialGeometryState.flags.templateValid) {
-    try {
-      let topology = createBaseIcosahedron();
-      for (let i = 0; i < CELESTIAL_SUBDIVISIONS; i++) {
-        topology = subdivideTopology(topology);
-      }
-      const triangles = [];
-      for (const face of topology.faces) {
-        triangles.push(topology.vertices[face[0]]);
-        triangles.push(topology.vertices[face[1]]);
-        triangles.push(topology.vertices[face[2]]);
-      }
-      celestialGeometryState.template = { triangles };
-      celestialGeometryState.metrics.templateBuilds += 1;
-      celestialGeometryState.metrics.lastTemplateBuildTime = getTimestamp();
-      celestialGeometryState.flags.templateValid = true;
-    } catch (error) {
-      celestialGeometryState.metrics.templateBuildErrors += 1;
-      celestialGeometryState.metrics.lastTemplateErrorTime = getTimestamp();
-      celestialGeometryState.flags.templateValid = false;
-      recordRuntimeIssue('error', 'celestial-template', error);
-      celestialGeometryState.template = null;
-    }
-  }
-
-  const template = celestialGeometryState.template;
-  if (!template) {
-    celestialGeometryState.flags.sunGeometryValid = false;
-    celestialGeometryState.flags.moonGeometryValid = false;
-    return;
-  }
-
-  const populateCelestialVertexBuffer = (target, radius, position, color) => {
-    if (!template.triangles || template.triangles.length === 0) {
-      return new Float32Array(0);
-    }
-    const requiredLength = template.triangles.length * floatsPerVertex;
-    let data = target;
-    if (!data || data.length !== requiredLength) {
-      data = new Float32Array(requiredLength);
-    }
-    let offset = 0;
-    for (const vertex of template.triangles) {
-      offset = pushVertex(
-        data,
-        offset,
-        position[0] + vertex[0] * radius,
-        position[1] + vertex[1] * radius,
-        position[2] + vertex[2] * radius,
-        color,
-      );
-    }
-    return data;
-  };
-
-  try {
-    const sunColor = [
-      clamp01(dayNightCycleState.sunLightColor[0] + 0.25),
-      clamp01(dayNightCycleState.sunLightColor[1] + 0.18),
-      clamp01(dayNightCycleState.sunLightColor[2] + 0.12),
-    ];
-    sunVertexData = populateCelestialVertexBuffer(
-      sunVertexData,
-      CELESTIAL_SUN_RADIUS,
-      dayNightCycleState.sunPosition,
-      sunColor,
-    );
-    sunVertexCount = sunVertexData.length / floatsPerVertex;
-    if (sunVertexCount > 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, sunBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, sunVertexData, gl.DYNAMIC_DRAW);
-      celestialGeometryState.metrics.sunUploads += 1;
-      celestialGeometryState.metrics.lastSunUploadTime = getTimestamp();
-      celestialGeometryState.flags.sunGeometryValid = true;
-    } else {
-      celestialGeometryState.flags.sunGeometryValid = false;
-    }
-  } catch (error) {
-    recordRuntimeIssue('warning', 'sun-geometry', error);
-    sunVertexCount = 0;
-    celestialGeometryState.metrics.uploadErrors += 1;
-    celestialGeometryState.metrics.lastUploadErrorTime = getTimestamp();
-    celestialGeometryState.flags.sunGeometryValid = false;
-  }
-
-  try {
-    const moonColor = [
-      clamp01(dayNightCycleState.moonLightColor[0] + 0.08),
-      clamp01(dayNightCycleState.moonLightColor[1] + 0.1),
-      clamp01(dayNightCycleState.moonLightColor[2] + 0.12),
-    ];
-    moonVertexData = populateCelestialVertexBuffer(
-      moonVertexData,
-      CELESTIAL_MOON_RADIUS,
-      dayNightCycleState.moonPosition,
-      moonColor,
-    );
-    moonVertexCount = moonVertexData.length / floatsPerVertex;
-    if (moonVertexCount > 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, moonBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, moonVertexData, gl.DYNAMIC_DRAW);
-      celestialGeometryState.metrics.moonUploads += 1;
-      celestialGeometryState.metrics.lastMoonUploadTime = getTimestamp();
-      celestialGeometryState.flags.moonGeometryValid = true;
-    } else {
-      celestialGeometryState.flags.moonGeometryValid = false;
-    }
-  } catch (error) {
-    recordRuntimeIssue('warning', 'moon-geometry', error);
-    moonVertexCount = 0;
-    celestialGeometryState.metrics.uploadErrors += 1;
-    celestialGeometryState.metrics.lastUploadErrorTime = getTimestamp();
-    celestialGeometryState.flags.moonGeometryValid = false;
-  }
 }
 
 function hashCoords(x, z, seed) {
