@@ -2511,11 +2511,34 @@ const CLOUD_PUFF_SUBDIVISIONS = 1;
 const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
-const STAR_COUNT = 180;
-const STAR_FIELD_RADIUS = 900;
-const STAR_MIN_SIZE = 3.2;
-const STAR_MAX_SIZE = 7.6;
-const STAR_BRIGHT_THRESHOLD = 0.74;
+const STAR_COUNT = 360;
+const STAR_FIELD_RADIUS = 940;
+const STAR_MIN_SIZE = 2.6;
+const STAR_MAX_SIZE = 5.8;
+const STAR_BRIGHT_THRESHOLD = 0.72;
+const STAR_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+const CAMERA_NEAR_PLANE = 0.1;
+const CAMERA_BASE_FAR_PLANE = 500;
+const CAMERA_STAR_MARGIN = 220;
+
+const cameraDiagnostics = {
+  near: CAMERA_NEAR_PLANE,
+  far: CAMERA_BASE_FAR_PLANE,
+  baseFar: CAMERA_BASE_FAR_PLANE,
+  starMargin: CAMERA_STAR_MARGIN,
+  adjustments: 0,
+  lastUpdateTime: 0,
+  metrics: {
+    starFarthest: 0,
+    starShortfall: 0,
+  },
+  flags: {
+    frustumClipping: false,
+    baseFrustumExceeded: false,
+  },
+  warnedFrustum: false,
+};
 
 const weatherState = {
   wind: {
@@ -2561,9 +2584,18 @@ const starFieldState = {
     lastDrawTime: 0,
     rebuilds: 0,
     lastError: null,
+    coverageScore: 0,
+    verticalSkew: 0,
+    invalidStars: 0,
+    distributionIssue: null,
+    farthestDistance: 0,
+    frustumMargin: 0,
+    baseFarShortfall: 0,
   },
   flags: {
     geometryValid: false,
+    distributionValid: true,
+    frustumSafe: true,
   },
   needsUpload: true,
 };
@@ -3486,39 +3518,70 @@ function initializeStarField(seedString) {
   const baseSeed = stringToSeed(`${seedString ?? currentSeed}-stars`);
   const random = createRandomGenerator(baseSeed);
   const stars = [];
+  const count = Math.max(0, Math.floor(STAR_COUNT));
   let bright = 0;
   let dim = 0;
+  let coverageAccumulator = 0;
+  let verticalBalance = 0;
+  let invalidStars = 0;
+  let farthestDistance = 0;
 
-  for (let i = 0; i < STAR_COUNT; i++) {
-    const polar = randomInRange(random, 0.05, Math.PI * 0.48);
-    const azimuth = randomInRange(random, 0, Math.PI * 2);
-    const sinPolar = Math.sin(polar);
-    const direction = [
-      sinPolar * Math.cos(azimuth),
-      Math.cos(polar),
-      sinPolar * Math.sin(azimuth),
-    ];
-    const radius = STAR_FIELD_RADIUS + randomInRange(random, -120, 120);
+  for (let i = 0; i < count; i++) {
+    const jitter = randomInRange(random, -0.35, 0.35);
+    const normalizedIndex = (i + 0.5 + jitter) / count;
+    const clampedIndex = clamp(normalizedIndex, 0.001, 0.999);
+    const y = 1 - clampedIndex * 2;
+    const azimuth = (i + randomInRange(random, 0, 1)) * STAR_GOLDEN_ANGLE;
+    const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
+    let direction = normalize([
+      Math.cos(azimuth) * ringRadius,
+      y,
+      Math.sin(azimuth) * ringRadius,
+    ]);
+
+    if (
+      !Number.isFinite(direction[0]) ||
+      !Number.isFinite(direction[1]) ||
+      !Number.isFinite(direction[2])
+    ) {
+      invalidStars += 1;
+      direction = [0, 1, 0];
+    }
+
+    const radius = STAR_FIELD_RADIUS + randomInRange(random, -140, 140);
     const position = [
       direction[0] * radius,
       direction[1] * radius,
       direction[2] * radius,
     ];
     const size = randomInRange(random, STAR_MIN_SIZE, STAR_MAX_SIZE);
-    const brightness = clamp(randomInRange(random, 0.55, 1.12), 0.4, 1.25);
+    const brightness = clamp(randomInRange(random, 0.58, 1.18), 0.4, 1.3);
     if (brightness >= STAR_BRIGHT_THRESHOLD) {
       bright += 1;
     } else {
       dim += 1;
+    }
+    coverageAccumulator += 1 - Math.abs(direction[1]);
+    verticalBalance += direction[1];
+    const distance = Math.hypot(position[0], position[1], position[2]);
+    if (Number.isFinite(distance)) {
+      farthestDistance = Math.max(farthestDistance, distance);
     }
     stars.push({
       position,
       direction,
       size,
       brightness,
+      colorShift: randomInRange(random, -0.12, 0.18),
       twinklePhase: randomInRange(random, 0, Math.PI * 2),
     });
   }
+
+  const coverageScore = stars.length ? coverageAccumulator / stars.length : 0;
+  const verticalSkew = stars.length ? verticalBalance / stars.length : 0;
+  const distributionValid = invalidStars === 0 && coverageScore >= 0.35;
+  const baseFarShortfall = Math.max(0, farthestDistance - CAMERA_BASE_FAR_PLANE);
+  const estimatedMargin = CAMERA_BASE_FAR_PLANE - farthestDistance;
 
   starFieldState.random = random;
   starFieldState.stars = stars;
@@ -3534,9 +3597,33 @@ function initializeStarField(seedString) {
   starFieldState.metrics.lastVisibility = 0;
   starFieldState.metrics.lastDrawTime = 0;
   starFieldState.metrics.rebuilds = 0;
+  starFieldState.metrics.coverageScore = coverageScore;
+  starFieldState.metrics.verticalSkew = verticalSkew;
+  starFieldState.metrics.invalidStars = invalidStars;
+  starFieldState.metrics.distributionIssue = distributionValid
+    ? null
+    : `Distribución irregular: cobertura=${coverageScore.toFixed(2)} estrellas inválidas=${invalidStars}`;
+  starFieldState.metrics.farthestDistance = farthestDistance;
+  starFieldState.metrics.baseFarShortfall = baseFarShortfall;
+  starFieldState.metrics.frustumMargin = estimatedMargin;
   starFieldState.flags.geometryValid = false;
+  starFieldState.flags.distributionValid = distributionValid;
+  starFieldState.flags.frustumSafe = baseFarShortfall <= 0;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
+
+  cameraDiagnostics.metrics.starFarthest = farthestDistance;
+  cameraDiagnostics.metrics.starShortfall = baseFarShortfall;
+  cameraDiagnostics.flags.baseFrustumExceeded = baseFarShortfall > 0;
+  cameraDiagnostics.warnedFrustum = false;
+
+  if (!distributionValid) {
+    recordRuntimeIssue(
+      'warning',
+      'star-distribution',
+      new Error(starFieldState.metrics.distributionIssue || 'Distribución de estrellas inválida'),
+    );
+  }
 }
 
 function updateCloudField(deltaTime) {
@@ -3832,10 +3919,11 @@ function rebuildStarFieldGeometry() {
       dim += 1;
     }
     const shimmer = Math.sin(star?.twinklePhase ?? 0) * 0.05;
+    const colorShift = clamp(star?.colorShift ?? 0, -0.2, 0.25);
     const baseColor = [
-      clamp01(0.78 + brightness * 0.22 + shimmer * 0.3),
-      clamp01(0.78 + brightness * 0.18 + shimmer * 0.2),
-      clamp01(0.82 + brightness * 0.28 + shimmer * 0.4),
+      clamp01(0.76 + brightness * 0.26 + shimmer * 0.28 + colorShift * 0.18),
+      clamp01(0.78 + brightness * 0.2 + shimmer * 0.22 + colorShift * -0.12),
+      clamp01(0.86 + brightness * 0.3 + shimmer * 0.34 + colorShift * -0.18),
     ];
 
     const topRight = add(add(position, rightVec), upVec);
@@ -7134,9 +7222,11 @@ const movementState = {
   down: false,
 };
 
+const initialCameraPosition = [0, 5, 20];
+
 let yaw = 0; // Comienza mirando hacia -Z
 let pitch = -0.35; // Inclina ligeramente la cámara hacia abajo para mostrar la baseplate inicial
-const cameraPosition = [0, 5, 20];
+const cameraPosition = initialCameraPosition.slice();
 
 const pointerSensitivity = 0.002;
 
@@ -7826,7 +7916,9 @@ const simulationInfo = {
     geometryMetrics: celestialGeometryState.metrics,
     stars: starFieldState.metrics.count,
     starMetrics: starFieldState.metrics,
-    starsHealthy: starFieldState.flags.geometryValid,
+    starsHealthy:
+      starFieldState.flags.geometryValid && starFieldState.flags.distributionValid !== false,
+    starDistributionHealthy: starFieldState.flags.distributionValid !== false,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -7836,6 +7928,19 @@ const simulationInfo = {
     startupNormalizedTime: lightingDiagnostics.startupNormalizedTime,
     startupLightColor: lightingDiagnostics.startupLightColor.slice(),
     startupSunAltitude: lightingDiagnostics.startupSunAltitude,
+  },
+  camera: {
+    position: initialCameraPosition.slice(),
+    near: CAMERA_NEAR_PLANE,
+    far: CAMERA_BASE_FAR_PLANE,
+    starMargin: CAMERA_STAR_MARGIN,
+    starFarthest: 0,
+    starShortfall: 0,
+    adjustments: 0,
+    flags: {
+      frustumClipping: false,
+      baseFrustumExceeded: false,
+    },
   },
 };
 
@@ -7949,7 +8054,51 @@ function tickSimulation(deltaTime) {
   tickPlants(deltaTime);
 }
 
+function computeCameraFrustum() {
+  const farthestStar = Math.max(0, starFieldState.metrics?.farthestDistance ?? STAR_FIELD_RADIUS);
+  const desiredFar = Math.max(CAMERA_BASE_FAR_PLANE, farthestStar + CAMERA_STAR_MARGIN);
+  const near = CAMERA_NEAR_PLANE;
+  const previousFar = cameraDiagnostics.far;
+
+  cameraDiagnostics.near = near;
+  cameraDiagnostics.metrics.starFarthest = farthestStar;
+  cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - CAMERA_BASE_FAR_PLANE);
+  cameraDiagnostics.starMargin = desiredFar - farthestStar;
+  cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
+  cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
+
+  if (Math.abs(desiredFar - previousFar) > 0.5) {
+    cameraDiagnostics.adjustments += 1;
+  }
+
+  cameraDiagnostics.far = desiredFar;
+  cameraDiagnostics.lastUpdateTime = getTimestamp();
+
+  starFieldState.metrics.frustumMargin = cameraDiagnostics.starMargin;
+  starFieldState.metrics.baseFarShortfall = cameraDiagnostics.metrics.starShortfall;
+  starFieldState.metrics.farthestDistance = farthestStar;
+  starFieldState.flags.frustumSafe = !cameraDiagnostics.flags.frustumClipping;
+
+  if (cameraDiagnostics.flags.baseFrustumExceeded && !cameraDiagnostics.warnedFrustum) {
+    recordRuntimeIssue(
+      'warning',
+      'camera-frustum',
+      new Error(
+        `Plano lejano base insuficiente para estrellas (déficit ${cameraDiagnostics.metrics.starShortfall.toFixed(
+          1,
+        )} m); se amplió automáticamente a ${desiredFar.toFixed(1)} m.`,
+      ),
+    );
+    cameraDiagnostics.warnedFrustum = true;
+  } else if (!cameraDiagnostics.flags.baseFrustumExceeded) {
+    cameraDiagnostics.warnedFrustum = false;
+  }
+
+  return { near, far: desiredFar };
+}
+
 function update(deltaTime) {
+  const frustum = computeCameraFrustum();
   const forwardDirection = [
     Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),
@@ -7997,7 +8146,7 @@ function update(deltaTime) {
   updateAmbientAudioMix(isUnderwater);
 
   const target = add(cameraPosition, forwardDirection);
-  const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, 0.1, 500);
+  const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, frustum.near, frustum.far);
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
   const viewProjection = multiplyMatrices(projection, view);
   inverseViewProjectionMatrix = invertMatrix(viewProjection);
@@ -8650,10 +8799,42 @@ function updateDebugConsole(deltaTime) {
     ? `${cloudMetrics.lastBuildMs.toFixed(2)}ms`
     : '---';
   const starMetrics = starFieldState.metrics ?? {};
-  const starStatus = starFieldState.flags?.geometryValid ? 'OK' : 'ERROR';
+  const geometryHealthy = starFieldState.flags?.geometryValid !== false;
+  const distributionHealthy = starFieldState.flags?.distributionValid !== false;
+  const starStatus = geometryHealthy
+    ? distributionHealthy
+      ? 'OK'
+      : 'WARN'
+    : 'ERROR';
   const starVisibility = Number.isFinite(starMetrics.lastVisibility)
     ? starMetrics.lastVisibility.toFixed(2)
     : '0.00';
+  const starCoverage = Number.isFinite(starMetrics.coverageScore)
+    ? starMetrics.coverageScore.toFixed(2)
+    : '0.00';
+  const starSkew = Number.isFinite(starMetrics.verticalSkew)
+    ? starMetrics.verticalSkew.toFixed(2)
+    : '0.00';
+  const starInvalid = Math.max(0, starMetrics.invalidStars ?? 0);
+  const starRange = Number.isFinite(starMetrics.farthestDistance)
+    ? starMetrics.farthestDistance.toFixed(1)
+    : '0.0';
+  const starMargin = Number.isFinite(starMetrics.frustumMargin)
+    ? starMetrics.frustumMargin.toFixed(1)
+    : '0.0';
+  const starShortfall = Number.isFinite(starMetrics.baseFarShortfall)
+    ? starMetrics.baseFarShortfall.toFixed(1)
+    : '0.0';
+  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'WARN' : 'OK';
+  const cameraFarDisplay = Number.isFinite(cameraDiagnostics.far)
+    ? cameraDiagnostics.far.toFixed(1)
+    : '---';
+  const cameraMarginDisplay = Number.isFinite(cameraDiagnostics.starMargin)
+    ? cameraDiagnostics.starMargin.toFixed(1)
+    : '---';
+  const cameraShortfallDisplay = Number.isFinite(cameraDiagnostics.metrics.starShortfall)
+    ? cameraDiagnostics.metrics.starShortfall.toFixed(1)
+    : '0.0';
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -8669,6 +8850,7 @@ function updateDebugConsole(deltaTime) {
     `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
+    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
     `Luz global: rgb=${lightingDiagnostics.latestLightColor
       .map((value) => value.toFixed(2))
       .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
@@ -8697,7 +8879,7 @@ function updateDebugConsole(deltaTime) {
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} cobertura=${starCoverage} balance=${starSkew} rango=${starRange} margen=${starMargin} déficit_base=${starShortfall} defectuosas=${starInvalid} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -8777,8 +8959,16 @@ function updateDebugConsole(deltaTime) {
   if (cloudMetrics.lastError) {
     info.push(`Nubes error: ${cloudMetrics.lastError}`);
   }
+  if (starMetrics.distributionIssue) {
+    info.push(`Estrellas alerta: ${starMetrics.distributionIssue}`);
+  }
   if (starMetrics.lastError) {
     info.push(`Estrellas error: ${starMetrics.lastError}`);
+  }
+  if (cameraDiagnostics.flags.baseFrustumExceeded) {
+    info.push(
+      `Cámara alerta: plano base corto por ${cameraShortfallDisplay}m (margen actual ${cameraMarginDisplay}m)`,
+    );
   }
 
   if (pointerLockErrors > 0) {
@@ -8944,6 +9134,24 @@ function loop(currentTime) {
     simulationInfo.lighting.startupNormalizedTime = lightingDiagnostics.startupNormalizedTime;
     simulationInfo.lighting.startupLightColor = lightingDiagnostics.startupLightColor.slice();
     simulationInfo.lighting.startupSunAltitude = lightingDiagnostics.startupSunAltitude;
+
+    if (simulationInfo.camera) {
+      const cameraInfo = simulationInfo.camera;
+      cameraInfo.position[0] = cameraPosition[0];
+      cameraInfo.position[1] = cameraPosition[1];
+      cameraInfo.position[2] = cameraPosition[2];
+      cameraInfo.near = cameraDiagnostics.near;
+      cameraInfo.far = cameraDiagnostics.far;
+      cameraInfo.starMargin = cameraDiagnostics.starMargin;
+      cameraInfo.starFarthest = cameraDiagnostics.metrics.starFarthest;
+      cameraInfo.starShortfall = cameraDiagnostics.metrics.starShortfall;
+      cameraInfo.adjustments = cameraDiagnostics.adjustments;
+      if (!cameraInfo.flags || typeof cameraInfo.flags !== 'object') {
+        cameraInfo.flags = {};
+      }
+      cameraInfo.flags.frustumClipping = cameraDiagnostics.flags.frustumClipping;
+      cameraInfo.flags.baseFrustumExceeded = cameraDiagnostics.flags.baseFrustumExceeded;
+    }
 
     update(deltaTime);
     render();
