@@ -1940,6 +1940,8 @@ const fragmentSource = `
   uniform float specularPower;
   uniform float surfaceSpecularStrength;
   uniform float emissiveStrength;
+  uniform int terrainFlatShading;
+  uniform vec3 terrainFlatLightColor;
 
   const int RENDER_MODE_TERRAIN = 0;
   const int RENDER_MODE_WATER = 1;
@@ -1991,6 +1993,12 @@ const fragmentSource = `
     if (renderMode == RENDER_MODE_CELESTIAL) {
       vec3 emissive = clamp(baseColor * (1.0 + emissiveStrength), 0.0, 1.5);
       gl_FragColor = vec4(emissive, terrainAlpha);
+      return;
+    }
+
+    if (renderMode == RENDER_MODE_TERRAIN && terrainFlatShading > 0) {
+      vec3 litTerrain = clamp(baseColor * terrainFlatLightColor, 0.0, 1.0);
+      gl_FragColor = vec4(litTerrain, terrainAlpha);
       return;
     }
 
@@ -2121,6 +2129,8 @@ const moonSpecularStrengthUniform = gl.getUniformLocation(program, 'moonSpecular
 const specularPowerUniform = gl.getUniformLocation(program, 'specularPower');
 const surfaceSpecularStrengthUniform = gl.getUniformLocation(program, 'surfaceSpecularStrength');
 const emissiveStrengthUniform = gl.getUniformLocation(program, 'emissiveStrength');
+const terrainFlatShadingUniform = gl.getUniformLocation(program, 'terrainFlatShading');
+const terrainFlatLightColorUniform = gl.getUniformLocation(program, 'terrainFlatLightColor');
 const uniformLocations = {
   renderMode: gl.getUniformLocation(program, 'renderMode'),
 };
@@ -2435,6 +2445,12 @@ if (specularPowerUniform && typeof gl.uniform1f === 'function') {
 if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
   gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
 }
+if (terrainFlatShadingUniform && typeof gl.uniform1i === 'function') {
+  gl.uniform1i(terrainFlatShadingUniform, 0);
+}
+if (terrainFlatLightColorUniform && typeof gl.uniform3f === 'function') {
+  gl.uniform3f(terrainFlatLightColorUniform, 1, 1, 1);
+}
 if (sunSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
   gl.uniform1f(sunSpecularStrengthUniform, 0.8);
 }
@@ -2511,34 +2527,11 @@ const CLOUD_PUFF_SUBDIVISIONS = 1;
 const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
-const STAR_COUNT = 360;
-const STAR_FIELD_RADIUS = 940;
-const STAR_MIN_SIZE = 2.6;
-const STAR_MAX_SIZE = 5.8;
-const STAR_BRIGHT_THRESHOLD = 0.72;
-const STAR_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-
-const CAMERA_NEAR_PLANE = 0.1;
-const CAMERA_BASE_FAR_PLANE = 500;
-const CAMERA_STAR_MARGIN = 220;
-
-const cameraDiagnostics = {
-  near: CAMERA_NEAR_PLANE,
-  far: CAMERA_BASE_FAR_PLANE,
-  baseFar: CAMERA_BASE_FAR_PLANE,
-  starMargin: CAMERA_STAR_MARGIN,
-  adjustments: 0,
-  lastUpdateTime: 0,
-  metrics: {
-    starFarthest: 0,
-    starShortfall: 0,
-  },
-  flags: {
-    frustumClipping: false,
-    baseFrustumExceeded: false,
-  },
-  warnedFrustum: false,
-};
+const STAR_COUNT = 180;
+const STAR_FIELD_RADIUS = 900;
+const STAR_MIN_SIZE = 3.2;
+const STAR_MAX_SIZE = 7.6;
+const STAR_BRIGHT_THRESHOLD = 0.74;
 
 const weatherState = {
   wind: {
@@ -2584,18 +2577,9 @@ const starFieldState = {
     lastDrawTime: 0,
     rebuilds: 0,
     lastError: null,
-    coverageScore: 0,
-    verticalSkew: 0,
-    invalidStars: 0,
-    distributionIssue: null,
-    farthestDistance: 0,
-    frustumMargin: 0,
-    baseFarShortfall: 0,
   },
   flags: {
     geometryValid: false,
-    distributionValid: true,
-    frustumSafe: true,
   },
   needsUpload: true,
 };
@@ -2627,9 +2611,16 @@ const terrainInfo = {
   surfaceStyle: 'arena clásica',
   colorVariance: 0,
   flags: {
-    flatColor: false,
-    textured: true,
+    flatColor: true,
+    textured: false,
     lowSpecular: true,
+    flatLighting: true,
+  },
+  flatLighting: {
+    color: [1, 1, 1],
+    luma: 1,
+    daylight: 0,
+    moonlight: 0,
   },
 };
 if (volumetricEngine) {
@@ -3518,70 +3509,39 @@ function initializeStarField(seedString) {
   const baseSeed = stringToSeed(`${seedString ?? currentSeed}-stars`);
   const random = createRandomGenerator(baseSeed);
   const stars = [];
-  const count = Math.max(0, Math.floor(STAR_COUNT));
   let bright = 0;
   let dim = 0;
-  let coverageAccumulator = 0;
-  let verticalBalance = 0;
-  let invalidStars = 0;
-  let farthestDistance = 0;
 
-  for (let i = 0; i < count; i++) {
-    const jitter = randomInRange(random, -0.35, 0.35);
-    const normalizedIndex = (i + 0.5 + jitter) / count;
-    const clampedIndex = clamp(normalizedIndex, 0.001, 0.999);
-    const y = 1 - clampedIndex * 2;
-    const azimuth = (i + randomInRange(random, 0, 1)) * STAR_GOLDEN_ANGLE;
-    const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
-    let direction = normalize([
-      Math.cos(azimuth) * ringRadius,
-      y,
-      Math.sin(azimuth) * ringRadius,
-    ]);
-
-    if (
-      !Number.isFinite(direction[0]) ||
-      !Number.isFinite(direction[1]) ||
-      !Number.isFinite(direction[2])
-    ) {
-      invalidStars += 1;
-      direction = [0, 1, 0];
-    }
-
-    const radius = STAR_FIELD_RADIUS + randomInRange(random, -140, 140);
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const polar = randomInRange(random, 0.05, Math.PI * 0.48);
+    const azimuth = randomInRange(random, 0, Math.PI * 2);
+    const sinPolar = Math.sin(polar);
+    const direction = [
+      sinPolar * Math.cos(azimuth),
+      Math.cos(polar),
+      sinPolar * Math.sin(azimuth),
+    ];
+    const radius = STAR_FIELD_RADIUS + randomInRange(random, -120, 120);
     const position = [
       direction[0] * radius,
       direction[1] * radius,
       direction[2] * radius,
     ];
     const size = randomInRange(random, STAR_MIN_SIZE, STAR_MAX_SIZE);
-    const brightness = clamp(randomInRange(random, 0.58, 1.18), 0.4, 1.3);
+    const brightness = clamp(randomInRange(random, 0.55, 1.12), 0.4, 1.25);
     if (brightness >= STAR_BRIGHT_THRESHOLD) {
       bright += 1;
     } else {
       dim += 1;
-    }
-    coverageAccumulator += 1 - Math.abs(direction[1]);
-    verticalBalance += direction[1];
-    const distance = Math.hypot(position[0], position[1], position[2]);
-    if (Number.isFinite(distance)) {
-      farthestDistance = Math.max(farthestDistance, distance);
     }
     stars.push({
       position,
       direction,
       size,
       brightness,
-      colorShift: randomInRange(random, -0.12, 0.18),
       twinklePhase: randomInRange(random, 0, Math.PI * 2),
     });
   }
-
-  const coverageScore = stars.length ? coverageAccumulator / stars.length : 0;
-  const verticalSkew = stars.length ? verticalBalance / stars.length : 0;
-  const distributionValid = invalidStars === 0 && coverageScore >= 0.35;
-  const baseFarShortfall = Math.max(0, farthestDistance - CAMERA_BASE_FAR_PLANE);
-  const estimatedMargin = CAMERA_BASE_FAR_PLANE - farthestDistance;
 
   starFieldState.random = random;
   starFieldState.stars = stars;
@@ -3597,33 +3557,9 @@ function initializeStarField(seedString) {
   starFieldState.metrics.lastVisibility = 0;
   starFieldState.metrics.lastDrawTime = 0;
   starFieldState.metrics.rebuilds = 0;
-  starFieldState.metrics.coverageScore = coverageScore;
-  starFieldState.metrics.verticalSkew = verticalSkew;
-  starFieldState.metrics.invalidStars = invalidStars;
-  starFieldState.metrics.distributionIssue = distributionValid
-    ? null
-    : `Distribución irregular: cobertura=${coverageScore.toFixed(2)} estrellas inválidas=${invalidStars}`;
-  starFieldState.metrics.farthestDistance = farthestDistance;
-  starFieldState.metrics.baseFarShortfall = baseFarShortfall;
-  starFieldState.metrics.frustumMargin = estimatedMargin;
   starFieldState.flags.geometryValid = false;
-  starFieldState.flags.distributionValid = distributionValid;
-  starFieldState.flags.frustumSafe = baseFarShortfall <= 0;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
-
-  cameraDiagnostics.metrics.starFarthest = farthestDistance;
-  cameraDiagnostics.metrics.starShortfall = baseFarShortfall;
-  cameraDiagnostics.flags.baseFrustumExceeded = baseFarShortfall > 0;
-  cameraDiagnostics.warnedFrustum = false;
-
-  if (!distributionValid) {
-    recordRuntimeIssue(
-      'warning',
-      'star-distribution',
-      new Error(starFieldState.metrics.distributionIssue || 'Distribución de estrellas inválida'),
-    );
-  }
 }
 
 function updateCloudField(deltaTime) {
@@ -3919,11 +3855,10 @@ function rebuildStarFieldGeometry() {
       dim += 1;
     }
     const shimmer = Math.sin(star?.twinklePhase ?? 0) * 0.05;
-    const colorShift = clamp(star?.colorShift ?? 0, -0.2, 0.25);
     const baseColor = [
-      clamp01(0.76 + brightness * 0.26 + shimmer * 0.28 + colorShift * 0.18),
-      clamp01(0.78 + brightness * 0.2 + shimmer * 0.22 + colorShift * -0.12),
-      clamp01(0.86 + brightness * 0.3 + shimmer * 0.34 + colorShift * -0.18),
+      clamp01(0.78 + brightness * 0.22 + shimmer * 0.3),
+      clamp01(0.78 + brightness * 0.18 + shimmer * 0.2),
+      clamp01(0.82 + brightness * 0.28 + shimmer * 0.4),
     ];
 
     const topRight = add(add(position, rightVec), upVec);
@@ -4447,7 +4382,17 @@ const translucentTerrainAlpha = 0.45;
 const terrainRenderState = {
   translucent: false,
   alpha: 1,
+  flatShading: false,
+  metrics: {
+    flatShadedDrawsTotal: 0,
+    flatShadedDrawsLastFrame: 0,
+    lastFlatLightColor: [1, 1, 1],
+    lastFlatLightLuma: 1,
+    lastDaylight: 0,
+    lastMoonlight: 0,
+  },
 };
+runtimeGlobal.__ARRECIFE_TERRAIN_LIGHTING__ = terrainRenderState.metrics;
 
 function applyTranslucentTerrainSetting(enabled) {
   const active = Boolean(enabled);
@@ -7149,9 +7094,10 @@ function regenerateTerrain(seedString) {
   if (!terrainInfo.flags || typeof terrainInfo.flags !== 'object') {
     terrainInfo.flags = {};
   }
-  terrainInfo.flags.flatColor = false;
-  terrainInfo.flags.textured = true;
+  terrainInfo.flags.flatColor = true;
+  terrainInfo.flags.textured = false;
   terrainInfo.flags.lowSpecular = true;
+  terrainInfo.flags.flatLighting = true;
   terrainInfo.colorVariance = colorVariance;
   resetWaterSwells(seedString);
   initializeCloudField(seedString);
@@ -7873,6 +7819,12 @@ const simulationInfo = {
     visibleVertices: terrainInfo.visibleVertices,
     visibleRatio: terrainInfo.visibleVertexRatio,
     flags: { ...terrainInfo.flags },
+    flatLighting: {
+      color: terrainInfo.flatLighting.color.slice(),
+      luma: terrainInfo.flatLighting.luma,
+      daylight: terrainInfo.flatLighting.daylight,
+      moonlight: terrainInfo.flatLighting.moonlight,
+    },
   },
   weather: {
     windActive: 0,
@@ -7916,9 +7868,7 @@ const simulationInfo = {
     geometryMetrics: celestialGeometryState.metrics,
     stars: starFieldState.metrics.count,
     starMetrics: starFieldState.metrics,
-    starsHealthy:
-      starFieldState.flags.geometryValid && starFieldState.flags.distributionValid !== false,
-    starDistributionHealthy: starFieldState.flags.distributionValid !== false,
+    starsHealthy: starFieldState.flags.geometryValid,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -8474,6 +8424,31 @@ function renderWindStreaks() {
   }
 }
 
+function computeTerrainFlatLighting() {
+  const lightColor = dayNightCycleState.lightColor || [1, 1, 1];
+  const ambient = dayNightCycleState.ambientLightColor || [0.2, 0.24, 0.3];
+  const sunColor = dayNightCycleState.sunLightColor || [1, 0.95, 0.85];
+  const moonColor = dayNightCycleState.moonLightColor || [0.45, 0.52, 0.78];
+  const daylight = clamp01(dayNightCycleState.sunlightIntensity ?? dayNightCycleState.daylight ?? 0);
+  const moonlight = clamp01(dayNightCycleState.moonlightIntensity ?? 0);
+
+  const baseMix = 0.82;
+  const ambientMix = 0.45;
+  const sunMix = 0.38 * daylight;
+  const moonMix = 0.22 * moonlight;
+  const brightnessFloor = 0.18 + daylight * 0.45 + moonlight * 0.18;
+
+  const color = [0, 0, 0];
+  for (let i = 0; i < 3; i += 1) {
+    const raw =
+      lightColor[i] * baseMix + ambient[i] * ambientMix + sunColor[i] * sunMix + moonColor[i] * moonMix;
+    color[i] = clamp(Math.max(raw, brightnessFloor), 0, 1.6);
+  }
+
+  const luma = clamp(color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722, 0, 1.6);
+  return { color, luma, daylight, moonlight };
+}
+
 function render() {
   drawStats.terrain = 0;
   drawStats.water = 0;
@@ -8486,6 +8461,11 @@ function render() {
   drawStats.chunkGrid = 0;
   drawStats.selection = 0;
   drawStats.total = 0;
+  terrainRenderState.metrics.flatShadedDrawsLastFrame = 0;
+  terrainRenderState.flatShading = false;
+  if (terrainFlatShadingUniform && typeof gl.uniform1i === 'function') {
+    gl.uniform1i(terrainFlatShadingUniform, 0);
+  }
 
   const skyColor = dayNightCycleState.skyColor;
   if (skyColor) {
@@ -8540,6 +8520,26 @@ function render() {
     );
   }
 
+  const terrainFlatLighting = computeTerrainFlatLighting();
+  terrainRenderState.metrics.lastFlatLightColor = terrainFlatLighting.color.slice();
+  terrainRenderState.metrics.lastFlatLightLuma = terrainFlatLighting.luma;
+  terrainRenderState.metrics.lastDaylight = terrainFlatLighting.daylight;
+  terrainRenderState.metrics.lastMoonlight = terrainFlatLighting.moonlight;
+  if (terrainInfo.flatLighting) {
+    terrainInfo.flatLighting.color = terrainFlatLighting.color.slice();
+    terrainInfo.flatLighting.luma = terrainFlatLighting.luma;
+    terrainInfo.flatLighting.daylight = terrainFlatLighting.daylight;
+    terrainInfo.flatLighting.moonlight = terrainFlatLighting.moonlight;
+  }
+  if (terrainFlatLightColorUniform && typeof gl.uniform3f === 'function') {
+    gl.uniform3f(
+      terrainFlatLightColorUniform,
+      terrainFlatLighting.color[0],
+      terrainFlatLighting.color[1],
+      terrainFlatLighting.color[2],
+    );
+  }
+
   if (patternTimeUniform && typeof gl.uniform1f === 'function') {
     gl.uniform1f(patternTimeUniform, waterAnimationTime ?? 0);
   }
@@ -8588,12 +8588,22 @@ function render() {
 
   if (baseplateVertexCount > 0) {
     if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
-      gl.uniform1f(surfaceSpecularStrengthUniform, 0.05);
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0);
     }
+    if (terrainFlatShadingUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(terrainFlatShadingUniform, 1);
+    }
+    terrainRenderState.flatShading = true;
+    terrainRenderState.metrics.flatShadedDrawsLastFrame += 1;
+    terrainRenderState.metrics.flatShadedDrawsTotal += 1;
     bindGeometry(baseplateBuffer);
     gl.drawArrays(gl.TRIANGLES, 0, baseplateVertexCount);
     drawStats.terrain += 1;
     drawStats.total += 1;
+    terrainRenderState.flatShading = false;
+    if (terrainFlatShadingUniform && typeof gl.uniform1i === 'function') {
+      gl.uniform1i(terrainFlatShadingUniform, 0);
+    }
     if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
       gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
     }
@@ -8799,42 +8809,10 @@ function updateDebugConsole(deltaTime) {
     ? `${cloudMetrics.lastBuildMs.toFixed(2)}ms`
     : '---';
   const starMetrics = starFieldState.metrics ?? {};
-  const geometryHealthy = starFieldState.flags?.geometryValid !== false;
-  const distributionHealthy = starFieldState.flags?.distributionValid !== false;
-  const starStatus = geometryHealthy
-    ? distributionHealthy
-      ? 'OK'
-      : 'WARN'
-    : 'ERROR';
+  const starStatus = starFieldState.flags?.geometryValid ? 'OK' : 'ERROR';
   const starVisibility = Number.isFinite(starMetrics.lastVisibility)
     ? starMetrics.lastVisibility.toFixed(2)
     : '0.00';
-  const starCoverage = Number.isFinite(starMetrics.coverageScore)
-    ? starMetrics.coverageScore.toFixed(2)
-    : '0.00';
-  const starSkew = Number.isFinite(starMetrics.verticalSkew)
-    ? starMetrics.verticalSkew.toFixed(2)
-    : '0.00';
-  const starInvalid = Math.max(0, starMetrics.invalidStars ?? 0);
-  const starRange = Number.isFinite(starMetrics.farthestDistance)
-    ? starMetrics.farthestDistance.toFixed(1)
-    : '0.0';
-  const starMargin = Number.isFinite(starMetrics.frustumMargin)
-    ? starMetrics.frustumMargin.toFixed(1)
-    : '0.0';
-  const starShortfall = Number.isFinite(starMetrics.baseFarShortfall)
-    ? starMetrics.baseFarShortfall.toFixed(1)
-    : '0.0';
-  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'WARN' : 'OK';
-  const cameraFarDisplay = Number.isFinite(cameraDiagnostics.far)
-    ? cameraDiagnostics.far.toFixed(1)
-    : '---';
-  const cameraMarginDisplay = Number.isFinite(cameraDiagnostics.starMargin)
-    ? cameraDiagnostics.starMargin.toFixed(1)
-    : '---';
-  const cameraShortfallDisplay = Number.isFinite(cameraDiagnostics.metrics.starShortfall)
-    ? cameraDiagnostics.metrics.starShortfall.toFixed(1)
-    : '0.0';
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -8865,8 +8843,17 @@ function updateDebugConsole(deltaTime) {
     )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
     `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
       terrainInfo.flags?.textured ? 'sí' : 'no'
-    } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'})`,
+    } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'} iluminación_plana=${
+      terrainInfo.flags?.flatLighting ? 'sí' : 'no'
+    })`,
     `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
+    `Terreno iluminación plana: rgb=${terrainRenderState.metrics.lastFlatLightColor
+      .map((value) => value.toFixed(2))
+      .join(', ')} luma=${terrainRenderState.metrics.lastFlatLightLuma.toFixed(2)} frame=${
+      terrainRenderState.metrics.flatShadedDrawsLastFrame
+    } total=${terrainRenderState.metrics.flatShadedDrawsTotal} luz_día=${(terrainRenderState.metrics.lastDaylight * 100).toFixed(
+      0,
+    )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
     `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
@@ -8879,7 +8866,7 @@ function updateDebugConsole(deltaTime) {
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} cobertura=${starCoverage} balance=${starSkew} rango=${starRange} margen=${starMargin} déficit_base=${starShortfall} defectuosas=${starInvalid} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
@@ -8959,16 +8946,8 @@ function updateDebugConsole(deltaTime) {
   if (cloudMetrics.lastError) {
     info.push(`Nubes error: ${cloudMetrics.lastError}`);
   }
-  if (starMetrics.distributionIssue) {
-    info.push(`Estrellas alerta: ${starMetrics.distributionIssue}`);
-  }
   if (starMetrics.lastError) {
     info.push(`Estrellas error: ${starMetrics.lastError}`);
-  }
-  if (cameraDiagnostics.flags.baseFrustumExceeded) {
-    info.push(
-      `Cámara alerta: plano base corto por ${cameraShortfallDisplay}m (margen actual ${cameraMarginDisplay}m)`,
-    );
   }
 
   if (pointerLockErrors > 0) {
@@ -9072,6 +9051,12 @@ function loop(currentTime) {
     simulationInfo.terrain.visibleVertices = terrainInfo.visibleVertices ?? 0;
     simulationInfo.terrain.visibleRatio = terrainInfo.visibleVertexRatio ?? 0;
     simulationInfo.terrain.flags = { ...terrainInfo.flags };
+    simulationInfo.terrain.flatLighting = {
+      color: terrainInfo.flatLighting?.color ? terrainInfo.flatLighting.color.slice() : [1, 1, 1],
+      luma: terrainInfo.flatLighting?.luma ?? 1,
+      daylight: terrainInfo.flatLighting?.daylight ?? 0,
+      moonlight: terrainInfo.flatLighting?.moonlight ?? 0,
+    };
     const cloudMetrics = weatherState.clouds?.metrics ?? {};
     const starMetrics = starFieldState.metrics ?? {};
     simulationInfo.weather.windActive = weatherState.wind.metrics.active;
