@@ -199,29 +199,107 @@ const ambientAudioState = {
 
 const DEFAULT_CAMERA_NEAR_PLANE = 0.1;
 const DEFAULT_CAMERA_FAR_PLANE = 500;
+
+const CAMERA_BASE_NEAR_PLANE =
+  Number.isFinite(runtimeGlobal.CAMERA_BASE_NEAR_PLANE) && runtimeGlobal.CAMERA_BASE_NEAR_PLANE > 0
+    ? runtimeGlobal.CAMERA_BASE_NEAR_PLANE
+    : DEFAULT_CAMERA_NEAR_PLANE;
+const CAMERA_BASE_FAR_PLANE =
+  Number.isFinite(runtimeGlobal.CAMERA_BASE_FAR_PLANE) && runtimeGlobal.CAMERA_BASE_FAR_PLANE > CAMERA_BASE_NEAR_PLANE
+    ? runtimeGlobal.CAMERA_BASE_FAR_PLANE
+    : DEFAULT_CAMERA_FAR_PLANE;
+
 const CAMERA_NEAR_PLANE =
   Number.isFinite(runtimeGlobal.CAMERA_NEAR_PLANE) && runtimeGlobal.CAMERA_NEAR_PLANE > 0
     ? runtimeGlobal.CAMERA_NEAR_PLANE
-    : DEFAULT_CAMERA_NEAR_PLANE;
+    : CAMERA_BASE_NEAR_PLANE;
 const CAMERA_FAR_PLANE =
   Number.isFinite(runtimeGlobal.CAMERA_FAR_PLANE) && runtimeGlobal.CAMERA_FAR_PLANE > CAMERA_NEAR_PLANE
     ? runtimeGlobal.CAMERA_FAR_PLANE
-    : DEFAULT_CAMERA_FAR_PLANE;
+    : CAMERA_BASE_FAR_PLANE;
 
+runtimeGlobal.CAMERA_BASE_NEAR_PLANE = CAMERA_BASE_NEAR_PLANE;
+runtimeGlobal.CAMERA_BASE_FAR_PLANE = CAMERA_BASE_FAR_PLANE;
 runtimeGlobal.CAMERA_NEAR_PLANE = CAMERA_NEAR_PLANE;
 runtimeGlobal.CAMERA_FAR_PLANE = CAMERA_FAR_PLANE;
 
 const cameraClipPlanes =
   runtimeState.cameraClipPlanes && typeof runtimeState.cameraClipPlanes === 'object'
     ? runtimeState.cameraClipPlanes
-    : (runtimeState.cameraClipPlanes = { near: CAMERA_NEAR_PLANE, far: CAMERA_FAR_PLANE, lastUpdated: 0 });
+    : (runtimeState.cameraClipPlanes = {
+        near: CAMERA_NEAR_PLANE,
+        far: CAMERA_FAR_PLANE,
+        baseNear: CAMERA_BASE_NEAR_PLANE,
+        baseFar: CAMERA_BASE_FAR_PLANE,
+        lastUpdated: 0,
+        deviation: 0,
+      });
 
 cameraClipPlanes.near = CAMERA_NEAR_PLANE;
 cameraClipPlanes.far = CAMERA_FAR_PLANE;
+cameraClipPlanes.baseNear = CAMERA_BASE_NEAR_PLANE;
+cameraClipPlanes.baseFar = CAMERA_BASE_FAR_PLANE;
+cameraClipPlanes.deviation = Math.max(
+  Math.abs(CAMERA_NEAR_PLANE - CAMERA_BASE_NEAR_PLANE),
+  Math.abs(CAMERA_FAR_PLANE - CAMERA_BASE_FAR_PLANE),
+);
+cameraClipPlanes.overrideActive = cameraClipPlanes.deviation > 0.0001;
+cameraClipPlanes.invalidOrdering = CAMERA_FAR_PLANE <= CAMERA_NEAR_PLANE;
 cameraClipPlanes.lastUpdated =
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+cameraClipPlanes.overrides = Math.max(0, (cameraClipPlanes.overrides ?? 0) + (cameraClipPlanes.overrideActive ? 1 : 0));
+cameraClipPlanes.lastOverrideTimestamp = cameraClipPlanes.overrideActive
+  ? Date.now()
+  : cameraClipPlanes.lastOverrideTimestamp ?? null;
 
 runtimeGlobal.__ARRECIFE_CAMERA_CLIP__ = cameraClipPlanes;
+
+const cameraDiagnostics =
+  runtimeState.cameraDiagnostics && typeof runtimeState.cameraDiagnostics === 'object'
+    ? runtimeState.cameraDiagnostics
+    : (runtimeState.cameraDiagnostics = {
+        overrides: 0,
+        lastOverrideTimestamp: null,
+        lastDeviation: 0,
+        flags: { overrideActive: false, invalidOrdering: false },
+      });
+
+cameraDiagnostics.baseNear = CAMERA_BASE_NEAR_PLANE;
+cameraDiagnostics.baseFar = CAMERA_BASE_FAR_PLANE;
+cameraDiagnostics.currentNear = CAMERA_NEAR_PLANE;
+cameraDiagnostics.currentFar = CAMERA_FAR_PLANE;
+cameraDiagnostics.lastDeviation = cameraClipPlanes.deviation;
+cameraDiagnostics.flags = {
+  overrideActive: cameraClipPlanes.overrideActive,
+  invalidOrdering: cameraClipPlanes.invalidOrdering,
+};
+cameraDiagnostics.overrides = Math.max(0, cameraClipPlanes.overrides ?? 0);
+cameraDiagnostics.lastOverrideTimestamp = cameraClipPlanes.lastOverrideTimestamp ?? null;
+
+if (cameraDiagnostics.flags.invalidOrdering) {
+  pendingRuntimeIssueQueue.push({
+    severity: 'fatal',
+    context: 'camera',
+    error: 'Configuración inválida de planos de recorte: el plano lejano es menor o igual al plano cercano.',
+    timestamp: new Date().toISOString(),
+  });
+}
+
+runtimeGlobal.__ARRECIFE_CAMERA_DIAGNOSTICS__ = cameraDiagnostics;
+
+function snapshotCameraClipDiagnostics() {
+  return {
+    baseNear: CAMERA_BASE_NEAR_PLANE,
+    baseFar: CAMERA_BASE_FAR_PLANE,
+    near: CAMERA_NEAR_PLANE,
+    far: CAMERA_FAR_PLANE,
+    deviation: cameraDiagnostics.lastDeviation ?? 0,
+    overrideActive: Boolean(cameraDiagnostics.flags?.overrideActive),
+    invalidOrdering: Boolean(cameraDiagnostics.flags?.invalidOrdering),
+    overrides: Math.max(0, cameraDiagnostics.overrides ?? 0),
+    lastOverrideTimestamp: cameraDiagnostics.lastOverrideTimestamp ?? null,
+  };
+}
 
 function ensureAmbientAudioContext() {
   if (!ambientAudioState.supported) {
@@ -7816,7 +7894,15 @@ const simulationInfo = {
     position: [cameraPosition[0], cameraPosition[1], cameraPosition[2]],
     yaw,
     pitch,
-    clip: { near: CAMERA_NEAR_PLANE, far: CAMERA_FAR_PLANE },
+    clip: snapshotCameraClipDiagnostics(),
+    clipFlags: {
+      overrideActive: Boolean(cameraDiagnostics.flags?.overrideActive),
+      invalidOrdering: Boolean(cameraDiagnostics.flags?.invalidOrdering),
+    },
+    clipOverrides: {
+      count: Math.max(0, cameraDiagnostics.overrides ?? 0),
+      lastTimestamp: cameraDiagnostics.lastOverrideTimestamp ?? null,
+    },
   },
   dayNight: dayNightCycleState,
   terrain: {
@@ -8839,6 +8925,19 @@ function updateDebugConsole(deltaTime) {
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
     : 'Ninguna';
 
+  const clipDeviation = Number.isFinite(cameraDiagnostics.lastDeviation)
+    ? cameraDiagnostics.lastDeviation
+    : 0;
+  const clipOverrideActive = Boolean(cameraDiagnostics.flags?.overrideActive);
+  const clipInvalidOrdering = Boolean(cameraDiagnostics.flags?.invalidOrdering);
+  const cameraOverrides = Math.max(0, cameraDiagnostics.overrides ?? 0);
+  const lastOverrideLabel =
+    typeof cameraDiagnostics.lastOverrideTimestamp === 'number'
+      ? new Date(cameraDiagnostics.lastOverrideTimestamp).toISOString()
+      : cameraDiagnostics.lastOverrideTimestamp ?? 'n/d';
+  const baseClipLabel = `${CAMERA_BASE_NEAR_PLANE.toFixed(2)}/${CAMERA_BASE_FAR_PLANE.toFixed(1)}`;
+  const activeClipLabel = `${CAMERA_NEAR_PLANE.toFixed(2)}/${CAMERA_FAR_PLANE.toFixed(1)}`;
+
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
@@ -8848,7 +8947,10 @@ function updateDebugConsole(deltaTime) {
     `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
     `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
     `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
-    `Planos cámara: cerca=${CAMERA_NEAR_PLANE.toFixed(2)} lejos=${CAMERA_FAR_PLANE.toFixed(1)}`,
+    `Planos cámara: base=${baseClipLabel} actual=${activeClipLabel} Δ=${clipDeviation.toFixed(3)} override=${
+      clipOverrideActive ? 'sí' : 'no'
+    } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
+    `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
     `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
     `Luz global: rgb=${lightingDiagnostics.latestLightColor
@@ -9071,8 +9173,12 @@ function loop(currentTime) {
     ];
     simulationInfo.camera.yaw = yaw;
     simulationInfo.camera.pitch = pitch;
-    simulationInfo.camera.clip.near = CAMERA_NEAR_PLANE;
-    simulationInfo.camera.clip.far = CAMERA_FAR_PLANE;
+    const clipSnapshot = snapshotCameraClipDiagnostics();
+    Object.assign(simulationInfo.camera.clip, clipSnapshot);
+    simulationInfo.camera.clipFlags.overrideActive = clipSnapshot.overrideActive;
+    simulationInfo.camera.clipFlags.invalidOrdering = clipSnapshot.invalidOrdering;
+    simulationInfo.camera.clipOverrides.count = clipSnapshot.overrides;
+    simulationInfo.camera.clipOverrides.lastTimestamp = clipSnapshot.lastOverrideTimestamp;
     simulationInfo.dayNight = dayNightCycleState;
     simulationInfo.terrain.surfaceStyle = terrainInfo.surfaceStyle;
     simulationInfo.terrain.colorVariance = terrainInfo.colorVariance ?? 0;
