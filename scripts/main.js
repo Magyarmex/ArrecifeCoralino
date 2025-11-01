@@ -2305,6 +2305,13 @@ const waterSwellUniformBuffers = {
 };
 let waterSwellActiveCount = 0;
 let waterSwellState = null;
+const waterSwellDiagnostics = {
+  resets: 0,
+  lastResetSeed: null,
+  lastUpdateDurationMs: 0,
+  oversubscribedFrames: 0,
+  lastError: null,
+};
 
 if (uniformLocations.renderMode && typeof gl.uniform1i === 'function') {
   gl.uniform1i(uniformLocations.renderMode, renderModes.terrain);
@@ -2741,6 +2748,7 @@ function createRandomGenerator(seed) {
 runtimeGlobal.__runtimeIssues = runtimeIssues;
 runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ = runtimeState;
 runtimeGlobal.__ARRECIFE_LIGHTING__ = lightingDiagnostics;
+runtimeGlobal.__ARRECIFE_WATER_SWELLS__ = waterSwellDiagnostics;
 
 
 function randomInRange(random, min, max) {
@@ -2795,25 +2803,54 @@ function resetWaterSwells(seed) {
   const baseSeed = stringToSeed(seed ?? currentSeed);
   const random = createRandomGenerator(baseSeed ^ 0x3f2a9d17);
   const startTime = waterAnimationTime ?? 0;
+  const previousResets = waterSwellDiagnostics.resets;
   waterSwellState = {
     active: [],
     random,
     minInterval: 7,
     maxInterval: 16,
     nextSpawnTime: startTime + randomInRange(random, 5, 9),
+    metrics: {
+      active: 0,
+      spawned: 0,
+      culled: 0,
+      uploads: 0,
+      overflowed: 0,
+      bufferUtilization: 0,
+      pending: 0,
+      lastSpawnTime: null,
+      lastUpdateTime: 0,
+      resets: previousResets + 1,
+    },
+    flags: {
+      buffersDirty: true,
+      spawnBacklog: false,
+      overCapacity: false,
+    },
   };
   waterSwellActiveCount = 0;
   waterSwellUniformBuffers.origins.fill(0);
   waterSwellUniformBuffers.params.fill(0);
   waterSwellUniformBuffers.state.fill(0);
+  waterSwellDiagnostics.resets = previousResets + 1;
+  waterSwellDiagnostics.lastResetSeed = seed ?? currentSeed;
+  waterSwellDiagnostics.oversubscribedFrames = 0;
+  waterSwellDiagnostics.lastUpdateDurationMs = 0;
+  waterSwellDiagnostics.lastError = null;
   weatherState.wind.active = [];
   weatherState.wind.metrics.active = 0;
   weatherState.wind.metrics.culled = 0;
   weatherState.wind.metrics.spawned = 0;
   weatherState.wind.metrics.geometryRejected = 0;
   weatherState.wind.sequence = 0;
-  spawnWaterSwell(startTime);
+  const initialSwell = spawnWaterSwell(startTime);
+  if (!initialSwell) {
+    const warning = 'No se pudo generar la marejada inicial';
+    waterSwellDiagnostics.lastError = warning;
+    recordRuntimeIssue('warning', 'water-swell-inicial', warning);
+  }
   scheduleNextWaterSwell(startTime);
+  updateWaterSwells(0);
 }
 
 function spawnWaterSwell(currentTime) {
@@ -2823,6 +2860,9 @@ function spawnWaterSwell(currentTime) {
   const random = waterSwellState?.random;
   const randomBetween = (min, max) =>
     typeof random === 'function' ? randomInRange(random, min, max) : min + Math.random() * (max - min);
+
+  const metrics = waterSwellState.metrics;
+  const flags = waterSwellState.flags;
 
   const half = baseplateSize / 2;
   const spawnRadius = half + randomBetween(6, 14);
@@ -2840,6 +2880,13 @@ function spawnWaterSwell(currentTime) {
   const rotatedZ = dirX * sinJ + dirZ * cosJ;
   const dirLength = Math.hypot(rotatedX, rotatedZ) || 1;
   const direction = [rotatedX / dirLength, rotatedZ / dirLength];
+
+  if (!Number.isFinite(direction[0]) || !Number.isFinite(direction[1])) {
+    const message = 'Dirección de marejada inválida generada';
+    waterSwellDiagnostics.lastError = message;
+    recordRuntimeIssue('warning', 'water-swell-direccion', message);
+    return null;
+  }
 
   const amplitude = randomBetween(0.35, 0.5);
   const crestLength = randomBetween(5, 12);
@@ -2867,16 +2914,201 @@ function spawnWaterSwell(currentTime) {
 
   waterSwellState.active.push(newSwell);
   scheduleWindGustFromSwell(newSwell);
-
-  return { vertices, alpha: clamp01(alpha * 0.65 + 0.2), progress: clamp01(progress) };
-}
-
-function getTimestamp() {
-  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-    return performance.now();
+  if (metrics) {
+    metrics.spawned += 1;
+    metrics.lastSpawnTime = currentTime;
+    metrics.active = waterSwellState.active.length;
+    metrics.pending = Math.max(0, metrics.active - MAX_WATER_SWELLS);
+    metrics.bufferUtilization = Math.min(1, metrics.active / MAX_WATER_SWELLS);
   }
-  return Date.now();
+  if (flags) {
+    flags.buffersDirty = true;
+  }
+  waterSwellDiagnostics.lastError = null;
+  return newSwell;
 }
+
+function updateWaterSwells(deltaTime) {
+  if (!waterSwellState) {
+    return;
+  }
+
+  if (!waterSwellState.metrics) {
+    waterSwellState.metrics = {
+      active: 0,
+      spawned: 0,
+      culled: 0,
+      uploads: 0,
+      overflowed: 0,
+      bufferUtilization: 0,
+      pending: 0,
+      lastSpawnTime: null,
+      lastUpdateTime: 0,
+      resets: waterSwellDiagnostics.resets,
+    };
+  }
+  if (!waterSwellState.flags) {
+    waterSwellState.flags = { buffersDirty: true, spawnBacklog: false, overCapacity: false };
+  }
+
+  const metrics = waterSwellState.metrics;
+  const flags = waterSwellState.flags;
+  const now = Number.isFinite(waterAnimationTime) ? waterAnimationTime : 0;
+  const dt = Number.isFinite(deltaTime) ? deltaTime : 0;
+  if (metrics) {
+    metrics.lastUpdateTime = now;
+    if (Number.isFinite(dt)) {
+      metrics.accumulatedDelta = (metrics.accumulatedDelta ?? 0) + dt;
+    }
+  }
+
+  if (typeof waterSwellState.nextSpawnTime === 'number') {
+    let attempts = 0;
+    const maxAttempts = MAX_WATER_SWELLS * 3;
+    while (now >= waterSwellState.nextSpawnTime) {
+      if (attempts >= maxAttempts) {
+        const message = 'Demasiadas marejadas pendientes de generar';
+        waterSwellDiagnostics.lastError = message;
+        recordRuntimeIssue('warning', 'water-swell-backlog', message);
+        flags.spawnBacklog = true;
+        break;
+      }
+      attempts += 1;
+      const spawned = spawnWaterSwell(now);
+      if (!spawned) {
+        const message = 'El generador de marejadas devolvió un valor nulo';
+        waterSwellDiagnostics.lastError = message;
+        recordRuntimeIssue('warning', 'water-swell-spawn', message);
+        break;
+      }
+      scheduleNextWaterSwell(now);
+    }
+    flags.spawnBacklog = now >= waterSwellState.nextSpawnTime;
+  }
+
+  const filtered = [];
+  let culledThisFrame = 0;
+  for (const swell of waterSwellState.active) {
+    if (!swell) {
+      continue;
+    }
+    const startTime = Number.isFinite(swell.startTime) ? swell.startTime : now;
+    const lifespan = Number.isFinite(swell.lifespan) ? swell.lifespan : Number.POSITIVE_INFINITY;
+    if (now - startTime > lifespan) {
+      culledThisFrame += 1;
+      continue;
+    }
+    filtered.push(swell);
+  }
+
+  waterSwellState.active = filtered;
+  if (metrics && culledThisFrame > 0) {
+    metrics.culled += culledThisFrame;
+  }
+
+  const count = Math.min(filtered.length, MAX_WATER_SWELLS);
+  const pending = Math.max(0, filtered.length - count);
+  const oversubscribed = pending > 0;
+  waterSwellActiveCount = count;
+
+  if (metrics) {
+    metrics.active = count;
+    metrics.pending = pending;
+    metrics.bufferUtilization = count / MAX_WATER_SWELLS;
+    if (oversubscribed) {
+      metrics.overflowed = (metrics.overflowed ?? 0) + 1;
+      waterSwellDiagnostics.oversubscribedFrames += 1;
+    }
+  }
+
+  flags.overCapacity = oversubscribed;
+
+  waterSwellUniformBuffers.origins.fill(0);
+  waterSwellUniformBuffers.params.fill(0);
+  waterSwellUniformBuffers.state.fill(0);
+
+  const updateStart = getTimestamp();
+  for (let i = 0; i < count; i++) {
+    const swell = filtered[i];
+    const baseIndex = i * 4;
+    const origin = swell.origin || [0, 0];
+    const dir = normalize2D(swell.direction || [0, 1]);
+
+    waterSwellUniformBuffers.origins[baseIndex] = origin[0];
+    waterSwellUniformBuffers.origins[baseIndex + 1] = origin[1];
+    waterSwellUniformBuffers.origins[baseIndex + 2] = dir[0];
+    waterSwellUniformBuffers.origins[baseIndex + 3] = dir[1];
+
+    waterSwellUniformBuffers.params[baseIndex] = swell.amplitude ?? 0;
+    waterSwellUniformBuffers.params[baseIndex + 1] = swell.crestLength ?? 0;
+    waterSwellUniformBuffers.params[baseIndex + 2] = swell.lateralSpread ?? 1;
+    waterSwellUniformBuffers.params[baseIndex + 3] = swell.foamBoost ?? 0;
+
+    waterSwellUniformBuffers.state[baseIndex] = swell.startTime ?? now;
+    waterSwellUniformBuffers.state[baseIndex + 1] = swell.speed ?? 0;
+    waterSwellUniformBuffers.state[baseIndex + 2] = swell.decayDistance ?? 0;
+    waterSwellUniformBuffers.state[baseIndex + 3] = swell.splashHeight ?? 0;
+  }
+  const updateEnd = getTimestamp();
+  waterSwellDiagnostics.lastUpdateDurationMs = Math.max(0, updateEnd - updateStart);
+
+  if (metrics) {
+    metrics.uploads = (metrics.uploads ?? 0) + 1;
+  }
+  flags.buffersDirty = false;
+}
+
+const runtimeTimingDiagnostics =
+  runtimeState && typeof runtimeState === 'object'
+    ? (runtimeState.timingDiagnostics =
+        runtimeState.timingDiagnostics && typeof runtimeState.timingDiagnostics === 'object'
+          ? runtimeState.timingDiagnostics
+          : {
+              getTimestampCalls: 0,
+              lastTimestampMs: null,
+              flags: {},
+            })
+    : { getTimestampCalls: 0, lastTimestampMs: null, flags: {} };
+
+const getTimestamp = (() => {
+  const timingFlags =
+    runtimeTimingDiagnostics && typeof runtimeTimingDiagnostics.flags === 'object'
+      ? runtimeTimingDiagnostics.flags
+      : (runtimeTimingDiagnostics.flags = {});
+
+  if (typeof runtimeTimingDiagnostics.getTimestamp === 'function') {
+    timingFlags.reusedImplementation = true;
+    timingFlags.reusedAt = Date.now();
+    if (!timingFlags.reuseReported && typeof recordRuntimeIssue === 'function') {
+      recordRuntimeIssue(
+        'info',
+        'runtime-timing',
+        'getTimestamp reutilizado tras una recarga del script; se conservan las métricas previas.',
+      );
+      timingFlags.reuseReported = true;
+    }
+    return runtimeTimingDiagnostics.getTimestamp;
+  }
+
+  const baseImplementation =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? () => performance.now()
+      : () => Date.now();
+
+  const instrumentedImplementation = () => {
+    const value = baseImplementation();
+    runtimeTimingDiagnostics.getTimestampCalls =
+      (runtimeTimingDiagnostics.getTimestampCalls ?? 0) + 1;
+    runtimeTimingDiagnostics.lastTimestampMs = value;
+    return value;
+  };
+
+  runtimeTimingDiagnostics.getTimestamp = instrumentedImplementation;
+  timingFlags.reusedImplementation = false;
+  timingFlags.reusedAt = null;
+
+  return instrumentedImplementation;
+})();
 
 function ensureCelestialMeshTemplate() {
   if (celestialGeometryState.template) {
@@ -3271,130 +3503,6 @@ function composeWindStreakGeometry(effect, now) {
   offset = pushVertex(vertices, offset, tail[0] + lateral[0], tail[1], tail[2] + lateral[2], tailColor);
 
   return { vertices, alpha: clamp01(alpha * 0.65 + 0.2), progress: clamp01(progress) };
-}
-
-function getTimestamp() {
-  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-    return performance.now();
-  }
-  return Date.now();
-}
-
-function updateCelestialGeometry() {
-  if (!celestialGeometryState.template || !celestialGeometryState.flags.templateValid) {
-    try {
-      let topology = createBaseIcosahedron();
-      for (let i = 0; i < CELESTIAL_SUBDIVISIONS; i++) {
-        topology = subdivideTopology(topology);
-      }
-      const triangles = [];
-      for (const face of topology.faces) {
-        triangles.push(topology.vertices[face[0]]);
-        triangles.push(topology.vertices[face[1]]);
-        triangles.push(topology.vertices[face[2]]);
-      }
-      celestialGeometryState.template = { triangles };
-      celestialGeometryState.metrics.templateBuilds += 1;
-      celestialGeometryState.metrics.lastTemplateBuildTime = getTimestamp();
-      celestialGeometryState.flags.templateValid = true;
-    } catch (error) {
-      celestialGeometryState.metrics.templateBuildErrors += 1;
-      celestialGeometryState.metrics.lastTemplateErrorTime = getTimestamp();
-      celestialGeometryState.flags.templateValid = false;
-      recordRuntimeIssue('error', 'celestial-template', error);
-      celestialGeometryState.template = null;
-    }
-  }
-
-  const template = celestialGeometryState.template;
-  if (!template) {
-    celestialGeometryState.flags.sunGeometryValid = false;
-    celestialGeometryState.flags.moonGeometryValid = false;
-    return;
-  }
-
-  const populateCelestialVertexBuffer = (target, radius, position, color) => {
-    if (!template.triangles || template.triangles.length === 0) {
-      return new Float32Array(0);
-    }
-    const requiredLength = template.triangles.length * floatsPerVertex;
-    let data = target;
-    if (!data || data.length !== requiredLength) {
-      data = new Float32Array(requiredLength);
-    }
-    let offset = 0;
-    for (const vertex of template.triangles) {
-      offset = pushVertex(
-        data,
-        offset,
-        position[0] + vertex[0] * radius,
-        position[1] + vertex[1] * radius,
-        position[2] + vertex[2] * radius,
-        color,
-      );
-    }
-    return data;
-  };
-
-  try {
-    const sunColor = [
-      clamp01(dayNightCycleState.sunLightColor[0] + 0.25),
-      clamp01(dayNightCycleState.sunLightColor[1] + 0.18),
-      clamp01(dayNightCycleState.sunLightColor[2] + 0.12),
-    ];
-    sunVertexData = populateCelestialVertexBuffer(
-      sunVertexData,
-      CELESTIAL_SUN_RADIUS,
-      dayNightCycleState.sunPosition,
-      sunColor,
-    );
-    sunVertexCount = sunVertexData.length / floatsPerVertex;
-    if (sunVertexCount > 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, sunBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, sunVertexData, gl.DYNAMIC_DRAW);
-      celestialGeometryState.metrics.sunUploads += 1;
-      celestialGeometryState.metrics.lastSunUploadTime = getTimestamp();
-      celestialGeometryState.flags.sunGeometryValid = true;
-    } else {
-      celestialGeometryState.flags.sunGeometryValid = false;
-    }
-  } catch (error) {
-    recordRuntimeIssue('warning', 'sun-geometry', error);
-    sunVertexCount = 0;
-    celestialGeometryState.metrics.uploadErrors += 1;
-    celestialGeometryState.metrics.lastUploadErrorTime = getTimestamp();
-    celestialGeometryState.flags.sunGeometryValid = false;
-  }
-
-  try {
-    const moonColor = [
-      clamp01(dayNightCycleState.moonLightColor[0] + 0.08),
-      clamp01(dayNightCycleState.moonLightColor[1] + 0.1),
-      clamp01(dayNightCycleState.moonLightColor[2] + 0.12),
-    ];
-    moonVertexData = populateCelestialVertexBuffer(
-      moonVertexData,
-      CELESTIAL_MOON_RADIUS,
-      dayNightCycleState.moonPosition,
-      moonColor,
-    );
-    moonVertexCount = moonVertexData.length / floatsPerVertex;
-    if (moonVertexCount > 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, moonBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, moonVertexData, gl.DYNAMIC_DRAW);
-      celestialGeometryState.metrics.moonUploads += 1;
-      celestialGeometryState.metrics.lastMoonUploadTime = getTimestamp();
-      celestialGeometryState.flags.moonGeometryValid = true;
-    } else {
-      celestialGeometryState.flags.moonGeometryValid = false;
-    }
-  } catch (error) {
-    recordRuntimeIssue('warning', 'moon-geometry', error);
-    moonVertexCount = 0;
-    celestialGeometryState.metrics.uploadErrors += 1;
-    celestialGeometryState.metrics.lastUploadErrorTime = getTimestamp();
-    celestialGeometryState.flags.moonGeometryValid = false;
-  }
 }
 
 function hashCoords(x, z, seed) {
@@ -7096,6 +7204,23 @@ const simulationInfo = {
     windCulled: 0,
     windGeometryRejected: 0,
     clouds: 0,
+    swells: {
+      active: 0,
+      spawned: 0,
+      culled: 0,
+      overflowed: 0,
+      bufferUtilization: 0,
+      pending: 0,
+      lastSpawnTime: null,
+    },
+    diagnostics: {
+      swells: {
+        resets: waterSwellDiagnostics.resets,
+        oversubscribedFrames: waterSwellDiagnostics.oversubscribedFrames,
+        lastUpdateDurationMs: waterSwellDiagnostics.lastUpdateDurationMs,
+        lastError: waterSwellDiagnostics.lastError,
+      },
+    },
   },
   celestial: {
     sunAltitude: dayNightCycleState.sunAltitude,
@@ -7856,6 +7981,12 @@ function updateDebugConsole(deltaTime) {
     const finite = Number.isFinite(value) ? value : 0;
     return finite.toFixed(digits);
   };
+  const swellMetrics = waterSwellState?.metrics ?? {};
+  const swellFlags = waterSwellState?.flags ?? {};
+  const swellUsage = Number.isFinite(swellMetrics.bufferUtilization)
+    ? Math.round(Math.max(0, swellMetrics.bufferUtilization) * 100)
+    : 0;
+  const swellPending = Math.max(0, swellMetrics.pending ?? 0);
   const reservePercent = formatMetric((plantMetrics.energyReserveRatio ?? 0) * 100, 0);
   const avgHeightMetric = formatMetric(plantMetrics.averageHeight);
   const avgMassMetric = formatMetric(plantMetrics.averageMass, 1);
@@ -7898,12 +8029,25 @@ function updateDebugConsole(deltaTime) {
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
     `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
+    `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
     `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
     `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
     `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
     `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
     `GL error: ${lastGlError}`,
   ];
+
+  if (swellFlags.spawnBacklog || swellFlags.overCapacity) {
+    info.push(
+      `Marejadas estado: backlog=${swellFlags.spawnBacklog ? 'sí' : 'no'} sobrecapacidad=${swellFlags.overCapacity ? 'sí' : 'no'} pendientes=${swellPending}`,
+    );
+  }
+  const lastUpdateDuration = Number.isFinite(waterSwellDiagnostics.lastUpdateDurationMs)
+    ? waterSwellDiagnostics.lastUpdateDurationMs.toFixed(3)
+    : '---';
+  info.push(
+    `Marejadas diagnóstico: última carga=${lastUpdateDuration}ms sobrecargas=${waterSwellDiagnostics.oversubscribedFrames} error=${waterSwellDiagnostics.lastError ?? 'ninguno'}`,
+  );
 
   const audioDiagnostics = ambientAudioState?.diagnostics;
   if (audioDiagnostics) {
@@ -8029,6 +8173,36 @@ function loop(currentTime) {
     simulationInfo.weather.windCulled = weatherState.wind.metrics.culled;
     simulationInfo.weather.windGeometryRejected = weatherState.wind.metrics.geometryRejected;
     simulationInfo.weather.clouds = weatherState.clouds.metrics.count;
+    const swellMetrics = waterSwellState?.metrics;
+    const swellInfo = simulationInfo.weather.swells;
+    if (swellInfo) {
+      if (swellMetrics) {
+        swellInfo.active = swellMetrics.active ?? waterSwellActiveCount;
+        swellInfo.spawned = swellMetrics.spawned ?? 0;
+        swellInfo.culled = swellMetrics.culled ?? 0;
+        swellInfo.overflowed = swellMetrics.overflowed ?? 0;
+        swellInfo.bufferUtilization = swellMetrics.bufferUtilization ?? 0;
+        swellInfo.pending = swellMetrics.pending ?? 0;
+        swellInfo.lastSpawnTime = swellMetrics.lastSpawnTime ?? null;
+      } else {
+        swellInfo.active = waterSwellActiveCount;
+        swellInfo.spawned = 0;
+        swellInfo.culled = 0;
+        swellInfo.overflowed = 0;
+        swellInfo.bufferUtilization = 0;
+        swellInfo.pending = 0;
+        swellInfo.lastSpawnTime = null;
+      }
+    }
+    if (simulationInfo.weather.diagnostics && simulationInfo.weather.diagnostics.swells) {
+      const swellDiagnostics = simulationInfo.weather.diagnostics.swells;
+      swellDiagnostics.resets = waterSwellDiagnostics.resets;
+      swellDiagnostics.oversubscribedFrames = waterSwellDiagnostics.oversubscribedFrames;
+      swellDiagnostics.lastUpdateDurationMs = waterSwellDiagnostics.lastUpdateDurationMs;
+      swellDiagnostics.lastError = waterSwellDiagnostics.lastError;
+      swellDiagnostics.spawnBacklog = Boolean(waterSwellState?.flags?.spawnBacklog);
+      swellDiagnostics.overCapacity = Boolean(waterSwellState?.flags?.overCapacity);
+    }
     simulationInfo.celestial.sunAltitude = dayNightCycleState.sunAltitude;
     simulationInfo.celestial.moonAltitude = dayNightCycleState.moonAltitude;
     simulationInfo.celestial.sunlight = dayNightCycleState.sunlightIntensity;
