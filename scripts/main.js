@@ -2019,8 +2019,11 @@ const fragmentSource = `
     float rawSunSpec = pow(max(0.0, dot(normal, sunHalf)), specularPower);
     float rawMoonSpec = pow(max(0.0, dot(normal, moonHalf)), specularPower);
 
-    float sunSpec = rawSunSpec * sunSpecularStrength * surfaceSpecularStrength;
-    float moonSpec = rawMoonSpec * moonSpecularStrength * surfaceSpecularStrength;
+    float sunVisibility = sunDiffuse > 0.0 ? 1.0 : 0.0;
+    float moonVisibility = moonDiffuse > 0.0 ? 1.0 : 0.0;
+
+    float sunSpec = rawSunSpec * sunSpecularStrength * surfaceSpecularStrength * sunVisibility;
+    float moonSpec = rawMoonSpec * moonSpecularStrength * surfaceSpecularStrength * moonVisibility;
 
     vec3 lighting = ambientLightColor +
       sunLightColor * (sunDiffuse + sunSpec) +
