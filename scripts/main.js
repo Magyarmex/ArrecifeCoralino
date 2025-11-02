@@ -1,92 +1,86 @@
-const runtimeGlobal =
-  typeof globalThis !== 'undefined'
-    ? globalThis
-    : typeof self !== 'undefined'
-    ? self
-    : typeof window !== 'undefined'
-    ? window
-    : typeof global !== 'undefined'
-    ? global
-    : {};
+((runtimeGlobalCandidate) => {
+  const runtimeGlobal =
+    runtimeGlobalCandidate && typeof runtimeGlobalCandidate === 'object'
+      ? runtimeGlobalCandidate
+      : {};
 
-const uiDiagnostics = {
-  rebinds: 0,
-  lastRebindId: null,
-  lastMismatchOwner: null,
-};
+  const runtimeState =
+    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ &&
+    typeof runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ === 'object'
+      ? runtimeGlobal.__ARRECIFE_RUNTIME_STATE__
+      : (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ = {
+          bootstrapAttempts: 0,
+          issues: [],
+          fallbackFactories: null,
+          reportedFallbacks: null,
+          uiFallbackEvents: null,
+        });
 
-function getCurrentDocumentElement(id) {
-  if (typeof document === 'undefined' || typeof document.getElementById !== 'function') {
-    return null;
-  }
-  const element = document.getElementById(id);
-  return ensureCurrentDocumentElement(element, id);
-}
+  runtimeState.bootstrapGuards = Math.max(0, runtimeState.bootstrapGuards ?? 0);
 
-let canvas = getCurrentDocumentElement('scene');
-const overlay = getCurrentDocumentElement('overlay');
-const simulationHud = getCurrentDocumentElement('simulation-hud');
-const startButton = getCurrentDocumentElement('start-button');
-let debugConsole = getCurrentDocumentElement('debug-console');
-let debugPanel = getCurrentDocumentElement('debug-panel');
-let debugToggleButton = getCurrentDocumentElement('debug-toggle');
-const settingsToggle = getCurrentDocumentElement('settings-toggle');
-const settingsPanel = getCurrentDocumentElement('settings-panel');
-const seedInput = getCurrentDocumentElement('seed-input');
-const randomSeedButton = getCurrentDocumentElement('random-seed');
-const simulationClock = getCurrentDocumentElement('simulation-clock');
-const simulationSpeedIndicator = getCurrentDocumentElement('simulation-speed-indicator');
-const simulationSpeedSlider = getCurrentDocumentElement('simulation-speed');
-const simulationSpeedDisplay = getCurrentDocumentElement('simulation-speed-display');
-const simulationSpeedSettingsDisplay = getCurrentDocumentElement(
-  'simulation-speed-display-settings'
-);
-const dayCycleProgressTrack = getCurrentDocumentElement('day-cycle-progress-track');
-const dayCycleProgressFill = getCurrentDocumentElement('day-cycle-progress-fill');
-const dayCyclePhaseIcons = Array.from(
-  document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
-);
-const dayCyclePhaseIconMap = new Map(
-  dayCyclePhaseIcons
-    .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
-    .filter(([phase, element]) => phase && element),
-);
-const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
-const musicToggle = getCurrentDocumentElement('audio-music-toggle');
-
-function ensureCurrentDocumentElement(element, id) {
-  if (!element || typeof document === 'undefined') {
-    return element;
-  }
-  const owner = element.ownerDocument;
-  if (owner && owner !== document) {
-    let mismatchOrigin = null;
-    try {
-      mismatchOrigin =
-        typeof owner.URL === 'string'
-          ? owner.URL
-          : owner?.location && typeof owner.location.href === 'string'
-          ? owner.location.href
-          : null;
-    } catch (error) {
-      mismatchOrigin = null;
+  if (runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__) {
+    runtimeState.bootstrapGuards += 1;
+    runtimeState.lastBootstrapGuard = Date.now();
+    const issues = Array.isArray(runtimeState.issues)
+      ? runtimeState.issues
+      : (runtimeState.issues = []);
+    issues.push({
+      severity: 'fatal',
+      context: 'bootstrap',
+      error:
+        'Se bloqueó una inicialización duplicada de "scripts/main.js" para evitar conflictos de constantes.',
+      timestamp: runtimeState.lastBootstrapGuard,
+      code: 'duplicate-bootstrap',
+    });
+    while (issues.length > 8) {
+      issues.shift();
     }
-    uiDiagnostics.rebinds += 1;
-    uiDiagnostics.lastRebindId = typeof id === 'string' ? id : null;
-    uiDiagnostics.lastMismatchOwner = mismatchOrigin;
-    if (typeof id === 'string') {
-      const replacement = document.getElementById(id);
-      if (replacement && replacement !== element) {
-        return replacement;
-      }
+    runtimeGlobal.__ARRECIFE_DUPLICATE_BOOTSTRAP__ = true;
+    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('[Arrecife] Inicialización duplicada bloqueada.', issues[issues.length - 1]);
     }
-    return null;
+    return;
   }
-  return element;
-}
 
-let debugConsoleHeartbeatId = null;
-const DEBUG_PANEL_HEARTBEAT_MS = 1000;
+  runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__ = true;
+  runtimeGlobal.__ARRECIFE_DUPLICATE_BOOTSTRAP__ = false;
+  runtimeState.lastBootstrapTime = Date.now();
+
+  let canvas = document.getElementById('scene');
+  const overlay = document.getElementById('overlay');
+  const simulationHud = document.getElementById('simulation-hud');
+  const startButton = document.getElementById('start-button');
+  let debugConsole = document.getElementById('debug-console');
+  let debugPanel = document.getElementById('debug-panel');
+  let debugToggleButton = document.getElementById('debug-toggle');
+  const cameraNearDisplay = document.getElementById('camera-near-display');
+  const cameraFarDisplay = document.getElementById('camera-far-display');
+  const settingsToggle = document.getElementById('settings-toggle');
+  const settingsPanel = document.getElementById('settings-panel');
+  const seedInput = document.getElementById('seed-input');
+  const randomSeedButton = document.getElementById('random-seed');
+  const simulationClock = document.getElementById('simulation-clock');
+  const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
+  const simulationSpeedSlider = document.getElementById('simulation-speed');
+  const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
+  const simulationSpeedSettingsDisplay = document.getElementById(
+    'simulation-speed-display-settings',
+  );
+  const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
+  const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
+  const dayCyclePhaseIcons = Array.from(
+    document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
+  );
+  const dayCyclePhaseIconMap = new Map(
+    dayCyclePhaseIcons
+      .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
+      .filter(([phase, element]) => phase && element),
+  );
+  const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
+  const musicToggle = document.getElementById('audio-music-toggle');
+
+  let debugConsoleHeartbeatId = null;
+  const DEBUG_PANEL_HEARTBEAT_MS = 1000;
 
 function createFallbackDebugPanel() {
   const supportsDom =
@@ -192,17 +186,8 @@ function ensureDebugPanelHeartbeat() {
   }, DEBUG_PANEL_HEARTBEAT_MS);
 }
 
-const runtimeState =
-  (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ =
-    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ || {
-      bootstrapAttempts: 0,
-      issues: [],
-      fallbackFactories: null,
-      reportedFallbacks: null,
-      uiFallbackEvents: null,
-    });
-
-runtimeState.bootstrapAttempts += 1;
+runtimeState.bootstrapAttempts = Math.max(0, runtimeState.bootstrapAttempts ?? 0) + 1;
+runtimeState.totalBootstraps = Math.max(0, runtimeState.totalBootstraps ?? 0) + 1;
 
 const runtimeIssues = Array.isArray(runtimeState.issues)
   ? runtimeState.issues
@@ -8376,36 +8361,6 @@ const simulationInfo = {
     startupLightColor: lightingDiagnostics.startupLightColor.slice(),
     startupSunAltitude: lightingDiagnostics.startupSunAltitude,
   },
-  camera: {
-    position: initialCameraPosition.slice(),
-    near: CAMERA_NEAR_PLANE,
-    far: CAMERA_BASE_FAR_PLANE,
-    starMargin: CAMERA_STAR_MARGIN,
-    starFarthest: 0,
-    starShortfall: 0,
-    adjustments: 0,
-    flags: {
-      frustumClipping: false,
-      baseFrustumExceeded: false,
-    },
-  },
-  visibility: {
-    lastHiddenAt: visibilityDiagnostics.lastHiddenAt,
-    lastVisibleAt: visibilityDiagnostics.lastVisibleAt,
-    suppressedDeltaMs: visibilityDiagnostics.suppressedDeltaMs,
-    totalSuppressedMs: visibilityDiagnostics.totalSuppressedMs,
-    resets: visibilityDiagnostics.resets,
-  },
-  geometry: {
-    lastFailureLabel: geometryDiagnostics.lastFailureLabel,
-    lastFailureTime: geometryDiagnostics.lastFailureTime,
-    failures: geometryDiagnostics.failures,
-  },
-  ui: {
-    rebinds: uiDiagnostics.rebinds,
-    lastRebindId: uiDiagnostics.lastRebindId,
-    lastMismatchOwner: uiDiagnostics.lastMismatchOwner,
-  },
 };
 
 if (typeof window !== 'undefined') {
@@ -8555,6 +8510,7 @@ function computeCameraFrustum() {
   cameraDiagnostics.starMargin = desiredFar - farthestStar;
   cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
   cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.starMargin;
 
   if (Math.abs(desiredFar - previousFar) > 0.5) {
     cameraDiagnostics.adjustments += 1;
@@ -8562,6 +8518,7 @@ function computeCameraFrustum() {
 
   cameraDiagnostics.far = desiredFar;
   cameraDiagnostics.lastUpdateTime = getTimestamp();
+  cameraDiagnostics.metrics.lastUpdateTime = cameraDiagnostics.lastUpdateTime;
 
   starFieldState.metrics.frustumMargin = cameraDiagnostics.starMargin;
   starFieldState.metrics.baseFarShortfall = cameraDiagnostics.metrics.starShortfall;
@@ -9437,52 +9394,48 @@ function updateDebugConsole(deltaTime) {
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
     : 'Ninguna';
 
-  const info = [
-    `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
-    `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
-    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
-    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
-    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
-    `Visibilidad: reanudaciones=${visibilityDiagnostics.resets} pausa_ms=${visibilityDiagnostics.suppressedDeltaMs.toFixed(1)} acumulado_ms=${visibilityDiagnostics.totalSuppressedMs.toFixed(1)}`,
-    `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
-    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
-    `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
-    `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
-    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
-    `Luz global: rgb=${lightingDiagnostics.latestLightColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} sol=${lightingDiagnostics.latestSunAltitude.toFixed(1)} luz=${(lightingDiagnostics.latestDaylight * 100).toFixed(0)}%`,
-    `Luz noche: factor=${(lightingDiagnostics.latestNightFactor * 100).toFixed(0)}% retención=${(lightingDiagnostics.latestNightRetention * 100).toFixed(0)}% intensidad=${(lightingDiagnostics.latestIntensity * 100).toFixed(0)}%`,
-    `Terreno seed: ${terrainInfo.seed}`,
-    `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
-    `UI rebinds: ${uiDiagnostics.rebinds} último=${uiDiagnostics.lastRebindId ?? 'n/d'}`,
-    `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
-    `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
-    `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
-      featureStats.ravine,
-    )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
-    `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} especular=${
-      terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'
-    })`,
-    `Rocas generadas: ${terrainInfo.rockCount}`,
-    `Modelos disponibles: ${modelLibrary.length}`,
-    `Selección: ${selectionStatus}`,
-    `Movimiento activo: ${activeMovement || 'Ninguno'}`,
-    `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
-    `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
-    `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
-    `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
-    `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
-    `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
-    `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} cobertura=${starCoverage} balance=${starSkew} rango=${starRange} margen=${starMargin} déficit_base=${starShortfall} defectuosas=${starInvalid} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
-    `Geometría diag: fallos=${geometryDiagnostics.failures} último=${geometryDiagnostics.lastFailureLabel ?? 'ninguno'}`,
-    `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
-    `GL error: ${lastGlError}`,
-  ];
+  const clipDeviation = Number.isFinite(cameraDiagnostics.lastDeviation)
+    ? cameraDiagnostics.lastDeviation
+    : 0;
+  const clipOverrideActive = Boolean(cameraDiagnostics.flags?.overrideActive);
+  const clipInvalidOrdering = Boolean(cameraDiagnostics.flags?.invalidOrdering);
+  const cameraOverrides = Math.max(0, cameraDiagnostics.overrides ?? 0);
+  const lastOverrideLabel =
+    typeof cameraDiagnostics.lastOverrideTimestamp === 'number'
+      ? new Date(cameraDiagnostics.lastOverrideTimestamp).toISOString()
+      : cameraDiagnostics.lastOverrideTimestamp ?? 'n/d';
+  const baseClipLabel = `${CAMERA_BASE_NEAR_PLANE.toFixed(2)}/${CAMERA_BASE_FAR_PLANE.toFixed(1)}`;
+  const activeClipLabel = `${CAMERA_NEAR_PLANE.toFixed(2)}/${CAMERA_FAR_PLANE.toFixed(1)}`;
+
+  const now = Date.now();
+  cameraDisplayDiagnostics.lastUpdateTime = now;
+  cameraDisplayDiagnostics.updates = Math.max(
+    0,
+    (cameraDisplayDiagnostics.updates ?? 0) + 1,
+  );
+  let missingCameraDisplays = 0;
+  if (
+    cameraNearDisplay &&
+    typeof cameraNearDisplay === 'object' &&
+    'textContent' in cameraNearDisplay
+  ) {
+    cameraNearDisplay.textContent = CAMERA_NEAR_PLANE.toFixed(2);
+  } else {
+    missingCameraDisplays += 1;
+  }
+  if (
+    cameraFarDisplay &&
+    typeof cameraFarDisplay === 'object' &&
+    'textContent' in cameraFarDisplay
+  ) {
+    cameraFarDisplay.textContent = CAMERA_FAR_PLANE.toFixed(1);
+  } else {
+    missingCameraDisplays += 1;
+  }
+  cameraDisplayDiagnostics.missingElements = missingCameraDisplays;
+  if (missingCameraDisplays > 0) {
+    cameraDisplayDiagnostics.lastMissingTimestamp = now;
+  }
 
   const cameraFarLabel = CAMERA_FAR_PLANE.toFixed(1);
   const marginEstimate = Number.isFinite(cameraDiagnostics.metrics.marginEstimate)
@@ -10095,3 +10048,14 @@ function loop(currentTime) {
 }
 
 requestAnimationFrame(loop);
+})(
+  typeof globalThis !== 'undefined'
+    ? globalThis
+    : typeof self !== 'undefined'
+    ? self
+    : typeof window !== 'undefined'
+    ? window
+    : typeof global !== 'undefined'
+    ? global
+    : {},
+);
