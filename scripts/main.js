@@ -371,6 +371,817 @@ const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   : (runtimeState.pendingIssues = []);
 
 const MAX_UI_FALLBACK_EVENTS = 12;
+
+const WATER_CHEMISTRY_DEFAULTS = Object.freeze({
+  salinity: { value: 35, units: 'PSU (g/kg)' },
+  chloride: { value: 19000, units: 'mg/L' },
+  sodium: { value: 10500, units: 'mg/L' },
+  sulfate: { value: 2700, units: 'mg/L' },
+  magnesium: { value: 1300, units: 'mg/L' },
+  calcium: { value: 400, units: 'mg/L' },
+  potassium: { value: 380, units: 'mg/L' },
+  bicarbonateCarbonate: { value: 122.5, units: 'mg/L' },
+  bromide: { value: 65, units: 'mg/L' },
+  strontium: { value: 9, units: 'mg/L' },
+  boron: { value: 0.43, units: 'mmol/kg' },
+  dissolvedInorganicCarbon: { value: 2050, units: 'µmol/kg' },
+  dissolvedOxygen: { value: 6.5, units: 'mg/L' },
+  dissolvedInorganicNitrogen: { value: 0.25, units: 'µM' },
+  ammonium: { value: 0.35, units: 'µM' },
+  phosphate: { value: 0.08, units: 'µM' },
+  silicate: { value: 1.2, units: 'µM' },
+  iron: { value: 0.2, units: 'nM' },
+});
+
+const ORGANISM_CONSTANTS = Object.freeze({
+  MASS_PER_100K_CALORIES: 70,
+  MASS_PER_CALORIE: 70 / 100000,
+  STARVATION_BUFFER_DAYS: 1,
+  PREGNANCY_EXTRA_NEED: 0.2,
+  ELDERLY_EXTRA_DEMAND: 0.1,
+  DEFAULT_GESTATION_FRACTION: 1 / 8,
+  DEFAULT_HATCH_FRACTION: 1 / 8,
+  DENSITY_KG_PER_M3: Object.freeze({
+    animal: 1030,
+    plant: 650,
+    cnidarian: 1040,
+    jelly: 1035,
+  }),
+});
+
+const NUTRIENT_DENSITIES = Object.freeze({
+  fish: Object.freeze({
+    carbon: 0.07,
+    nitrogen: 0.019,
+    phosphorus: 0.0085,
+    sulfur: 0.0018,
+  }),
+  jellyfish: Object.freeze({
+    carbon: 0.0014,
+    nitrogen: 0.0007,
+    phosphorus: 0.00014,
+    sulfur: 0.0009,
+  }),
+  algae: Object.freeze({
+    carbon: 0.045,
+    nitrogen: 0.007,
+    phosphorus: 0.0012,
+    sulfur: 0.0006,
+  }),
+  coral: Object.freeze({
+    carbon: 0.038,
+    nitrogen: 0.0065,
+    phosphorus: 0.0021,
+    sulfur: 0.0009,
+  }),
+});
+
+function clampNumber(value, min, max) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return min;
+  }
+  if (typeof min === 'number' && numericValue < min) {
+    return min;
+  }
+  if (typeof max === 'number' && numericValue > max) {
+    return max;
+  }
+  return numericValue;
+}
+
+function massFromCalories(calories) {
+  const positiveCalories = Math.max(0, Number(calories) || 0);
+  return positiveCalories * ORGANISM_CONSTANTS.MASS_PER_CALORIE;
+}
+
+function volumeFromMass(massKg, densityKey) {
+  const densityMap = ORGANISM_CONSTANTS.DENSITY_KG_PER_M3;
+  const density = densityMap[densityKey] || densityMap.animal;
+  if (!Number.isFinite(density) || density <= 0) {
+    return 0;
+  }
+  return Math.max(0, Number(massKg) || 0) / density;
+}
+
+function resolveNutrientProfile(nutrientDensity, calories) {
+  const totalCalories = Math.max(0, Number(calories) || 0);
+  const profile = {};
+  for (const [nutrient, perCalorie] of Object.entries(nutrientDensity)) {
+    const safePerCalorie = Number(perCalorie);
+    profile[nutrient] = Number.isFinite(safePerCalorie)
+      ? totalCalories * Math.max(0, safePerCalorie)
+      : 0;
+  }
+  return profile;
+}
+
+const SPECIES_BLUEPRINTS = Object.freeze({
+  'coral.ball': Object.freeze({
+    displayName: 'Ball Coral',
+    category: 'cnidarian',
+    lifecycle: Object.freeze({
+      lifespanYears: 50,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 1200,
+      caloriesAtAdult: 18000,
+      caloricDensity: 0.08,
+      densityKey: 'cnidarian',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 800,
+      pregnancyExtra: ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['plankton'],
+      competitionRadius: 3,
+    }),
+    reproduction: Object.freeze({
+      mode: 'broadcast',
+      eggsPerEvent: { min: 5, max: 40 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'sessile',
+      tasks: ['passive-feed', 'broadcast-spawn'],
+      awareness: { vision: 0, smell: 0, memoryMinutes: 0 },
+    }),
+    visuals: Object.freeze({
+      model: 'coral-ball',
+      coloration: 'bright -> muted by depth',
+      maxDepth: 12,
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'surface-cliff',
+      hatchDelayDays: 50 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.coral,
+    }),
+  }),
+  'algae.kelp': Object.freeze({
+    displayName: 'Kelp-like Algae',
+    category: 'algae',
+    lifecycle: Object.freeze({
+      lifespanYears: 10,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 400,
+      caloriesAtAdult: 5000,
+      caloricDensity: 0.12,
+      densityKey: 'plant',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 200,
+      pregnancyExtra: 0,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['sunlight'],
+      depthRange: [15, 19],
+    }),
+    reproduction: Object.freeze({
+      mode: 'spores',
+      eggsPerEvent: { min: 10, max: 25 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'sessile',
+      tasks: ['photosynthesis', 'propagate'],
+      awareness: { vision: 0, smell: 0, memoryMinutes: 0 },
+    }),
+    visuals: Object.freeze({
+      model: 'kelp-strand',
+      coloration: 'green vertical strands',
+      verticality: true,
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'open-shelf',
+      hatchDelayDays: 10 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.algae,
+    }),
+  }),
+  'algae.ball': Object.freeze({
+    displayName: 'Ball Algae',
+    category: 'algae',
+    lifecycle: Object.freeze({
+      lifespanYears: 6,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 500,
+      caloriesAtAdult: 8000,
+      caloricDensity: 0.05,
+      densityKey: 'plant',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 260,
+      pregnancyExtra: 0,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['sunlight'],
+    }),
+    reproduction: Object.freeze({
+      mode: 'spores',
+      eggsPerEvent: { min: 40, max: 120 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'sessile',
+      tasks: ['photosynthesis', 'propagate'],
+      awareness: { vision: 0, smell: 0, memoryMinutes: 0 },
+    }),
+    visuals: Object.freeze({
+      model: 'algae-ball',
+      coloration: 'brown-green radial strands',
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'open-shelf',
+      hatchDelayDays: 6 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.algae,
+    }),
+  }),
+  'jellyfish.pink': Object.freeze({
+    displayName: 'Moon Jellyfish',
+    category: 'cnidarian',
+    lifecycle: Object.freeze({
+      lifespanYears: 3,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 250,
+      caloriesAtAdult: 12000,
+      caloricDensity: 0.02,
+      densityKey: 'jelly',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 420,
+      pregnancyExtra: ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['plankton'],
+    }),
+    reproduction: Object.freeze({
+      mode: 'broadcast',
+      eggsPerEvent: { min: 10000, max: 10000 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'drifter',
+      tasks: ['wander', 'seek-mate'],
+      awareness: { vision: 6, smell: 6, memoryMinutes: 3 },
+    }),
+    visuals: Object.freeze({
+      model: 'jellyfish-pink',
+      coloration: 'semi-transparent pink bell with tentacles',
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'water-column',
+      hatchDelayDays: 3 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.jellyfish,
+    }),
+  }),
+  'turtle.green': Object.freeze({
+    displayName: 'Sea Turtle',
+    category: 'reptile',
+    lifecycle: Object.freeze({
+      lifespanYears: 80,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 2200,
+      caloriesAtAdult: 60000,
+      caloricDensity: 0.04,
+      densityKey: 'animal',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 4000,
+      pregnancyExtra: ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['algae.kelp', 'jellyfish.pink'],
+      omnivore: true,
+    }),
+    reproduction: Object.freeze({
+      mode: 'internal',
+      eggsPerEvent: { min: 120, max: 120 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'swimmer',
+      tasks: ['wander', 'find-food', 'find-mate', 'sleep'],
+      awareness: { vision: 30, smell: 8, memoryMinutes: 3 },
+    }),
+    visuals: Object.freeze({
+      model: 'sea-turtle',
+      coloration: 'brown shell with green limbs',
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'water-column',
+      hatchDelayDays: 80 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.fish,
+    }),
+  }),
+  'starfish.common': Object.freeze({
+    displayName: 'Reef Starfish',
+    category: 'echinoderm',
+    lifecycle: Object.freeze({
+      lifespanYears: 35,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 600,
+      caloriesAtAdult: 9000,
+      caloricDensity: 0.05,
+      densityKey: 'animal',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 700,
+      pregnancyExtra: ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['coral.ball', 'algae.ball'],
+    }),
+    reproduction: Object.freeze({
+      mode: 'broadcast',
+      eggsPerEvent: { min: 500, max: 500 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'crawler',
+      tasks: ['wander', 'find-food', 'find-mate', 'sleep'],
+      awareness: { vision: 0, smell: 8, memoryMinutes: 3 },
+    }),
+    visuals: Object.freeze({
+      model: 'starfish',
+      coloration: 'beige and pink arms',
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'currents',
+      hatchDelayDays: 35 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.fish,
+    }),
+  }),
+  'lobster.red': Object.freeze({
+    displayName: 'Spiny Lobster',
+    category: 'crustacean',
+    lifecycle: Object.freeze({
+      lifespanYears: 50,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 800,
+      caloriesAtAdult: 11000,
+      caloricDensity: 0.05,
+      densityKey: 'animal',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 1000,
+      pregnancyExtra: ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['starfish.common'],
+      secondary: ['plankton'],
+      secondaryLimit: 0.5,
+    }),
+    reproduction: Object.freeze({
+      mode: 'internal',
+      eggsPerEvent: { min: 50, max: 50 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'crawler',
+      tasks: ['wander', 'find-food', 'find-mate', 'dash-flee', 'sleep'],
+      awareness: { vision: 20, smell: 8, memoryMinutes: 3 },
+    }),
+    visuals: Object.freeze({
+      model: 'lobster',
+      coloration: 'bright red rectangle with limbs',
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'benthic',
+      hatchDelayDays: 50 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.fish,
+    }),
+  }),
+  'parrotfish.blue': Object.freeze({
+    displayName: 'Parrotfish',
+    category: 'fish',
+    lifecycle: Object.freeze({
+      lifespanYears: 7,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 1500,
+      caloriesAtAdult: 20000,
+      caloricDensity: 0.06,
+      densityKey: 'animal',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 1800,
+      pregnancyExtra: ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['starfish.common'],
+    }),
+    reproduction: Object.freeze({
+      mode: 'internal',
+      eggsPerEvent: { min: 10, max: 10 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'swimmer',
+      tasks: ['wander', 'find-food', 'hunt', 'find-mate', 'sleep'],
+      awareness: { vision: 30, smell: 8, memoryMinutes: 3 },
+    }),
+    visuals: Object.freeze({
+      model: 'parrotfish',
+      coloration: 'turquoise gradient with pink accents',
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'water-column',
+      hatchDelayDays: 7 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.fish,
+    }),
+  }),
+  'shark.reef': Object.freeze({
+    displayName: 'Reef Shark',
+    category: 'fish',
+    lifecycle: Object.freeze({
+      lifespanYears: 25,
+      gestationFraction: ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+      hatchFraction: ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    growth: Object.freeze({
+      caloriesAtBirth: 2500,
+      caloriesAtAdult: 80000,
+      caloricDensity: 0.07,
+      densityKey: 'animal',
+    }),
+    metabolism: Object.freeze({
+      dailyCalories: 6000,
+      pregnancyExtra: ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+      elderlyExtra: ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+    }),
+    diet: Object.freeze({
+      primary: ['turtle.green', 'lobster.red', 'parrotfish.blue'],
+      cannibalTolerance: 0.05,
+    }),
+    reproduction: Object.freeze({
+      mode: 'internal',
+      eggsPerEvent: { min: 3, max: 3 },
+    }),
+    behaviours: Object.freeze({
+      mobility: 'swimmer',
+      tasks: ['wander', 'hunt', 'find-mate', 'sleep'],
+      awareness: { vision: 30, smell: 8, memoryMinutes: 3 },
+      sprintMultiplier: 3,
+    }),
+    visuals: Object.freeze({
+      model: 'reef-shark',
+      coloration: 'grey body with white belly',
+    }),
+    eggs: Object.freeze({
+      tileAnchor: 'open-water',
+      hatchDelayDays: 25 * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+    }),
+    nutrients: Object.freeze({
+      perCalorie: NUTRIENT_DENSITIES.fish,
+    }),
+  }),
+});
+
+class SpeciesRegistry {
+  constructor(blueprints, options = {}) {
+    this.blueprints = new Map();
+    this.diagnostics = options.diagnostics || {
+      registrations: 0,
+      conflicts: 0,
+      invalid: 0,
+      lastError: null,
+      lastRegistration: null,
+      missing: 0,
+      individualSnapshots: 0,
+    };
+    this.massPerCalorie = ORGANISM_CONSTANTS.MASS_PER_CALORIE;
+    this.waterChemistry = options.waterChemistry || WATER_CHEMISTRY_DEFAULTS;
+
+    if (blueprints && typeof blueprints === 'object') {
+      for (const [speciesId, blueprint] of Object.entries(blueprints)) {
+        this.registerSpecies(speciesId, blueprint);
+      }
+    }
+  }
+
+  registerSpecies(speciesId, blueprint) {
+    if (typeof speciesId !== 'string' || !speciesId) {
+      this.diagnostics.invalid = Math.max(0, (this.diagnostics.invalid || 0) + 1);
+      this.diagnostics.lastError = 'ID de especie inválido';
+      return false;
+    }
+    if (this.blueprints.has(speciesId)) {
+      this.diagnostics.conflicts = Math.max(0, (this.diagnostics.conflicts || 0) + 1);
+      this.diagnostics.lastError = 'Conflicto de especie duplicada: ' + speciesId;
+      return false;
+    }
+    try {
+      const normalized = this.normalizeBlueprint(speciesId, blueprint);
+      this.blueprints.set(speciesId, normalized);
+      this.diagnostics.registrations = Math.max(
+        0,
+        (this.diagnostics.registrations || 0) + 1,
+      );
+      this.diagnostics.lastRegistration = Date.now();
+      return true;
+    } catch (error) {
+      this.diagnostics.invalid = Math.max(0, (this.diagnostics.invalid || 0) + 1);
+      this.diagnostics.lastError = String(error?.message || error || 'Error desconocido');
+      return false;
+    }
+  }
+
+  normalizeBlueprint(speciesId, blueprint) {
+    const safeBlueprint = blueprint && typeof blueprint === 'object' ? blueprint : {};
+    const lifecycle = safeBlueprint.lifecycle || {};
+    const growth = safeBlueprint.growth || {};
+    const metabolism = safeBlueprint.metabolism || {};
+    const behaviours = safeBlueprint.behaviours || {};
+    const diet = safeBlueprint.diet || {};
+    const reproduction = safeBlueprint.reproduction || {};
+    const nutrients = safeBlueprint.nutrients || {};
+
+    const lifespanYears = Number.isFinite(lifecycle.lifespanYears)
+      ? Math.max(1, lifecycle.lifespanYears)
+      : 1;
+
+    const normalizedBlueprint = {
+      id: speciesId,
+      displayName: safeBlueprint.displayName || speciesId,
+      category: safeBlueprint.category || 'unknown',
+      lifecycle: {
+        lifespanYears,
+        lifespanDays: Math.max(1, Math.round(lifespanYears)),
+        gestationFraction:
+          Number.isFinite(lifecycle.gestationFraction) && lifecycle.gestationFraction > 0
+            ? lifecycle.gestationFraction
+            : ORGANISM_CONSTANTS.DEFAULT_GESTATION_FRACTION,
+        hatchFraction:
+          Number.isFinite(lifecycle.hatchFraction) && lifecycle.hatchFraction > 0
+            ? lifecycle.hatchFraction
+            : ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION,
+      },
+      growth: {
+        caloriesAtBirth: Math.max(0, Number(growth.caloriesAtBirth) || 0),
+        caloriesAtAdult: Math.max(
+          Math.max(0, Number(growth.caloriesAtBirth) || 0),
+          Number(growth.caloriesAtAdult) || 0,
+        ),
+        caloricDensity: Math.max(0, Number(growth.caloricDensity) || 0),
+        densityKey: growth.densityKey || 'animal',
+      },
+      metabolism: {
+        dailyCalories: Math.max(0, Number(metabolism.dailyCalories) || 0),
+        pregnancyExtra:
+          Number.isFinite(metabolism.pregnancyExtra) && metabolism.pregnancyExtra >= 0
+            ? metabolism.pregnancyExtra
+            : ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED,
+        elderlyExtra:
+          Number.isFinite(metabolism.elderlyExtra) && metabolism.elderlyExtra >= 0
+            ? metabolism.elderlyExtra
+            : ORGANISM_CONSTANTS.ELDERLY_EXTRA_DEMAND,
+      },
+      diet: {
+        primary: Array.isArray(diet.primary) ? diet.primary.slice() : [],
+        secondary: Array.isArray(diet.secondary) ? diet.secondary.slice() : [],
+        omnivore: Boolean(diet.omnivore),
+        competitionRadius: Math.max(0, Number(diet.competitionRadius) || 0),
+        depthRange: Array.isArray(diet.depthRange) ? diet.depthRange.slice() : null,
+        cannibalTolerance: Math.max(0, Number(diet.cannibalTolerance) || 0),
+        secondaryLimit: clampNumber(diet.secondaryLimit, 0, 1),
+      },
+      reproduction: {
+        mode: reproduction.mode || 'broadcast',
+        eggsPerEvent: reproduction.eggsPerEvent || { min: 0, max: 0 },
+      },
+      behaviours: {
+        mobility: behaviours.mobility || 'unknown',
+        tasks: Array.isArray(behaviours.tasks) ? behaviours.tasks.slice() : [],
+        awareness: {
+          vision: Math.max(0, Number(behaviours.awareness?.vision) || 0),
+          smell: Math.max(0, Number(behaviours.awareness?.smell) || 0),
+          memoryMinutes: Math.max(0, Number(behaviours.awareness?.memoryMinutes) || 0),
+        },
+        sprintMultiplier: Math.max(1, Number(behaviours.sprintMultiplier) || 1),
+      },
+      visuals: Object.assign(
+        {
+          model: 'generic',
+          coloration: 'unspecified',
+        },
+        safeBlueprint.visuals || {},
+      ),
+      eggs: Object.assign(
+        {
+          tileAnchor: 'water-column',
+          hatchDelayDays: Math.max(1, Math.round(lifespanYears * ORGANISM_CONSTANTS.DEFAULT_HATCH_FRACTION)),
+        },
+        safeBlueprint.eggs || {},
+      ),
+      nutrients: {
+        perCalorie:
+          nutrients.perCalorie && typeof nutrients.perCalorie === 'object'
+            ? nutrients.perCalorie
+            : NUTRIENT_DENSITIES.fish,
+      },
+    };
+
+    return normalizedBlueprint;
+  }
+
+  getSpecies(speciesId) {
+    if (!this.blueprints.has(speciesId)) {
+      this.diagnostics.missing = Math.max(0, (this.diagnostics.missing || 0) + 1);
+      this.diagnostics.lastError = 'Especie no registrada: ' + speciesId;
+      return null;
+    }
+    return this.blueprints.get(speciesId);
+  }
+
+  getAllSpeciesIds() {
+    return Array.from(this.blueprints.keys());
+  }
+
+  getAllBlueprints() {
+    return Array.from(this.blueprints.values());
+  }
+
+  determineLifeStage(species, ageDays) {
+    const lifespanDays = species.lifecycle.lifespanDays;
+    const normalizedAge = lifespanDays > 0 ? ageDays / lifespanDays : 0;
+    if (normalizedAge < 0.25) {
+      return 'baby';
+    }
+    if (normalizedAge < 0.5) {
+      return 'juvenile';
+    }
+    if (normalizedAge <= 1) {
+      return 'adult';
+    }
+    return 'elderly';
+  }
+
+  createIndividualSnapshot(speciesId, overrides = {}) {
+    const species = this.getSpecies(speciesId);
+    if (!species) {
+      return null;
+    }
+
+    const ageDays = Math.max(0, Number(overrides.ageDays) || 0);
+    const calories = Math.max(
+      0,
+      Number(
+        overrides.calories ??
+          (overrides.lifeStage === 'adult'
+            ? species.growth.caloriesAtAdult
+            : species.growth.caloriesAtBirth),
+      ) || 0,
+    );
+    const stage = overrides.lifeStage || this.determineLifeStage(species, ageDays);
+    const hungerMax = species.metabolism.dailyCalories;
+    const hunger = clampNumber(
+      overrides.hunger ?? hungerMax,
+      0,
+      hungerMax,
+    );
+    const energyMax = overrides.energyMax || 480;
+    const energy = clampNumber(overrides.energy ?? energyMax, 0, energyMax);
+    const massKg = massFromCalories(calories);
+    const volume = volumeFromMass(massKg, species.growth.densityKey);
+    const nutrients = resolveNutrientProfile(species.nutrients.perCalorie, calories);
+
+    const snapshot = {
+      id: overrides.id || null,
+      speciesId,
+      displayName: species.displayName,
+      ageDays,
+      lifeStage: stage,
+      calories,
+      hunger,
+      hungerMax,
+      energy,
+      energyMax,
+      massKg,
+      volumeCubicMeters: volume,
+      nutrients,
+      pregnancy: overrides.pregnancy || {
+        active: false,
+        progress: 0,
+      },
+      diagnostics: {
+        lastUpdate: Date.now(),
+        computedStage: stage,
+      },
+    };
+
+    this.diagnostics.individualSnapshots = Math.max(
+      0,
+      (this.diagnostics.individualSnapshots || 0) + 1,
+    );
+
+    return snapshot;
+  }
+
+  getPublicView() {
+    return Object.freeze({
+      constants: ORGANISM_CONSTANTS,
+      waterChemistry: WATER_CHEMISTRY_DEFAULTS,
+      species: this.getAllBlueprints().map((blueprint) => ({
+        id: blueprint.id,
+        displayName: blueprint.displayName,
+        category: blueprint.category,
+        lifecycle: blueprint.lifecycle,
+        growth: blueprint.growth,
+        metabolism: blueprint.metabolism,
+        diet: blueprint.diet,
+        behaviours: blueprint.behaviours,
+        visuals: blueprint.visuals,
+        eggs: blueprint.eggs,
+        nutrients: blueprint.nutrients,
+      })),
+    });
+  }
+}
+
+const speciesRegistryDiagnostics =
+  runtimeState.speciesRegistryDiagnostics &&
+  typeof runtimeState.speciesRegistryDiagnostics === 'object'
+    ? runtimeState.speciesRegistryDiagnostics
+    : (runtimeState.speciesRegistryDiagnostics = {
+        registrations: 0,
+        conflicts: 0,
+        invalid: 0,
+        lastError: null,
+        lastRegistration: null,
+        missing: 0,
+        individualSnapshots: 0,
+      });
+
+let speciesRegistry = null;
+try {
+  speciesRegistry = new SpeciesRegistry(SPECIES_BLUEPRINTS, {
+    diagnostics: speciesRegistryDiagnostics,
+    waterChemistry: WATER_CHEMISTRY_DEFAULTS,
+  });
+  runtimeState.speciesRegistry = speciesRegistry;
+  runtimeState.waterChemistryDefaults = WATER_CHEMISTRY_DEFAULTS;
+  runtimeState.speciesSamples = speciesRegistry
+    ? speciesRegistry.getAllSpeciesIds().reduce((accumulator, speciesId) => {
+        const sample = speciesRegistry.createIndividualSnapshot(speciesId, {});
+        if (sample) {
+          accumulator[speciesId] = sample;
+        }
+        return accumulator;
+      }, {})
+    : {};
+  runtimeState.speciesRegistryPublicView = speciesRegistry.getPublicView();
+  runtimeGlobal.__ARRECIFE_SPECIES_REGISTRY__ = runtimeState.speciesRegistryPublicView;
+  runtimeGlobal.__ARRECIFE_WATER_CHEMISTRY__ = WATER_CHEMISTRY_DEFAULTS;
+} catch (speciesRegistryError) {
+  speciesRegistryDiagnostics.lastError = String(
+    speciesRegistryError?.message || speciesRegistryError || 'Error desconocido',
+  );
+  pendingRuntimeIssueQueue.push({
+    severity: 'error',
+    context: 'species-registry',
+    error:
+      'No se pudo inicializar el registro de especies: ' + speciesRegistryDiagnostics.lastError,
+  });
+}
+
 const modelLibrary = Array.isArray(runtimeGlobal.modelLibrary)
   ? runtimeGlobal.modelLibrary
   : [];
