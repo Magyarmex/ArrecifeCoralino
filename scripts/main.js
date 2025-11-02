@@ -424,39 +424,116 @@ const ambientAudioState = {
 
 const ARRECIFE_DEFAULT_CAMERA_NEAR = 0.1;
 const ARRECIFE_DEFAULT_CAMERA_FAR = 500;
+const MIN_ARRECIFE_CAMERA_STAR_MARGIN = 40;
+const DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN = 120;
 
-const ARRECIFE_CAMERA_BASE_NEAR =
+const legacyCameraNearBinding = runtimeGlobal.CAMERA_NEAR_PLANE;
+const legacyCameraFarBinding = runtimeGlobal.CAMERA_FAR_PLANE;
+const legacyCameraMarginBinding = runtimeGlobal.CAMERA_STAR_MARGIN;
+
+const legacyCameraNear =
+  Number.isFinite(legacyCameraNearBinding) && legacyCameraNearBinding > 0
+    ? legacyCameraNearBinding
+    : undefined;
+const legacyCameraFar =
+  Number.isFinite(legacyCameraFarBinding) &&
+  legacyCameraFarBinding > (legacyCameraNear ?? 0)
+    ? legacyCameraFarBinding
+    : undefined;
+const legacyCameraMargin =
+  Number.isFinite(legacyCameraMarginBinding) && legacyCameraMarginBinding > 0
+    ? legacyCameraMarginBinding
+    : undefined;
+
+let ARRECIFE_CAMERA_BASE_NEAR =
   Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR) && runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR > 0
     ? runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR
-    : ARRECIFE_DEFAULT_CAMERA_NEAR;
-const ARRECIFE_CAMERA_BASE_FAR =
-  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR) && runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR > ARRECIFE_CAMERA_BASE_NEAR
-    ? runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR
-    : ARRECIFE_DEFAULT_CAMERA_FAR;
+    : undefined;
 
-const ARRECIFE_CAMERA_NEAR =
+if (ARRECIFE_CAMERA_BASE_NEAR === undefined && legacyCameraNear !== undefined) {
+  ARRECIFE_CAMERA_BASE_NEAR = legacyCameraNear;
+}
+
+if (ARRECIFE_CAMERA_BASE_NEAR === undefined) {
+  ARRECIFE_CAMERA_BASE_NEAR = ARRECIFE_DEFAULT_CAMERA_NEAR;
+}
+
+let ARRECIFE_CAMERA_BASE_FAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR) &&
+  runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR > ARRECIFE_CAMERA_BASE_NEAR
+    ? runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR
+    : undefined;
+
+if (
+  ARRECIFE_CAMERA_BASE_FAR === undefined &&
+  legacyCameraFar !== undefined &&
+  legacyCameraFar > ARRECIFE_CAMERA_BASE_NEAR
+) {
+  ARRECIFE_CAMERA_BASE_FAR = legacyCameraFar;
+}
+
+if (ARRECIFE_CAMERA_BASE_FAR === undefined) {
+  ARRECIFE_CAMERA_BASE_FAR = ARRECIFE_DEFAULT_CAMERA_FAR;
+}
+
+let ARRECIFE_CAMERA_NEAR =
   Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_NEAR) && runtimeGlobal.ARRECIFE_CAMERA_NEAR > 0
     ? runtimeGlobal.ARRECIFE_CAMERA_NEAR
-    : ARRECIFE_CAMERA_BASE_NEAR;
-const ARRECIFE_CAMERA_FAR =
-  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_FAR) && runtimeGlobal.ARRECIFE_CAMERA_FAR > ARRECIFE_CAMERA_NEAR
+    : undefined;
+
+if (ARRECIFE_CAMERA_NEAR === undefined && legacyCameraNear !== undefined) {
+  ARRECIFE_CAMERA_NEAR = legacyCameraNear;
+}
+
+if (ARRECIFE_CAMERA_NEAR === undefined) {
+  ARRECIFE_CAMERA_NEAR = ARRECIFE_CAMERA_BASE_NEAR;
+}
+
+let ARRECIFE_CAMERA_FAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_FAR) &&
+  runtimeGlobal.ARRECIFE_CAMERA_FAR > ARRECIFE_CAMERA_NEAR
     ? runtimeGlobal.ARRECIFE_CAMERA_FAR
-    : ARRECIFE_CAMERA_BASE_FAR;
+    : undefined;
+
+if (
+  ARRECIFE_CAMERA_FAR === undefined &&
+  legacyCameraFar !== undefined &&
+  legacyCameraFar > ARRECIFE_CAMERA_NEAR
+) {
+  ARRECIFE_CAMERA_FAR = legacyCameraFar;
+}
+
+if (ARRECIFE_CAMERA_FAR === undefined) {
+  ARRECIFE_CAMERA_FAR = ARRECIFE_CAMERA_BASE_FAR;
+}
+
+let ARRECIFE_CAMERA_STAR_MARGIN =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN) &&
+  runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN >= MIN_ARRECIFE_CAMERA_STAR_MARGIN
+    ? runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN
+    : undefined;
+
+if (ARRECIFE_CAMERA_STAR_MARGIN === undefined && legacyCameraMargin !== undefined) {
+  ARRECIFE_CAMERA_STAR_MARGIN = Math.max(MIN_ARRECIFE_CAMERA_STAR_MARGIN, legacyCameraMargin);
+}
+
+if (ARRECIFE_CAMERA_STAR_MARGIN === undefined) {
+  ARRECIFE_CAMERA_STAR_MARGIN = DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN;
+}
 
 runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR = ARRECIFE_CAMERA_BASE_NEAR;
 runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR = ARRECIFE_CAMERA_BASE_FAR;
 runtimeGlobal.ARRECIFE_CAMERA_NEAR = ARRECIFE_CAMERA_NEAR;
 runtimeGlobal.ARRECIFE_CAMERA_FAR = ARRECIFE_CAMERA_FAR;
-
-const MIN_ARRECIFE_CAMERA_STAR_MARGIN = 40;
-const DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN = 120;
-const ARRECIFE_CAMERA_STAR_MARGIN =
-  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN) &&
-  runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN >= MIN_ARRECIFE_CAMERA_STAR_MARGIN
-    ? runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN
-    : DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN;
-
 runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN = ARRECIFE_CAMERA_STAR_MARGIN;
+
+// Preserve legacy globals when present so existing integrations continue to observe the same values.
+runtimeGlobal.CAMERA_NEAR_PLANE =
+  legacyCameraNearBinding !== undefined ? legacyCameraNearBinding : ARRECIFE_CAMERA_NEAR;
+runtimeGlobal.CAMERA_FAR_PLANE =
+  legacyCameraFarBinding !== undefined ? legacyCameraFarBinding : ARRECIFE_CAMERA_FAR;
+runtimeGlobal.CAMERA_STAR_MARGIN =
+  legacyCameraMarginBinding !== undefined ? legacyCameraMarginBinding : ARRECIFE_CAMERA_STAR_MARGIN;
 
 const cameraNamespaceDiagnostics =
   runtimeState.cameraNamespaceDiagnostics && typeof runtimeState.cameraNamespaceDiagnostics === 'object'
@@ -472,18 +549,14 @@ const cameraNamespaceDiagnostics =
 
 runtimeGlobal.__ARRECIFE_CAMERA_NAMESPACE__ = cameraNamespaceDiagnostics;
 
-const legacyCameraNear = runtimeGlobal.CAMERA_NEAR_PLANE;
-const legacyCameraFar = runtimeGlobal.CAMERA_FAR_PLANE;
-const legacyCameraMargin = runtimeGlobal.CAMERA_STAR_MARGIN;
-
 const legacyBindings = [];
-if (legacyCameraNear !== undefined) {
+if (legacyCameraNearBinding !== undefined) {
   legacyBindings.push('near');
 }
-if (legacyCameraFar !== undefined) {
+if (legacyCameraFarBinding !== undefined) {
   legacyBindings.push('far');
 }
-if (legacyCameraMargin !== undefined) {
+if (legacyCameraMarginBinding !== undefined) {
   legacyBindings.push('margin');
 }
 
