@@ -164,7 +164,7 @@ runtimeState.bootstrapAttempts += 1;
 const runtimeIssues = Array.isArray(runtimeState.issues)
   ? runtimeState.issues
   : (runtimeState.issues = []);
-const MAX_RUNTIME_ISSUES = 8;
+const MAX_RUNTIME_ISSUES = 16;
 
 const debugConsoleDiagnostics =
   runtimeState.debugConsoleDiagnostics && typeof runtimeState.debugConsoleDiagnostics === 'object'
@@ -188,6 +188,9 @@ const cameraDisplayDiagnostics =
         lastUpdateTime: 0,
         missingElements: 0,
         lastMissingTimestamp: null,
+        lastMarginEstimate: null,
+        lastFrustumStatus: 'seguro',
+        marginSamples: 0,
       });
 
 const simulationInfoDiagnostics =
@@ -364,6 +367,19 @@ cameraDiagnostics.flags = {
 };
 cameraDiagnostics.overrides = Math.max(0, cameraClipPlanes.overrides ?? 0);
 cameraDiagnostics.lastOverrideTimestamp = cameraClipPlanes.lastOverrideTimestamp ?? null;
+cameraDiagnostics.adjustments = Math.max(0, cameraDiagnostics.adjustments ?? 0);
+cameraDiagnostics.metrics =
+  cameraDiagnostics.metrics && typeof cameraDiagnostics.metrics === 'object'
+    ? cameraDiagnostics.metrics
+    : {
+        starFarthest: CAMERA_BASE_FAR_PLANE,
+        starShortfall: 0,
+        marginEstimate: CAMERA_STAR_MARGIN,
+      };
+cameraDiagnostics.starMargin = Number.isFinite(cameraDiagnostics.starMargin)
+  ? cameraDiagnostics.starMargin
+  : CAMERA_STAR_MARGIN;
+cameraDiagnostics.lastUpdateTime = cameraDiagnostics.lastUpdateTime ?? 0;
 
 if (cameraDiagnostics.flags.invalidOrdering) {
   pendingRuntimeIssueQueue.push({
@@ -1159,9 +1175,10 @@ function registerUiFallback(id, message, severity = 'error') {
   if (uiFallbackEvents.length > MAX_UI_FALLBACK_EVENTS) {
     uiFallbackEvents.shift();
   }
-  if (!existing) {
-    pendingRuntimeIssueQueue.push({ severity, context: 'ui', error: message });
-  }
+  const issueMessage =
+    count > 1 ? `${message} (repetido ${count} veces)` : message;
+  const issueSeverity = count > 1 ? 'warning' : severity;
+  recordRuntimeIssue(issueSeverity, 'ui', issueMessage);
   return reportedFallbacks[id];
 }
 
@@ -1446,6 +1463,10 @@ const diagnosticsToast =
     ? createDiagnosticsToast()
     : null;
 
+if (diagnosticsToast) {
+  runtimeGlobal.__ARRECIFE_DIAGNOSTICS_TOAST__ = diagnosticsToast;
+}
+
 const overlayErrorMessage =
   overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
     ? createOverlayErrorMessage(overlay)
@@ -1634,6 +1655,14 @@ function createOverlayErrorMessage(container) {
   return element;
 }
 
+function getDiagnosticsToast() {
+  const toast = runtimeGlobal.__ARRECIFE_DIAGNOSTICS_TOAST__;
+  if (toast && typeof toast === 'object') {
+    return toast;
+  }
+  return null;
+}
+
 function describeIssue(error) {
   if (!error) {
     return 'Error desconocido';
@@ -1664,23 +1693,24 @@ function formatIssueMessage(entry) {
 }
 
 function updateDiagnosticsToast() {
-  if (!diagnosticsToast) {
+  const toast = getDiagnosticsToast();
+  if (!toast) {
     return;
   }
   if (runtimeIssues.length === 0) {
-    diagnosticsToast.hidden = true;
+    toast.hidden = true;
     return;
   }
   const latest = runtimeIssues[0];
-  diagnosticsToast.hidden = false;
-  diagnosticsToast.textContent = `[${latest.timestamp}] ${
+  toast.hidden = false;
+  toast.textContent = `[${latest.timestamp}] ${
     latest.severity === 'fatal' ? 'Error crítico' : 'Problema'
   } en ${latest.context}: ${formatIssueMessage(latest)}`;
-  diagnosticsToast.style.background =
+  toast.style.background =
     latest.severity === 'fatal'
       ? 'rgba(162, 44, 44, 0.92)'
       : 'rgba(164, 115, 42, 0.92)';
-  diagnosticsToast.style.borderColor =
+  toast.style.borderColor =
     latest.severity === 'fatal'
       ? 'rgba(255, 128, 128, 0.65)'
       : 'rgba(255, 214, 153, 0.65)';
@@ -8295,6 +8325,7 @@ function computeCameraFrustum() {
   cameraDiagnostics.metrics.starFarthest = farthestStar;
   cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - CAMERA_BASE_FAR_PLANE);
   cameraDiagnostics.starMargin = desiredFar - farthestStar;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.starMargin;
   cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
   cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
 
@@ -9143,6 +9174,16 @@ function updateDebugConsole(deltaTime) {
       : cameraDiagnostics.lastOverrideTimestamp ?? 'n/d';
   const baseClipLabel = `${CAMERA_BASE_NEAR_PLANE.toFixed(2)}/${CAMERA_BASE_FAR_PLANE.toFixed(1)}`;
   const activeClipLabel = `${CAMERA_NEAR_PLANE.toFixed(2)}/${CAMERA_FAR_PLANE.toFixed(1)}`;
+  const cameraFarLabel = CAMERA_FAR_PLANE.toFixed(1);
+  const marginEstimate = Number.isFinite(cameraDiagnostics.metrics?.marginEstimate)
+    ? cameraDiagnostics.metrics.marginEstimate
+    : Number.isFinite(cameraDiagnostics.starMargin)
+    ? cameraDiagnostics.starMargin
+    : CAMERA_STAR_MARGIN;
+  const cameraMarginLabel = Number.isFinite(marginEstimate)
+    ? marginEstimate.toFixed(1)
+    : CAMERA_STAR_MARGIN.toFixed(1);
+  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'riesgo' : 'seguro';
 
   const now = Date.now();
   cameraDisplayDiagnostics.lastUpdateTime = now;
@@ -9173,6 +9214,12 @@ function updateDebugConsole(deltaTime) {
   if (missingCameraDisplays > 0) {
     cameraDisplayDiagnostics.lastMissingTimestamp = now;
   }
+  cameraDisplayDiagnostics.lastMarginEstimate = marginEstimate;
+  cameraDisplayDiagnostics.lastFrustumStatus = frustumStatus;
+  cameraDisplayDiagnostics.marginSamples = Math.max(
+    0,
+    (cameraDisplayDiagnostics.marginSamples ?? 0) + 1,
+  );
 
   const info = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
@@ -9188,7 +9235,7 @@ function updateDebugConsole(deltaTime) {
     } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
     `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
-    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
+    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
     `Luz global: rgb=${lightingDiagnostics.latestLightColor
       .map((value) => value.toFixed(2))
       .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
@@ -9667,6 +9714,11 @@ function loop(currentTime) {
       cameraDisplayDebug.missingElements = cameraDisplayDiagnostics.missingElements ?? 0;
       cameraDisplayDebug.lastMissingTimestamp =
         cameraDisplayDiagnostics.lastMissingTimestamp ?? null;
+      cameraDisplayDebug.lastMarginEstimate =
+        cameraDisplayDiagnostics.lastMarginEstimate ?? null;
+      cameraDisplayDebug.lastFrustumStatus =
+        cameraDisplayDiagnostics.lastFrustumStatus ?? 'seguro';
+      cameraDisplayDebug.marginSamples = cameraDisplayDiagnostics.marginSamples ?? 0;
     }
     if (simulationInfo.audio) {
       simulationInfo.audio.enabled = ambientAudioState.enabled;
