@@ -198,7 +198,8 @@ const ambientAudioState = {
 };
 
 const DEFAULT_CAMERA_NEAR_PLANE = 0.1;
-const DEFAULT_CAMERA_FAR_PLANE = 500;
+const DEFAULT_CAMERA_FAR_PLANE = 1200;
+const DEFAULT_CAMERA_STAR_MARGIN = 180;
 
 const CAMERA_BASE_NEAR_PLANE =
   Number.isFinite(runtimeGlobal.CAMERA_BASE_NEAR_PLANE) && runtimeGlobal.CAMERA_BASE_NEAR_PLANE > 0
@@ -218,10 +219,16 @@ const CAMERA_FAR_PLANE =
     ? runtimeGlobal.CAMERA_FAR_PLANE
     : CAMERA_BASE_FAR_PLANE;
 
+const CAMERA_STAR_MARGIN =
+  Number.isFinite(runtimeGlobal.CAMERA_STAR_MARGIN) && runtimeGlobal.CAMERA_STAR_MARGIN >= 0
+    ? runtimeGlobal.CAMERA_STAR_MARGIN
+    : DEFAULT_CAMERA_STAR_MARGIN;
+
 runtimeGlobal.CAMERA_BASE_NEAR_PLANE = CAMERA_BASE_NEAR_PLANE;
 runtimeGlobal.CAMERA_BASE_FAR_PLANE = CAMERA_BASE_FAR_PLANE;
 runtimeGlobal.CAMERA_NEAR_PLANE = CAMERA_NEAR_PLANE;
 runtimeGlobal.CAMERA_FAR_PLANE = CAMERA_FAR_PLANE;
+runtimeGlobal.CAMERA_STAR_MARGIN = CAMERA_STAR_MARGIN;
 
 const cameraClipPlanes =
   runtimeState.cameraClipPlanes && typeof runtimeState.cameraClipPlanes === 'object'
