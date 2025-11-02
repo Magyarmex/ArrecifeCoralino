@@ -332,6 +332,9 @@ const cameraDisplayDiagnostics =
         lastMissingTimestamp: null,
         lastMarginEstimate: null,
         lastFrustumStatus: 'seguro',
+        lastFrustumStatusCode: 'OK',
+        frustumStatusUpdates: 0,
+        lastFrustumStatusChange: null,
         marginSamples: 0,
       });
 
@@ -350,8 +353,18 @@ const simulationInfoDiagnostics =
         reportedOverrideRepair: false,
       });
 
+const uiDiagnostics =
+  runtimeState.uiDiagnostics && typeof runtimeState.uiDiagnostics === 'object'
+    ? runtimeState.uiDiagnostics
+    : (runtimeState.uiDiagnostics = {
+        rebinds: 0,
+        lastRebindId: null,
+        lastMismatchOwner: null,
+      });
+
 runtimeGlobal.__ARRECIFE_CAMERA_DISPLAY__ = cameraDisplayDiagnostics;
 runtimeGlobal.__ARRECIFE_SIMULATION_INFO_DIAGNOSTICS__ = simulationInfoDiagnostics;
+runtimeGlobal.__ARRECIFE_UI_DIAGNOSTICS__ = uiDiagnostics;
 
 const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   ? runtimeState.pendingIssues
@@ -442,6 +455,11 @@ const ARRECIFE_CAMERA_FAR =
     ? runtimeGlobal.ARRECIFE_CAMERA_FAR
     : ARRECIFE_CAMERA_BASE_FAR;
 
+const CAMERA_BASE_NEAR_PLANE = ARRECIFE_CAMERA_BASE_NEAR;
+const CAMERA_BASE_FAR_PLANE = ARRECIFE_CAMERA_BASE_FAR;
+const CAMERA_NEAR_PLANE = ARRECIFE_CAMERA_NEAR;
+const CAMERA_FAR_PLANE = ARRECIFE_CAMERA_FAR;
+
 runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR = ARRECIFE_CAMERA_BASE_NEAR;
 runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR = ARRECIFE_CAMERA_BASE_FAR;
 runtimeGlobal.ARRECIFE_CAMERA_NEAR = ARRECIFE_CAMERA_NEAR;
@@ -456,6 +474,8 @@ const ARRECIFE_CAMERA_STAR_MARGIN =
     : DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN;
 
 runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN = ARRECIFE_CAMERA_STAR_MARGIN;
+
+const CAMERA_STAR_MARGIN = ARRECIFE_CAMERA_STAR_MARGIN;
 
 const cameraNamespaceDiagnostics =
   runtimeState.cameraNamespaceDiagnostics && typeof runtimeState.cameraNamespaceDiagnostics === 'object'
@@ -2004,6 +2024,15 @@ function reportVolumetricAnomaly(flaggedEntry, context = {}) {
     labels.push(context.name);
   }
   const label = labels.length > 0 ? labels.join(' ') : 'Entidad volumétrica';
+  if (!moduleDiagnostics.volumetric) {
+    moduleDiagnostics.volumetric = { anomalies: 0 };
+  }
+  moduleDiagnostics.volumetric.anomalies += 1;
+  moduleDiagnostics.volumetric.lastAnomaly = {
+    label,
+    reason: flaggedEntry.reason,
+    timestamp: Date.now(),
+  };
   recordRuntimeIssue('warning', 'volumetric-mass', {
     message: `${label} fuera de rango (${flaggedEntry.reason})`,
   });
@@ -2209,6 +2238,14 @@ if (!gl) {
 const derivativeExtension =
   typeof gl.getExtension === 'function' ? gl.getExtension('OES_standard_derivatives') : null;
 const derivativesSupported = Boolean(derivativeExtension);
+if (!moduleDiagnostics.shaders) {
+  moduleDiagnostics.shaders = {};
+}
+moduleDiagnostics.shaders.fragmentHeader = {
+  derivativesSupported,
+  header: derivativesSupported ? '#extension GL_OES_standard_derivatives : enable' : null,
+  recordedAt: Date.now(),
+};
 const lightingDiagnostics = {
   derivativesSupported,
   lastAppliedSunSpecular: 0,
@@ -2423,7 +2460,7 @@ const vertexSource = `
 `;
 
 const derivativeShaderHeader = derivativesSupported
-  ? '#extension GL_OES_standard_derivatives : enable'
+  ? '#extension GL_OES_standard_derivatives : enable\n'
   : '';
 
 const fragmentNormalComputation = derivativesSupported
@@ -2445,9 +2482,8 @@ const fragmentNormalComputation = derivativesSupported
 `;
 
 const fragmentSource = `
-  precision mediump float;
+${derivativeShaderHeader}  precision mediump float;
   precision mediump int;
-  ${derivativeShaderHeader}
   varying vec3 vColor;
   varying vec3 vPosition;
   uniform vec3 globalLightColor;
@@ -2467,6 +2503,7 @@ const fragmentSource = `
   uniform float emissiveStrength;
   uniform float daylightLevel;
   uniform float nightColorRetention;
+  uniform int terrainFlatShading;
 
   const int RENDER_MODE_TERRAIN = 0;
   const int RENDER_MODE_WATER = 1;
@@ -2634,7 +2671,7 @@ const fragmentSource = `
 
     gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), terrainAlpha);
   }
-`;
+`.trim();
 
 const vertexShader = createShader(gl.VERTEX_SHADER, vertexSource);
 const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragmentSource);
@@ -2660,6 +2697,15 @@ const colorAttribute = gl.getAttribLocation(program, 'color');
 const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
+const terrainFlatShadingUniform = gl.getUniformLocation(program, 'terrainFlatShading');
+if (moduleDiagnostics.shaders) {
+  moduleDiagnostics.shaders.terrainFlatShadingUniformBound = Boolean(terrainFlatShadingUniform);
+  moduleDiagnostics.shaders.terrainFlatShadingUniformCheckedAt = Date.now();
+}
+const terrainFlatLightColorUniform = gl.getUniformLocation(
+  program,
+  'terrainFlatLightColor',
+);
 const ambientLightColorUniform = gl.getUniformLocation(program, 'ambientLightColor');
 const sunLightDirectionUniform = gl.getUniformLocation(program, 'sunLightDirection');
 const sunLightColorUniform = gl.getUniformLocation(program, 'sunLightColor');
@@ -3070,6 +3116,7 @@ const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
 const STAR_COUNT = 180;
+const STAR_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const STAR_FIELD_MARGIN = Math.max(
   MIN_ARRECIFE_CAMERA_STAR_MARGIN,
   Math.min(ARRECIFE_CAMERA_STAR_MARGIN, Math.max(MIN_ARRECIFE_CAMERA_STAR_MARGIN, ARRECIFE_CAMERA_FAR * 0.6)),
@@ -3176,6 +3223,12 @@ const terrainInfo = {
     flatColor: true,
     chunkGridEnabled: false,
   },
+  flatLighting: {
+    color: [1, 1, 1],
+    luma: 1,
+    daylight: 0,
+    moonlight: 0,
+  },
 };
 if (volumetricEngine) {
   terrainInfo.massDiagnostics = volumetricEngine.metrics;
@@ -3191,6 +3244,38 @@ let rockInfoKeyHandler = null;
 let ignoreNextRockPointerDown = false;
 let pendingRockSelection = null;
 const pointerCanvasPosition = { x: 0, y: 0 };
+
+let previousTime =
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+let fpsAccumulator = 0;
+let fpsSamples = 0;
+let displayedFps = 0;
+let lastGlError = 'ninguno';
+
+const baseTickRate = 20;
+const baseSimulationStep = 1 / baseTickRate;
+const MIN_SIMULATION_SPEED = 0.1;
+const MAX_SIMULATION_SPEED = 3;
+let simulationSpeed = 1;
+let targetTickRate = baseTickRate * simulationSpeed;
+let tickInterval = 1 / targetTickRate;
+let tickAccumulator = 0;
+let tickStatsAccumulator = 0;
+let tickSamples = 0;
+let displayedTps = 0;
+let totalTicks = 0;
+let ticksLastFrame = 0;
+
+const visibilityDiagnostics = {
+  lastHiddenAt: null,
+  lastVisibleAt: previousTime,
+  suppressedDeltaMs: 0,
+  totalSuppressedMs: 0,
+  resets: 0,
+  pendingReset: false,
+};
 
 const drawStats = {
   terrain: 0,
@@ -7576,6 +7661,9 @@ function regenerateRocks(seedString, heightfield, maskfield) {
 
     const fallbackVolume = Math.max(0, ((4 / 3) * Math.PI * scale[0] * scale[1] * scale[2]) || 0);
     const density = randomInRange(random, 2200, 2800);
+    const fallbackMass = Math.max(0, fallbackVolume * density);
+    const expectedMinMass = Math.max(0.5, fallbackMass * 0.3);
+    const expectedMaxMass = Math.max(800, fallbackMass * 1.2);
     const rockId = `rock-${generatedRocks.length + 1}`;
     let massResult;
     if (volumetricEngine) {
@@ -7591,10 +7679,18 @@ function regenerateRocks(seedString, heightfield, maskfield) {
           category: 'rock',
         },
         expectedRange: {
-          min: 2,
-          max: Math.max(800, fallbackVolume * density * 1.2),
+          min: expectedMinMass,
+          max: expectedMaxMass,
         },
       });
+      if (!moduleDiagnostics.volumetric) {
+        moduleDiagnostics.volumetric = { anomalies: 0 };
+      }
+      moduleDiagnostics.volumetric.lastRockExpectedRange = {
+        min: expectedMinMass,
+        max: expectedMaxMass,
+        fallbackMass,
+      };
       if (massResult.flagged) {
         reportVolumetricAnomaly(massResult.flagged, {
           type: 'Roca',
@@ -8384,33 +8480,29 @@ document.addEventListener('keyup', (event) => {
   event.preventDefault();
 });
 
-let previousTime = performance.now();
-let fpsAccumulator = 0;
-let fpsSamples = 0;
-let displayedFps = 0;
-let lastGlError = 'ninguno';
-
-const baseTickRate = 20;
-const baseSimulationStep = 1 / baseTickRate;
-const MIN_SIMULATION_SPEED = 0.1;
-const MAX_SIMULATION_SPEED = 3;
-let simulationSpeed = 1;
-let targetTickRate = baseTickRate * simulationSpeed;
-let tickInterval = 1 / targetTickRate;
-let tickAccumulator = 0;
-let tickStatsAccumulator = 0;
-let tickSamples = 0;
-let displayedTps = 0;
-let totalTicks = 0;
-let ticksLastFrame = 0;
-const visibilityDiagnostics = {
-  lastHiddenAt: null,
-  lastVisibleAt: previousTime,
-  suppressedDeltaMs: 0,
-  totalSuppressedMs: 0,
-  resets: 0,
-  pendingReset: false,
-};
+previousTime =
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+fpsAccumulator = 0;
+fpsSamples = 0;
+displayedFps = 0;
+lastGlError = 'ninguno';
+simulationSpeed = 1;
+targetTickRate = baseTickRate * simulationSpeed;
+tickInterval = 1 / targetTickRate;
+tickAccumulator = 0;
+tickStatsAccumulator = 0;
+tickSamples = 0;
+displayedTps = 0;
+totalTicks = 0;
+ticksLastFrame = 0;
+visibilityDiagnostics.lastHiddenAt = null;
+visibilityDiagnostics.lastVisibleAt = previousTime;
+visibilityDiagnostics.suppressedDeltaMs = 0;
+visibilityDiagnostics.totalSuppressedMs = 0;
+visibilityDiagnostics.resets = 0;
+visibilityDiagnostics.pendingReset = false;
 
 simulationTime = dayNightCycleDuration * defaultDayStartFraction;
 lightingDiagnostics.startupNormalizedTime = defaultDayStartFraction;
@@ -8463,10 +8555,12 @@ const simulationInfo = {
     flags:
       terrainInfo.flags && typeof terrainInfo.flags === 'object' ? { ...terrainInfo.flags } : {},
     flatLighting: {
-      color: terrainInfo.flatLighting.color.slice(),
-      luma: terrainInfo.flatLighting.luma,
-      daylight: terrainInfo.flatLighting.daylight,
-      moonlight: terrainInfo.flatLighting.moonlight,
+      color: terrainInfo.flatLighting?.color
+        ? terrainInfo.flatLighting.color.slice()
+        : [1, 1, 1],
+      luma: terrainInfo.flatLighting?.luma ?? 1,
+      daylight: terrainInfo.flatLighting?.daylight ?? 0,
+      moonlight: terrainInfo.flatLighting?.moonlight ?? 0,
     },
   },
   weather: {
@@ -8508,6 +8602,25 @@ const simulationInfo = {
       lastHeartbeatTime: 0,
       lastError: null,
     },
+    repairs: {
+      camera: simulationInfoDiagnostics.cameraRepairs ?? 0,
+      clip: simulationInfoDiagnostics.clipRepairs ?? 0,
+      clipFlags: simulationInfoDiagnostics.clipFlagRepairs ?? 0,
+      clipOverrides: simulationInfoDiagnostics.clipOverrideRepairs ?? 0,
+      lastRepairTime: simulationInfoDiagnostics.lastRepairTime ?? 0,
+    },
+    cameraDisplay: {
+      updates: cameraDisplayDiagnostics.updates ?? 0,
+      lastUpdateTime: cameraDisplayDiagnostics.lastUpdateTime ?? 0,
+      missingElements: cameraDisplayDiagnostics.missingElements ?? 0,
+      lastMissingTimestamp: cameraDisplayDiagnostics.lastMissingTimestamp ?? null,
+      lastMarginEstimate: cameraDisplayDiagnostics.lastMarginEstimate ?? null,
+      lastFrustumStatus: cameraDisplayDiagnostics.lastFrustumStatus ?? 'seguro',
+      lastFrustumStatusCode: cameraDisplayDiagnostics.lastFrustumStatusCode ?? 'OK',
+      frustumStatusUpdates: cameraDisplayDiagnostics.frustumStatusUpdates ?? 0,
+      lastFrustumStatusChange: cameraDisplayDiagnostics.lastFrustumStatusChange ?? null,
+      marginSamples: cameraDisplayDiagnostics.marginSamples ?? 0,
+    },
   },
   audio: {
     enabled: ambientAudioState.enabled,
@@ -8546,6 +8659,23 @@ const simulationInfo = {
     startupNormalizedTime: lightingDiagnostics.startupNormalizedTime,
     startupLightColor: lightingDiagnostics.startupLightColor.slice(),
     startupSunAltitude: lightingDiagnostics.startupSunAltitude,
+  },
+  visibility: {
+    lastHiddenAt: visibilityDiagnostics.lastHiddenAt,
+    lastVisibleAt: visibilityDiagnostics.lastVisibleAt,
+    suppressedDeltaMs: visibilityDiagnostics.suppressedDeltaMs,
+    totalSuppressedMs: visibilityDiagnostics.totalSuppressedMs,
+    resets: visibilityDiagnostics.resets,
+  },
+  geometry: {
+    lastFailureLabel: geometryDiagnostics.lastFailureLabel,
+    lastFailureTime: geometryDiagnostics.lastFailureTime,
+    failures: geometryDiagnostics.failures,
+  },
+  ui: {
+    rebinds: uiDiagnostics.rebinds,
+    lastRebindId: uiDiagnostics.lastRebindId,
+    lastMismatchOwner: uiDiagnostics.lastMismatchOwner,
   },
 };
 
@@ -9571,7 +9701,14 @@ function updateDebugConsole(deltaTime) {
   const starShortfall = Number.isFinite(starMetrics.baseFarShortfall)
     ? starMetrics.baseFarShortfall.toFixed(1)
     : '0.0';
-  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'WARN' : 'OK';
+  const starRadiusMin = Number.isFinite(starMetrics.radiusMin)
+    ? starMetrics.radiusMin.toFixed(1)
+    : STAR_FIELD_MIN_RADIUS.toFixed(1);
+  const starRadiusMax = Number.isFinite(starMetrics.radiusMax)
+    ? starMetrics.radiusMax.toFixed(1)
+    : STAR_FIELD_RADIUS.toFixed(1);
+  const starClipStatus = starFieldState.flags?.clipSafe === false ? 'riesgo' : 'OK';
+  const frustumStatusCode = cameraDiagnostics.flags?.frustumClipping ? 'WARN' : 'OK';
   const cameraFarDisplay = Number.isFinite(cameraDiagnostics.far)
     ? cameraDiagnostics.far.toFixed(1)
     : '---';
@@ -9607,7 +9744,11 @@ function updateDebugConsole(deltaTime) {
   const cameraMarginLabel = Number.isFinite(marginEstimate)
     ? marginEstimate.toFixed(1)
     : CAMERA_STAR_MARGIN.toFixed(1);
-  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'riesgo' : 'seguro';
+  const frustumStatusLabel = cameraDiagnostics.flags?.frustumClipping
+    ? 'riesgo'
+    : 'seguro';
+  const previousFrustumLabel = cameraDisplayDiagnostics.lastFrustumStatus;
+  const previousFrustumCode = cameraDisplayDiagnostics.lastFrustumStatusCode;
 
   const now = Date.now();
   cameraDisplayDiagnostics.lastUpdateTime = now;
@@ -9615,6 +9756,18 @@ function updateDebugConsole(deltaTime) {
     0,
     (cameraDisplayDiagnostics.updates ?? 0) + 1,
   );
+  if (
+    previousFrustumLabel !== frustumStatusLabel ||
+    previousFrustumCode !== frustumStatusCode
+  ) {
+    cameraDisplayDiagnostics.frustumStatusUpdates = Math.max(
+      0,
+      (cameraDisplayDiagnostics.frustumStatusUpdates ?? 0) + 1,
+    );
+    cameraDisplayDiagnostics.lastFrustumStatusChange = now;
+  }
+  cameraDisplayDiagnostics.lastFrustumStatus = frustumStatusLabel;
+  cameraDisplayDiagnostics.lastFrustumStatusCode = frustumStatusCode;
   let missingCameraDisplays = 0;
   if (
     cameraNearDisplay &&
@@ -9639,13 +9792,12 @@ function updateDebugConsole(deltaTime) {
     cameraDisplayDiagnostics.lastMissingTimestamp = now;
   }
   cameraDisplayDiagnostics.lastMarginEstimate = marginEstimate;
-  cameraDisplayDiagnostics.lastFrustumStatus = frustumStatus;
   cameraDisplayDiagnostics.marginSamples = Math.max(
     0,
     (cameraDisplayDiagnostics.marginSamples ?? 0) + 1,
   );
 
-  const info = [
+  const fallbackInfo = [
     `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
     `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
     `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
@@ -9659,7 +9811,7 @@ function updateDebugConsole(deltaTime) {
     } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
     `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
     `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
-    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
+    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${frustumStatusLabel} ajustes=${cameraDiagnostics.adjustments}`,
     `Luz global: rgb=${lightingDiagnostics.latestLightColor
       .map((value) => value.toFixed(2))
       .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
@@ -9702,7 +9854,7 @@ function updateDebugConsole(deltaTime) {
     `GL error: ${lastGlError}`,
   ];
 
-  let info = [];
+  let info = fallbackInfo.slice();
   try {
     info = [
       `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
@@ -9971,11 +10123,11 @@ function updateDebugConsole(deltaTime) {
       message: errorMessage,
     };
     console.error('Error al generar la salida del panel de depuración', error);
-    info = [
-      `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
+    info = fallbackInfo.slice();
+    info.push(
       `⚠️ Panel depuración error: ${errorMessage}`,
       `Intentos fallidos: ${cameraDiagnostics.metrics.failedUpdates}`,
-    ];
+    );
   }
 
   const output = info.join('\n');
@@ -10225,6 +10377,12 @@ function loop(currentTime) {
           lastUpdateTime: 0,
           missingElements: 0,
           lastMissingTimestamp: null,
+          lastMarginEstimate: null,
+          lastFrustumStatus: 'seguro',
+          lastFrustumStatusCode: 'OK',
+          frustumStatusUpdates: 0,
+          lastFrustumStatusChange: null,
+          marginSamples: 0,
         };
       }
       const cameraDisplayDebug = simulationInfo.debug.cameraDisplay;
@@ -10237,6 +10395,12 @@ function loop(currentTime) {
         cameraDisplayDiagnostics.lastMarginEstimate ?? null;
       cameraDisplayDebug.lastFrustumStatus =
         cameraDisplayDiagnostics.lastFrustumStatus ?? 'seguro';
+      cameraDisplayDebug.lastFrustumStatusCode =
+        cameraDisplayDiagnostics.lastFrustumStatusCode ?? 'OK';
+      cameraDisplayDebug.frustumStatusUpdates =
+        cameraDisplayDiagnostics.frustumStatusUpdates ?? 0;
+      cameraDisplayDebug.lastFrustumStatusChange =
+        cameraDisplayDiagnostics.lastFrustumStatusChange ?? null;
       cameraDisplayDebug.marginSamples = cameraDisplayDiagnostics.marginSamples ?? 0;
     }
     if (simulationInfo.audio) {
