@@ -1,4 +1,4 @@
-const runtimeGlobal =
+var ARRECIFE_BOOT_TARGET =
   typeof globalThis !== 'undefined'
     ? globalThis
     : typeof self !== 'undefined'
@@ -9,41 +9,192 @@ const runtimeGlobal =
     ? global
     : {};
 
-let canvas = document.getElementById('scene');
-const overlay = document.getElementById('overlay');
-const simulationHud = document.getElementById('simulation-hud');
-const startButton = document.getElementById('start-button');
-let debugConsole = document.getElementById('debug-console');
-let debugPanel = document.getElementById('debug-panel');
-let debugToggleButton = document.getElementById('debug-toggle');
-const cameraNearDisplay = document.getElementById('camera-near-display');
-const cameraFarDisplay = document.getElementById('camera-far-display');
-const settingsToggle = document.getElementById('settings-toggle');
-const settingsPanel = document.getElementById('settings-panel');
-const seedInput = document.getElementById('seed-input');
-const randomSeedButton = document.getElementById('random-seed');
-const simulationClock = document.getElementById('simulation-clock');
-const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
-const simulationSpeedSlider = document.getElementById('simulation-speed');
-const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
-const simulationSpeedSettingsDisplay = document.getElementById(
-  'simulation-speed-display-settings'
-);
-const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
-const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
-const dayCyclePhaseIcons = Array.from(
-  document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
-);
-const dayCyclePhaseIconMap = new Map(
-  dayCyclePhaseIcons
-    .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
-    .filter(([phase, element]) => phase && element),
-);
-const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
-const musicToggle = document.getElementById('audio-music-toggle');
+var ARRECIFE_MODULE_STATE =
+  ARRECIFE_BOOT_TARGET.__ARRECIFE_MAIN_MODULE__ ||
+  (ARRECIFE_BOOT_TARGET.__ARRECIFE_MAIN_MODULE__ = {
+    attempts: 0,
+    duplicates: 0,
+    lastAttempt: 0,
+    lastDuplicate: 0,
+    lastError: null,
+    active: false,
+    initialized: false,
+    lastSuccess: 0,
+    failedAttempts: 0,
+  });
 
-let debugConsoleHeartbeatId = null;
-const DEBUG_PANEL_HEARTBEAT_MS = 1000;
+ARRECIFE_MODULE_STATE.attempts =
+  Math.max(0, ARRECIFE_MODULE_STATE.attempts || 0) + 1;
+ARRECIFE_MODULE_STATE.lastAttempt = Date.now();
+
+if (ARRECIFE_MODULE_STATE.initialized || ARRECIFE_MODULE_STATE.active) {
+  ARRECIFE_MODULE_STATE.duplicates = Math.max(
+    0,
+    (ARRECIFE_MODULE_STATE.duplicates || 0) + 1,
+  );
+  ARRECIFE_MODULE_STATE.lastDuplicate = ARRECIFE_MODULE_STATE.lastAttempt;
+  var duplicateRuntimeState = ARRECIFE_BOOT_TARGET.__ARRECIFE_RUNTIME_STATE__;
+  if (duplicateRuntimeState && typeof duplicateRuntimeState === 'object') {
+    var duplicateIssues = Array.isArray(duplicateRuntimeState.issues)
+      ? duplicateRuntimeState.issues
+      : (duplicateRuntimeState.issues = []);
+    duplicateRuntimeState.bootstrapGuards = Math.max(
+      0,
+      (duplicateRuntimeState.bootstrapGuards || 0) + 1,
+    );
+    duplicateRuntimeState.lastBootstrapGuard =
+      ARRECIFE_MODULE_STATE.lastDuplicate;
+    var duplicateDiagnostics =
+      duplicateRuntimeState.moduleDiagnostics &&
+      typeof duplicateRuntimeState.moduleDiagnostics === 'object'
+        ? duplicateRuntimeState.moduleDiagnostics
+        : (duplicateRuntimeState.moduleDiagnostics = {});
+    duplicateDiagnostics.bootstrap = {
+      attempts: ARRECIFE_MODULE_STATE.attempts,
+      duplicates: ARRECIFE_MODULE_STATE.duplicates,
+      lastAttempt: ARRECIFE_MODULE_STATE.lastAttempt,
+      lastDuplicate: ARRECIFE_MODULE_STATE.lastDuplicate,
+      lastSuccess: ARRECIFE_MODULE_STATE.lastSuccess,
+      failedAttempts: ARRECIFE_MODULE_STATE.failedAttempts,
+      lastError: ARRECIFE_MODULE_STATE.lastError,
+      active: ARRECIFE_MODULE_STATE.active,
+      skipped: true,
+    };
+    duplicateIssues.push({
+      severity: 'fatal',
+      context: 'bootstrap',
+      error:
+        'Se detectó una carga duplicada de "scripts/main.js" y se omitió para evitar conflictos de constantes.',
+      timestamp: ARRECIFE_MODULE_STATE.lastDuplicate,
+      code: 'duplicate-module-bootstrap',
+    });
+    while (duplicateIssues.length > 8) {
+      duplicateIssues.shift();
+    }
+  }
+  if (typeof console !== 'undefined' && typeof console.error === 'function') {
+    console.error('[Arrecife] scripts/main.js ignorado por carga duplicada.', {
+      attempts: ARRECIFE_MODULE_STATE.attempts,
+      duplicates: ARRECIFE_MODULE_STATE.duplicates,
+      lastDuplicate: ARRECIFE_MODULE_STATE.lastDuplicate,
+      lastSuccess: ARRECIFE_MODULE_STATE.lastSuccess,
+    });
+  }
+} else {
+  ARRECIFE_MODULE_STATE.active = true;
+  try {
+    ((runtimeGlobalCandidate, moduleState) => {
+  const runtimeGlobal =
+    runtimeGlobalCandidate && typeof runtimeGlobalCandidate === 'object'
+      ? runtimeGlobalCandidate
+      : {};
+
+  const runtimeState =
+    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ &&
+    typeof runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ === 'object'
+      ? runtimeGlobal.__ARRECIFE_RUNTIME_STATE__
+      : (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ = {
+          bootstrapAttempts: 0,
+          issues: [],
+          fallbackFactories: null,
+          reportedFallbacks: null,
+          uiFallbackEvents: null,
+        });
+
+  runtimeState.bootstrapGuards = Math.max(0, runtimeState.bootstrapGuards ?? 0);
+
+  moduleState = moduleState || {};
+  moduleState.runtimeStateRef = runtimeState;
+  moduleState.lastRuntimeSync = Date.now();
+  moduleState.runtimeIssuesSnapshot = Array.isArray(runtimeState.issues)
+    ? runtimeState.issues.slice(-4)
+    : [];
+
+  const moduleDiagnostics =
+    runtimeState.moduleDiagnostics && typeof runtimeState.moduleDiagnostics === 'object'
+      ? runtimeState.moduleDiagnostics
+      : (runtimeState.moduleDiagnostics = {});
+
+  moduleDiagnostics.bootstrap = {
+    attempts: moduleState.attempts,
+    duplicates: moduleState.duplicates,
+    lastAttempt: moduleState.lastAttempt,
+    lastDuplicate: moduleState.lastDuplicate,
+    lastSuccess: moduleState.lastSuccess,
+    failedAttempts: moduleState.failedAttempts,
+    lastError: moduleState.lastError,
+    active: moduleState.active,
+    skipped: false,
+  };
+
+  if (runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__) {
+    runtimeState.bootstrapGuards += 1;
+    runtimeState.lastBootstrapGuard = Date.now();
+    const issues = Array.isArray(runtimeState.issues)
+      ? runtimeState.issues
+      : (runtimeState.issues = []);
+    issues.push({
+      severity: 'fatal',
+      context: 'bootstrap',
+      error:
+        'Se bloqueó una inicialización duplicada de "scripts/main.js" para evitar conflictos de constantes.',
+      timestamp: runtimeState.lastBootstrapGuard,
+      code: 'duplicate-bootstrap',
+    });
+    while (issues.length > 8) {
+      issues.shift();
+    }
+    runtimeGlobal.__ARRECIFE_DUPLICATE_BOOTSTRAP__ = true;
+    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('[Arrecife] Inicialización duplicada bloqueada.', issues[issues.length - 1]);
+    }
+    return;
+  }
+
+  runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__ = true;
+  runtimeGlobal.__ARRECIFE_DUPLICATE_BOOTSTRAP__ = false;
+  runtimeState.lastBootstrapTime = Date.now();
+  moduleState.lastBootstrapTime = runtimeState.lastBootstrapTime;
+  if (moduleDiagnostics.bootstrap) {
+    moduleDiagnostics.bootstrap.lastBootstrapTime =
+      runtimeState.lastBootstrapTime;
+  }
+
+  let canvas = document.getElementById('scene');
+  const overlay = document.getElementById('overlay');
+  const simulationHud = document.getElementById('simulation-hud');
+  const startButton = document.getElementById('start-button');
+  let debugConsole = document.getElementById('debug-console');
+  let debugPanel = document.getElementById('debug-panel');
+  let debugToggleButton = document.getElementById('debug-toggle');
+  const cameraNearDisplay = document.getElementById('camera-near-display');
+  const cameraFarDisplay = document.getElementById('camera-far-display');
+  const settingsToggle = document.getElementById('settings-toggle');
+  const settingsPanel = document.getElementById('settings-panel');
+  const seedInput = document.getElementById('seed-input');
+  const randomSeedButton = document.getElementById('random-seed');
+  const simulationClock = document.getElementById('simulation-clock');
+  const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
+  const simulationSpeedSlider = document.getElementById('simulation-speed');
+  const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
+  const simulationSpeedSettingsDisplay = document.getElementById(
+    'simulation-speed-display-settings',
+  );
+  const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
+  const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
+  const dayCyclePhaseIcons = Array.from(
+    document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
+  );
+  const dayCyclePhaseIconMap = new Map(
+    dayCyclePhaseIcons
+      .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
+      .filter(([phase, element]) => phase && element),
+  );
+  const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
+  const musicToggle = document.getElementById('audio-music-toggle');
+
+  let debugConsoleHeartbeatId = null;
+  const DEBUG_PANEL_HEARTBEAT_MS = 1000;
 
 function createFallbackDebugPanel() {
   const supportsDom =
@@ -149,17 +300,8 @@ function ensureDebugPanelHeartbeat() {
   }, DEBUG_PANEL_HEARTBEAT_MS);
 }
 
-const runtimeState =
-  (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ =
-    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ || {
-      bootstrapAttempts: 0,
-      issues: [],
-      fallbackFactories: null,
-      reportedFallbacks: null,
-      uiFallbackEvents: null,
-    });
-
-runtimeState.bootstrapAttempts += 1;
+runtimeState.bootstrapAttempts = Math.max(0, runtimeState.bootstrapAttempts ?? 0) + 1;
+runtimeState.totalBootstraps = Math.max(0, runtimeState.totalBootstraps ?? 0) + 1;
 
 const runtimeIssues = Array.isArray(runtimeState.issues)
   ? runtimeState.issues
@@ -188,6 +330,10 @@ const cameraDisplayDiagnostics =
         lastUpdateTime: 0,
         missingElements: 0,
         lastMissingTimestamp: null,
+        frustumStatusUpdates: 0,
+        lastFrustumStatus: 'seguro',
+        lastFrustumClipping: false,
+        lastFrustumStatusChange: null,
       });
 
 const simulationInfoDiagnostics =
@@ -276,64 +422,156 @@ const ambientAudioState = {
   underwater: false,
 };
 
-const DEFAULT_CAMERA_NEAR_PLANE = 0.1;
-const DEFAULT_CAMERA_FAR_PLANE = 500;
+const ARRECIFE_DEFAULT_CAMERA_NEAR = 0.1;
+const ARRECIFE_DEFAULT_CAMERA_FAR = 500;
 
-const CAMERA_BASE_NEAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_BASE_NEAR_PLANE) && runtimeGlobal.CAMERA_BASE_NEAR_PLANE > 0
-    ? runtimeGlobal.CAMERA_BASE_NEAR_PLANE
-    : DEFAULT_CAMERA_NEAR_PLANE;
-const CAMERA_BASE_FAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_BASE_FAR_PLANE) && runtimeGlobal.CAMERA_BASE_FAR_PLANE > CAMERA_BASE_NEAR_PLANE
-    ? runtimeGlobal.CAMERA_BASE_FAR_PLANE
-    : DEFAULT_CAMERA_FAR_PLANE;
+const ARRECIFE_CAMERA_BASE_NEAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR) && runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR > 0
+    ? runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR
+    : ARRECIFE_DEFAULT_CAMERA_NEAR;
+const ARRECIFE_CAMERA_BASE_FAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR) && runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR > ARRECIFE_CAMERA_BASE_NEAR
+    ? runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR
+    : ARRECIFE_DEFAULT_CAMERA_FAR;
 
-const CAMERA_NEAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_NEAR_PLANE) && runtimeGlobal.CAMERA_NEAR_PLANE > 0
-    ? runtimeGlobal.CAMERA_NEAR_PLANE
-    : CAMERA_BASE_NEAR_PLANE;
-const CAMERA_FAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_FAR_PLANE) && runtimeGlobal.CAMERA_FAR_PLANE > CAMERA_NEAR_PLANE
-    ? runtimeGlobal.CAMERA_FAR_PLANE
-    : CAMERA_BASE_FAR_PLANE;
+const ARRECIFE_CAMERA_NEAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_NEAR) && runtimeGlobal.ARRECIFE_CAMERA_NEAR > 0
+    ? runtimeGlobal.ARRECIFE_CAMERA_NEAR
+    : ARRECIFE_CAMERA_BASE_NEAR;
+const ARRECIFE_CAMERA_FAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_FAR) && runtimeGlobal.ARRECIFE_CAMERA_FAR > ARRECIFE_CAMERA_NEAR
+    ? runtimeGlobal.ARRECIFE_CAMERA_FAR
+    : ARRECIFE_CAMERA_BASE_FAR;
 
-runtimeGlobal.CAMERA_BASE_NEAR_PLANE = CAMERA_BASE_NEAR_PLANE;
-runtimeGlobal.CAMERA_BASE_FAR_PLANE = CAMERA_BASE_FAR_PLANE;
-runtimeGlobal.CAMERA_NEAR_PLANE = CAMERA_NEAR_PLANE;
-runtimeGlobal.CAMERA_FAR_PLANE = CAMERA_FAR_PLANE;
+runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR = ARRECIFE_CAMERA_BASE_NEAR;
+runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR = ARRECIFE_CAMERA_BASE_FAR;
+runtimeGlobal.ARRECIFE_CAMERA_NEAR = ARRECIFE_CAMERA_NEAR;
+runtimeGlobal.ARRECIFE_CAMERA_FAR = ARRECIFE_CAMERA_FAR;
 
-const MIN_CAMERA_STAR_MARGIN = 40;
-const DEFAULT_CAMERA_STAR_MARGIN = 120;
-const CAMERA_STAR_MARGIN =
-  Number.isFinite(runtimeGlobal.CAMERA_STAR_MARGIN) &&
-  runtimeGlobal.CAMERA_STAR_MARGIN >= MIN_CAMERA_STAR_MARGIN
-    ? runtimeGlobal.CAMERA_STAR_MARGIN
-    : DEFAULT_CAMERA_STAR_MARGIN;
+const MIN_ARRECIFE_CAMERA_STAR_MARGIN = 40;
+const DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN = 120;
+const ARRECIFE_CAMERA_STAR_MARGIN =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN) &&
+  runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN >= MIN_ARRECIFE_CAMERA_STAR_MARGIN
+    ? runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN
+    : DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN;
 
-runtimeGlobal.CAMERA_STAR_MARGIN = CAMERA_STAR_MARGIN;
+runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN = ARRECIFE_CAMERA_STAR_MARGIN;
+
+const cameraNamespaceDiagnostics =
+  runtimeState.cameraNamespaceDiagnostics && typeof runtimeState.cameraNamespaceDiagnostics === 'object'
+    ? runtimeState.cameraNamespaceDiagnostics
+    : (runtimeState.cameraNamespaceDiagnostics = {
+        legacyBindings: 0,
+        mismatchedValues: 0,
+        lastCheck: 0,
+        lastMismatchDetail: null,
+        reportedLegacyNotice: false,
+        reportedMismatchNotice: false,
+      });
+
+runtimeGlobal.__ARRECIFE_CAMERA_NAMESPACE__ = cameraNamespaceDiagnostics;
+
+const legacyCameraNear = runtimeGlobal.CAMERA_NEAR_PLANE;
+const legacyCameraFar = runtimeGlobal.CAMERA_FAR_PLANE;
+const legacyCameraMargin = runtimeGlobal.CAMERA_STAR_MARGIN;
+
+const legacyBindings = [];
+if (legacyCameraNear !== undefined) {
+  legacyBindings.push('near');
+}
+if (legacyCameraFar !== undefined) {
+  legacyBindings.push('far');
+}
+if (legacyCameraMargin !== undefined) {
+  legacyBindings.push('margin');
+}
+
+cameraNamespaceDiagnostics.lastCheck = Date.now();
+cameraNamespaceDiagnostics.legacyBindings = legacyBindings.length;
+cameraNamespaceDiagnostics.mismatchedValues = 0;
+cameraNamespaceDiagnostics.lastMismatchDetail = null;
+
+if (legacyBindings.length > 0) {
+  const mismatches = [];
+  if (
+    typeof legacyCameraNear === 'number' &&
+    Math.abs(legacyCameraNear - ARRECIFE_CAMERA_NEAR) > 0.0001
+  ) {
+    mismatches.push('near');
+  }
+  if (typeof legacyCameraFar === 'number' && Math.abs(legacyCameraFar - ARRECIFE_CAMERA_FAR) > 0.1) {
+    mismatches.push('far');
+  }
+  if (
+    typeof legacyCameraMargin === 'number' &&
+    Math.abs(legacyCameraMargin - ARRECIFE_CAMERA_STAR_MARGIN) > 0.5
+  ) {
+    mismatches.push('margin');
+  }
+
+  cameraNamespaceDiagnostics.mismatchedValues = mismatches.length;
+  cameraNamespaceDiagnostics.lastMismatchDetail = {
+    bindings: legacyBindings.slice(),
+    mismatches: mismatches.slice(),
+    legacy: {
+      near: legacyCameraNear,
+      far: legacyCameraFar,
+      margin: legacyCameraMargin,
+    },
+    active: {
+      near: ARRECIFE_CAMERA_NEAR,
+      far: ARRECIFE_CAMERA_FAR,
+      margin: ARRECIFE_CAMERA_STAR_MARGIN,
+    },
+  };
+
+  if (mismatches.length > 0) {
+    if (!cameraNamespaceDiagnostics.reportedMismatchNotice) {
+      cameraNamespaceDiagnostics.reportedMismatchNotice = true;
+      pendingRuntimeIssueQueue.push({
+        severity: 'warning',
+        context: 'camera-namespace',
+        error:
+          'Constantes heredadas de cámara encontradas con valores distintos a los prefijados (near/far/margin).',
+      });
+    }
+  } else if (!cameraNamespaceDiagnostics.reportedLegacyNotice) {
+    cameraNamespaceDiagnostics.reportedLegacyNotice = true;
+    pendingRuntimeIssueQueue.push({
+      severity: 'info',
+      context: 'camera-namespace',
+        error:
+          'Se detectaron constantes heredadas de cámara que coinciden con los valores actuales. Se conservarán para compatibilidad.',
+    });
+  }
+} else {
+  cameraNamespaceDiagnostics.reportedLegacyNotice = false;
+  cameraNamespaceDiagnostics.reportedMismatchNotice = false;
+}
 
 const cameraClipPlanes =
   runtimeState.cameraClipPlanes && typeof runtimeState.cameraClipPlanes === 'object'
     ? runtimeState.cameraClipPlanes
     : (runtimeState.cameraClipPlanes = {
-        near: CAMERA_NEAR_PLANE,
-        far: CAMERA_FAR_PLANE,
-        baseNear: CAMERA_BASE_NEAR_PLANE,
-        baseFar: CAMERA_BASE_FAR_PLANE,
+        near: ARRECIFE_CAMERA_NEAR,
+        far: ARRECIFE_CAMERA_FAR,
+        baseNear: ARRECIFE_CAMERA_BASE_NEAR,
+        baseFar: ARRECIFE_CAMERA_BASE_FAR,
         lastUpdated: 0,
         deviation: 0,
       });
 
-cameraClipPlanes.near = CAMERA_NEAR_PLANE;
-cameraClipPlanes.far = CAMERA_FAR_PLANE;
-cameraClipPlanes.baseNear = CAMERA_BASE_NEAR_PLANE;
-cameraClipPlanes.baseFar = CAMERA_BASE_FAR_PLANE;
+cameraClipPlanes.near = ARRECIFE_CAMERA_NEAR;
+cameraClipPlanes.far = ARRECIFE_CAMERA_FAR;
+cameraClipPlanes.baseNear = ARRECIFE_CAMERA_BASE_NEAR;
+cameraClipPlanes.baseFar = ARRECIFE_CAMERA_BASE_FAR;
 cameraClipPlanes.deviation = Math.max(
-  Math.abs(CAMERA_NEAR_PLANE - CAMERA_BASE_NEAR_PLANE),
-  Math.abs(CAMERA_FAR_PLANE - CAMERA_BASE_FAR_PLANE),
+  Math.abs(ARRECIFE_CAMERA_NEAR - ARRECIFE_CAMERA_BASE_NEAR),
+  Math.abs(ARRECIFE_CAMERA_FAR - ARRECIFE_CAMERA_BASE_FAR),
 );
 cameraClipPlanes.overrideActive = cameraClipPlanes.deviation > 0.0001;
-cameraClipPlanes.invalidOrdering = CAMERA_FAR_PLANE <= CAMERA_NEAR_PLANE;
+cameraClipPlanes.invalidOrdering = ARRECIFE_CAMERA_FAR <= ARRECIFE_CAMERA_NEAR;
 cameraClipPlanes.lastUpdated =
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
 cameraClipPlanes.overrides = Math.max(0, (cameraClipPlanes.overrides ?? 0) + (cameraClipPlanes.overrideActive ? 1 : 0));
@@ -353,10 +591,12 @@ const cameraDiagnostics =
         flags: { overrideActive: false, invalidOrdering: false },
       });
 
-cameraDiagnostics.baseNear = CAMERA_BASE_NEAR_PLANE;
-cameraDiagnostics.baseFar = CAMERA_BASE_FAR_PLANE;
-cameraDiagnostics.currentNear = CAMERA_NEAR_PLANE;
-cameraDiagnostics.currentFar = CAMERA_FAR_PLANE;
+cameraDiagnostics.baseNear = ARRECIFE_CAMERA_BASE_NEAR;
+cameraDiagnostics.baseFar = ARRECIFE_CAMERA_BASE_FAR;
+cameraDiagnostics.currentNear = ARRECIFE_CAMERA_NEAR;
+cameraDiagnostics.currentFar = ARRECIFE_CAMERA_FAR;
+cameraDiagnostics.near = cameraDiagnostics.near ?? ARRECIFE_CAMERA_NEAR;
+cameraDiagnostics.far = cameraDiagnostics.far ?? ARRECIFE_CAMERA_FAR;
 cameraDiagnostics.lastDeviation = cameraClipPlanes.deviation;
 cameraDiagnostics.flags = {
   overrideActive: cameraClipPlanes.overrideActive,
@@ -364,6 +604,32 @@ cameraDiagnostics.flags = {
 };
 cameraDiagnostics.overrides = Math.max(0, cameraClipPlanes.overrides ?? 0);
 cameraDiagnostics.lastOverrideTimestamp = cameraClipPlanes.lastOverrideTimestamp ?? null;
+if (!cameraDiagnostics.metrics || typeof cameraDiagnostics.metrics !== 'object') {
+  cameraDiagnostics.metrics = {
+    starFarthest: 0,
+    starShortfall: 0,
+    marginEstimate: ARRECIFE_CAMERA_STAR_MARGIN,
+    lastUpdateTime: 0,
+    failedUpdates: 0,
+  };
+} else {
+  cameraDiagnostics.metrics.starFarthest = cameraDiagnostics.metrics.starFarthest ?? 0;
+  cameraDiagnostics.metrics.starShortfall = cameraDiagnostics.metrics.starShortfall ?? 0;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.metrics.marginEstimate ?? ARRECIFE_CAMERA_STAR_MARGIN;
+  cameraDiagnostics.metrics.lastUpdateTime = cameraDiagnostics.metrics.lastUpdateTime ?? 0;
+  cameraDiagnostics.metrics.failedUpdates = cameraDiagnostics.metrics.failedUpdates ?? 0;
+}
+cameraDiagnostics.adjustments = Number.isFinite(cameraDiagnostics.adjustments)
+  ? cameraDiagnostics.adjustments
+  : 0;
+cameraDiagnostics.starMargin = Number.isFinite(cameraDiagnostics.starMargin)
+  ? cameraDiagnostics.starMargin
+  : ARRECIFE_CAMERA_STAR_MARGIN;
+cameraDiagnostics.flags = {
+  ...cameraDiagnostics.flags,
+  frustumClipping: Boolean(cameraDiagnostics.flags?.frustumClipping),
+  baseFrustumExceeded: Boolean(cameraDiagnostics.flags?.baseFrustumExceeded),
+};
 
 if (cameraDiagnostics.flags.invalidOrdering) {
   pendingRuntimeIssueQueue.push({
@@ -378,10 +644,10 @@ runtimeGlobal.__ARRECIFE_CAMERA_DIAGNOSTICS__ = cameraDiagnostics;
 
 function snapshotCameraClipDiagnostics() {
   return {
-    baseNear: CAMERA_BASE_NEAR_PLANE,
-    baseFar: CAMERA_BASE_FAR_PLANE,
-    near: CAMERA_NEAR_PLANE,
-    far: CAMERA_FAR_PLANE,
+    baseNear: ARRECIFE_CAMERA_BASE_NEAR,
+    baseFar: ARRECIFE_CAMERA_BASE_FAR,
+    near: ARRECIFE_CAMERA_NEAR,
+    far: ARRECIFE_CAMERA_FAR,
     deviation: cameraDiagnostics.lastDeviation ?? 0,
     overrideActive: Boolean(cameraDiagnostics.flags?.overrideActive),
     invalidOrdering: Boolean(cameraDiagnostics.flags?.invalidOrdering),
@@ -1160,7 +1426,11 @@ function registerUiFallback(id, message, severity = 'error') {
     uiFallbackEvents.shift();
   }
   if (!existing) {
-    pendingRuntimeIssueQueue.push({ severity, context: 'ui', error: message });
+    pendingRuntimeIssueQueue.push({
+      severity,
+      context: 'ui',
+      error: { message, preserve: true, id },
+    });
   }
   return reportedFallbacks[id];
 }
@@ -1688,16 +1958,37 @@ function updateDiagnosticsToast() {
 
 function recordRuntimeIssue(severity, context, error) {
   const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const preserve = Boolean(error && typeof error === 'object' && error.preserve);
+  const issueId =
+    error && typeof error === 'object' && typeof error.id === 'string' ? error.id : null;
+  const stackTrace =
+    error instanceof Error
+      ? error.stack
+      : error && typeof error.stack === 'string'
+      ? error.stack
+      : null;
   const entry = {
     severity,
     context,
     message: describeIssue(error),
     timestamp,
-    stack: error && typeof error.stack === 'string' ? error.stack : null,
+    stack: stackTrace,
+    preserve,
+    id: issueId,
   };
   runtimeIssues.unshift(entry);
   if (runtimeIssues.length > MAX_RUNTIME_ISSUES) {
-    runtimeIssues.length = MAX_RUNTIME_ISSUES;
+    let removed = false;
+    for (let i = runtimeIssues.length - 1; i >= 0; i -= 1) {
+      if (!runtimeIssues[i]?.preserve) {
+        runtimeIssues.splice(i, 1);
+        removed = true;
+        break;
+      }
+    }
+    if (!removed) {
+      runtimeIssues.length = MAX_RUNTIME_ISSUES;
+    }
   }
   updateDiagnosticsToast();
   return entry;
@@ -2763,10 +3054,10 @@ const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
 const STAR_COUNT = 180;
 const STAR_FIELD_MARGIN = Math.max(
-  MIN_CAMERA_STAR_MARGIN,
-  Math.min(CAMERA_STAR_MARGIN, Math.max(MIN_CAMERA_STAR_MARGIN, CAMERA_FAR_PLANE * 0.6)),
+  MIN_ARRECIFE_CAMERA_STAR_MARGIN,
+  Math.min(ARRECIFE_CAMERA_STAR_MARGIN, Math.max(MIN_ARRECIFE_CAMERA_STAR_MARGIN, ARRECIFE_CAMERA_FAR * 0.6)),
 );
-const STAR_FIELD_RADIUS = Math.max(180, CAMERA_FAR_PLANE - STAR_FIELD_MARGIN);
+const STAR_FIELD_RADIUS = Math.max(180, ARRECIFE_CAMERA_FAR - STAR_FIELD_MARGIN);
 const STAR_FIELD_RADIUS_JITTER = Math.max(
   30,
   Math.min(120, Math.max(0, STAR_FIELD_RADIUS * 0.35)),
@@ -2829,11 +3120,11 @@ const starFieldState = {
     radiusMax: STAR_FIELD_RADIUS,
     radiusMin: STAR_FIELD_MIN_RADIUS,
     radiusJitter: STAR_FIELD_RADIUS_JITTER,
-    farPlane: CAMERA_FAR_PLANE,
+    farPlane: ARRECIFE_CAMERA_FAR,
   },
   flags: {
     geometryValid: false,
-    clipSafe: STAR_FIELD_RADIUS < CAMERA_FAR_PLANE,
+    clipSafe: STAR_FIELD_RADIUS < ARRECIFE_CAMERA_FAR,
   },
   needsUpload: true,
 };
@@ -3815,9 +4106,9 @@ function initializeStarField(seedString) {
   starFieldState.metrics.radiusMax = STAR_FIELD_RADIUS;
   starFieldState.metrics.radiusMin = STAR_FIELD_MIN_RADIUS;
   starFieldState.metrics.radiusJitter = STAR_FIELD_RADIUS_JITTER;
-  starFieldState.metrics.farPlane = CAMERA_FAR_PLANE;
+  starFieldState.metrics.farPlane = ARRECIFE_CAMERA_FAR;
   starFieldState.flags.geometryValid = false;
-  starFieldState.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= CAMERA_FAR_PLANE;
+  starFieldState.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= ARRECIFE_CAMERA_FAR;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
 }
@@ -4061,8 +4352,8 @@ function rebuildStarFieldGeometry() {
   state.metrics.radiusMax = STAR_FIELD_RADIUS;
   state.metrics.radiusMin = STAR_FIELD_MIN_RADIUS;
   state.metrics.radiusJitter = STAR_FIELD_RADIUS_JITTER;
-  state.metrics.farPlane = CAMERA_FAR_PLANE;
-  state.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= CAMERA_FAR_PLANE;
+  state.metrics.farPlane = ARRECIFE_CAMERA_FAR;
+  state.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= ARRECIFE_CAMERA_FAR;
 
   if (!stars || stars.length === 0) {
     state.vertexData = new Float32Array(0);
@@ -8057,6 +8348,14 @@ const simulationInfo = {
     position: [cameraPosition[0], cameraPosition[1], cameraPosition[2]],
     yaw,
     pitch,
+    near: ARRECIFE_CAMERA_NEAR,
+    far: ARRECIFE_CAMERA_BASE_FAR,
+    starMargin: ARRECIFE_CAMERA_STAR_MARGIN,
+    starFarthest: 0,
+    starShortfall: 0,
+    adjustments: 0,
+    marginEstimate: cameraDiagnostics.metrics?.marginEstimate ?? ARRECIFE_CAMERA_STAR_MARGIN,
+    failedDiagnostics: cameraDiagnostics.metrics?.failedUpdates ?? 0,
     clip: snapshotCameraClipDiagnostics(),
     clipFlags: {
       overrideActive: Boolean(cameraDiagnostics.flags?.overrideActive),
@@ -8065,6 +8364,10 @@ const simulationInfo = {
     clipOverrides: {
       count: Math.max(0, cameraDiagnostics.overrides ?? 0),
       lastTimestamp: cameraDiagnostics.lastOverrideTimestamp ?? null,
+    },
+    flags: {
+      frustumClipping: Boolean(cameraDiagnostics.flags?.frustumClipping),
+      baseFrustumExceeded: Boolean(cameraDiagnostics.flags?.baseFrustumExceeded),
     },
   },
   dayNight: dayNightCycleState,
@@ -8149,7 +8452,7 @@ const simulationInfo = {
     starRadius: STAR_FIELD_RADIUS,
     starRadiusMin: STAR_FIELD_MIN_RADIUS,
     starMargin: STAR_FIELD_MARGIN,
-    starClipSafe: STAR_FIELD_RADIUS + 1 <= CAMERA_FAR_PLANE,
+    starClipSafe: STAR_FIELD_RADIUS + 1 <= ARRECIFE_CAMERA_FAR,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -8159,19 +8462,6 @@ const simulationInfo = {
     startupNormalizedTime: lightingDiagnostics.startupNormalizedTime,
     startupLightColor: lightingDiagnostics.startupLightColor.slice(),
     startupSunAltitude: lightingDiagnostics.startupSunAltitude,
-  },
-  camera: {
-    position: initialCameraPosition.slice(),
-    near: CAMERA_NEAR_PLANE,
-    far: CAMERA_BASE_FAR_PLANE,
-    starMargin: CAMERA_STAR_MARGIN,
-    starFarthest: 0,
-    starShortfall: 0,
-    adjustments: 0,
-    flags: {
-      frustumClipping: false,
-      baseFrustumExceeded: false,
-    },
   },
 };
 
@@ -8287,16 +8577,17 @@ function tickSimulation(deltaTime) {
 
 function computeCameraFrustum() {
   const farthestStar = Math.max(0, starFieldState.metrics?.farthestDistance ?? STAR_FIELD_RADIUS);
-  const desiredFar = Math.max(CAMERA_BASE_FAR_PLANE, farthestStar + CAMERA_STAR_MARGIN);
-  const near = CAMERA_NEAR_PLANE;
+  const desiredFar = Math.max(ARRECIFE_CAMERA_BASE_FAR, farthestStar + ARRECIFE_CAMERA_STAR_MARGIN);
+  const near = ARRECIFE_CAMERA_NEAR;
   const previousFar = cameraDiagnostics.far;
 
   cameraDiagnostics.near = near;
   cameraDiagnostics.metrics.starFarthest = farthestStar;
-  cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - CAMERA_BASE_FAR_PLANE);
+  cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - ARRECIFE_CAMERA_BASE_FAR);
   cameraDiagnostics.starMargin = desiredFar - farthestStar;
   cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
   cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.starMargin;
 
   if (Math.abs(desiredFar - previousFar) > 0.5) {
     cameraDiagnostics.adjustments += 1;
@@ -8304,6 +8595,7 @@ function computeCameraFrustum() {
 
   cameraDiagnostics.far = desiredFar;
   cameraDiagnostics.lastUpdateTime = getTimestamp();
+  cameraDiagnostics.metrics.lastUpdateTime = cameraDiagnostics.lastUpdateTime;
 
   starFieldState.metrics.frustumMargin = cameraDiagnostics.starMargin;
   starFieldState.metrics.baseFarShortfall = cameraDiagnostics.metrics.starShortfall;
@@ -8380,8 +8672,8 @@ function update(deltaTime) {
   const projection = createPerspectiveMatrix(
     (60 * Math.PI) / 180,
     canvas.width / canvas.height,
-    CAMERA_NEAR_PLANE,
-    CAMERA_FAR_PLANE,
+    ARRECIFE_CAMERA_NEAR,
+    ARRECIFE_CAMERA_FAR,
   );
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
   const viewProjection = multiplyMatrices(projection, view);
@@ -8400,8 +8692,8 @@ function update(deltaTime) {
 
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
 
-  cameraClipPlanes.near = CAMERA_NEAR_PLANE;
-  cameraClipPlanes.far = CAMERA_FAR_PLANE;
+  cameraClipPlanes.near = ARRECIFE_CAMERA_NEAR;
+  cameraClipPlanes.far = ARRECIFE_CAMERA_FAR;
   cameraClipPlanes.lastUpdated =
     typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
@@ -9141,8 +9433,8 @@ function updateDebugConsole(deltaTime) {
     typeof cameraDiagnostics.lastOverrideTimestamp === 'number'
       ? new Date(cameraDiagnostics.lastOverrideTimestamp).toISOString()
       : cameraDiagnostics.lastOverrideTimestamp ?? 'n/d';
-  const baseClipLabel = `${CAMERA_BASE_NEAR_PLANE.toFixed(2)}/${CAMERA_BASE_FAR_PLANE.toFixed(1)}`;
-  const activeClipLabel = `${CAMERA_NEAR_PLANE.toFixed(2)}/${CAMERA_FAR_PLANE.toFixed(1)}`;
+  const baseClipLabel = `${ARRECIFE_CAMERA_BASE_NEAR.toFixed(2)}/${ARRECIFE_CAMERA_BASE_FAR.toFixed(1)}`;
+  const activeClipLabel = `${ARRECIFE_CAMERA_NEAR.toFixed(2)}/${ARRECIFE_CAMERA_FAR.toFixed(1)}`;
 
   const now = Date.now();
   cameraDisplayDiagnostics.lastUpdateTime = now;
@@ -9156,7 +9448,7 @@ function updateDebugConsole(deltaTime) {
     typeof cameraNearDisplay === 'object' &&
     'textContent' in cameraNearDisplay
   ) {
-    cameraNearDisplay.textContent = CAMERA_NEAR_PLANE.toFixed(2);
+    cameraNearDisplay.textContent = ARRECIFE_CAMERA_NEAR.toFixed(2);
   } else {
     missingCameraDisplays += 1;
   }
@@ -9165,7 +9457,7 @@ function updateDebugConsole(deltaTime) {
     typeof cameraFarDisplay === 'object' &&
     'textContent' in cameraFarDisplay
   ) {
-    cameraFarDisplay.textContent = CAMERA_FAR_PLANE.toFixed(1);
+    cameraFarDisplay.textContent = ARRECIFE_CAMERA_FAR.toFixed(1);
   } else {
     missingCameraDisplays += 1;
   }
@@ -9174,64 +9466,84 @@ function updateDebugConsole(deltaTime) {
     cameraDisplayDiagnostics.lastMissingTimestamp = now;
   }
 
-  const info = [
-    `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
-    `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
-    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
-    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
-    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
-    `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
-    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
-    `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
-    `Planos cámara: base=${baseClipLabel} actual=${activeClipLabel} Δ=${clipDeviation.toFixed(3)} override=${
-      clipOverrideActive ? 'sí' : 'no'
-    } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
-    `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
-    `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
-    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
-    `Luz global: rgb=${lightingDiagnostics.latestLightColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} sol=${lightingDiagnostics.latestSunAltitude.toFixed(1)} luz=${(lightingDiagnostics.latestDaylight * 100).toFixed(0)}%`,
-    `Terreno seed: ${terrainInfo.seed}`,
-    `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
-    `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
-    `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
-    `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
-      featureStats.ravine,
-    )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
-    `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
-      terrainInfo.flags?.textured ? 'sí' : 'no'
-    } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'} iluminación_plana=${
-      terrainInfo.flags?.flatLighting ? 'sí' : 'no'
-    })`,
-    `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
-    `Terreno iluminación plana: rgb=${terrainRenderState.metrics.lastFlatLightColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} luma=${terrainRenderState.metrics.lastFlatLightLuma.toFixed(2)} frame=${
-      terrainRenderState.metrics.flatShadedDrawsLastFrame
-    } total=${terrainRenderState.metrics.flatShadedDrawsTotal} luz_día=${(terrainRenderState.metrics.lastDaylight * 100).toFixed(
-      0,
-    )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
-    `Rocas generadas: ${terrainInfo.rockCount}`,
-    `Modelos disponibles: ${modelLibrary.length}`,
-    `Selección: ${selectionStatus}`,
-    `Movimiento activo: ${activeMovement || 'Ninguno'}`,
-    `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
-    `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
-    `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
-    `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
-    `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
-    `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
-    `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} radio=${starRadiusMin}–${starRadiusMax} margen=${starMargin} clip=${starClipStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
-    `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
-    `GL error: ${lastGlError}`,
-  ];
+  const cameraFarLabel = ARRECIFE_CAMERA_FAR.toFixed(1);
+  const marginEstimate = Number.isFinite(cameraDiagnostics.metrics.marginEstimate)
+    ? cameraDiagnostics.metrics.marginEstimate
+    : cameraDiagnostics.starMargin;
+  const cameraMarginLabel = Number.isFinite(marginEstimate)
+    ? marginEstimate.toFixed(1)
+    : '---';
+  const frustumClippingActive = Boolean(cameraDiagnostics.flags?.frustumClipping);
+  if (cameraDisplayDiagnostics.lastFrustumClipping !== frustumClippingActive) {
+    cameraDisplayDiagnostics.lastFrustumStatusChange = now;
+  }
+  cameraDisplayDiagnostics.lastFrustumClipping = frustumClippingActive;
+  cameraDisplayDiagnostics.lastFrustumStatus = frustumClippingActive ? 'riesgo' : 'seguro';
+  cameraDisplayDiagnostics.frustumStatusUpdates = Math.max(
+    0,
+    (cameraDisplayDiagnostics.frustumStatusUpdates ?? 0) + 1,
+  );
 
-  if (terrainInfo.massDiagnostics) {
+  let info = [];
+  try {
+    info = [
+      `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
+      `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
+      `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
+      `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
+      `Tiempo sim: ${simulationTime.toFixed(2)}s`,
+      `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
+      `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
+      `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
+      `Planos cámara: base=${baseClipLabel} actual=${activeClipLabel} Δ=${clipDeviation.toFixed(3)} override=${
+        clipOverrideActive ? 'sí' : 'no'
+      } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
+      `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
+      `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
+      `Frustum cámara: near=${ARRECIFE_CAMERA_NEAR.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${cameraDisplayDiagnostics.lastFrustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
+      `Luz global: rgb=${lightingDiagnostics.latestLightColor
+        .map((value) => value.toFixed(2))
+        .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
+        .map((value) => value.toFixed(2))
+        .join(', ')} sol=${lightingDiagnostics.latestSunAltitude.toFixed(1)} luz=${(lightingDiagnostics.latestDaylight * 100).toFixed(0)}%`,
+      `Terreno seed: ${terrainInfo.seed}`,
+      `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
+      `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
+      `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
+      `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
+        featureStats.ravine,
+      )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
+      `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
+        terrainInfo.flags?.textured ? 'sí' : 'no'
+      } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'} iluminación_plana=${
+        terrainInfo.flags?.flatLighting ? 'sí' : 'no'
+      })`,
+      `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
+      `Terreno iluminación plana: rgb=${terrainRenderState.metrics.lastFlatLightColor
+        .map((value) => value.toFixed(2))
+        .join(', ')} luma=${terrainRenderState.metrics.lastFlatLightLuma.toFixed(2)} frame=${
+        terrainRenderState.metrics.flatShadedDrawsLastFrame
+      } total=${terrainRenderState.metrics.flatShadedDrawsTotal} luz_día=${(terrainRenderState.metrics.lastDaylight * 100).toFixed(
+        0,
+      )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
+      `Rocas generadas: ${terrainInfo.rockCount}`,
+      `Modelos disponibles: ${modelLibrary.length}`,
+      `Selección: ${selectionStatus}`,
+      `Movimiento activo: ${activeMovement || 'Ninguno'}`,
+      `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
+      `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+      `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
+      `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
+      `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
+      `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
+      `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
+      `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
+      `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} radio=${starRadiusMin}–${starRadiusMax} margen=${starMargin} clip=${starClipStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+      `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+      `GL error: ${lastGlError}`,
+    ];
+
+    if (terrainInfo.massDiagnostics) {
     const diagnostics = terrainInfo.massDiagnostics;
     const flaggedCount = Array.isArray(diagnostics.flaggedEntities)
       ? diagnostics.flaggedEntities.length
@@ -9339,6 +9651,16 @@ function updateDebugConsole(deltaTime) {
     );
   }
 
+  if ((cameraDisplayDiagnostics.frustumStatusUpdates ?? 0) > 0) {
+    const lastChangeLabel = cameraDisplayDiagnostics.lastFrustumStatusChange
+      ? new Date(cameraDisplayDiagnostics.lastFrustumStatusChange).toISOString()
+      : 'n/d';
+    info.push(
+      `UI cámara frustum: estado=${cameraDisplayDiagnostics.lastFrustumStatus} ` +
+        `cambios=${cameraDisplayDiagnostics.frustumStatusUpdates} última_actualización=${lastChangeLabel}`,
+    );
+  }
+
   if (
     (simulationInfoDiagnostics.cameraRepairs ?? 0) > 0 ||
     (simulationInfoDiagnostics.clipRepairs ?? 0) > 0 ||
@@ -9404,12 +9726,30 @@ function updateDebugConsole(deltaTime) {
     }
   }
 
-  if (runtimeIssues.length > 0) {
-    info.push('', 'Problemas recientes:');
-    for (const issue of runtimeIssues) {
-      const marker = issue.severity === 'fatal' ? '⛔' : '⚠️';
-      info.push(`${marker} [${issue.timestamp}] ${issue.context}: ${formatIssueMessage(issue)}`);
+    if (runtimeIssues.length > 0) {
+      info.push('', 'Problemas recientes:');
+      for (const issue of runtimeIssues) {
+        const marker = issue.severity === 'fatal' ? '⛔' : '⚠️';
+        info.push(`${marker} [${issue.timestamp}] ${issue.context}: ${formatIssueMessage(issue)}`);
+      }
     }
+  } catch (error) {
+    const errorMessage = error && error.message ? error.message : String(error ?? 'Error desconocido');
+    debugConsoleDiagnostics.lastError = errorMessage;
+    cameraDiagnostics.metrics.failedUpdates = Math.max(
+      0,
+      (cameraDiagnostics.metrics.failedUpdates ?? 0) + 1,
+    );
+    runtimeState.lastDebugPanelError = {
+      timestamp: Date.now(),
+      message: errorMessage,
+    };
+    console.error('Error al generar la salida del panel de depuración', error);
+    info = [
+      `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
+      `⚠️ Panel depuración error: ${errorMessage}`,
+      `Intentos fallidos: ${cameraDiagnostics.metrics.failedUpdates}`,
+    ];
   }
 
   const output = info.join('\n');
@@ -9691,9 +10031,11 @@ function loop(currentTime) {
       cameraInfo.near = cameraDiagnostics.near;
       cameraInfo.far = cameraDiagnostics.far;
       cameraInfo.starMargin = cameraDiagnostics.starMargin;
+      cameraInfo.marginEstimate = cameraDiagnostics.metrics.marginEstimate;
       cameraInfo.starFarthest = cameraDiagnostics.metrics.starFarthest;
       cameraInfo.starShortfall = cameraDiagnostics.metrics.starShortfall;
       cameraInfo.adjustments = cameraDiagnostics.adjustments;
+      cameraInfo.failedDiagnostics = cameraDiagnostics.metrics.failedUpdates;
       if (!cameraInfo.flags || typeof cameraInfo.flags !== 'object') {
         cameraInfo.flags = {};
       }
@@ -9714,3 +10056,41 @@ function loop(currentTime) {
 }
 
 requestAnimationFrame(loop);
+    })(ARRECIFE_BOOT_TARGET, ARRECIFE_MODULE_STATE);
+    ARRECIFE_MODULE_STATE.initialized = true;
+    ARRECIFE_MODULE_STATE.lastSuccess = Date.now();
+  } catch (bootstrapError) {
+    ARRECIFE_MODULE_STATE.lastError =
+      bootstrapError && bootstrapError.message
+        ? String(bootstrapError.message)
+        : String(bootstrapError);
+    ARRECIFE_MODULE_STATE.failedAttempts = Math.max(
+      0,
+      (ARRECIFE_MODULE_STATE.failedAttempts || 0) + 1,
+    );
+    ARRECIFE_MODULE_STATE.initialized = false;
+    if (typeof console !== 'undefined' && typeof console.error === 'function') {
+      console.error(
+        '[Arrecife] Error al inicializar scripts/main.js. Se liberará el bloqueo para reintentos.',
+        bootstrapError,
+      );
+    }
+    throw bootstrapError;
+  } finally {
+    ARRECIFE_MODULE_STATE.active = false;
+  }
+  var finalRuntimeState = ARRECIFE_BOOT_TARGET.__ARRECIFE_RUNTIME_STATE__;
+  if (finalRuntimeState && typeof finalRuntimeState === 'object') {
+    var finalDiagnostics =
+      finalRuntimeState.moduleDiagnostics &&
+      typeof finalRuntimeState.moduleDiagnostics === 'object'
+        ? finalRuntimeState.moduleDiagnostics
+        : (finalRuntimeState.moduleDiagnostics = {});
+    if (finalDiagnostics.bootstrap) {
+      finalDiagnostics.bootstrap.active = false;
+      finalDiagnostics.bootstrap.lastSuccess = ARRECIFE_MODULE_STATE.lastSuccess;
+      finalDiagnostics.bootstrap.failedAttempts = ARRECIFE_MODULE_STATE.failedAttempts;
+      finalDiagnostics.bootstrap.lastError = ARRECIFE_MODULE_STATE.lastError;
+    }
+  }
+}
