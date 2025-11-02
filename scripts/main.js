@@ -3026,6 +3026,16 @@ function getPointerPosition(event) {
     return { x: 0, y: 0 };
   }
 
+  const locked = document.pointerLockElement === canvas;
+
+  if (locked) {
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    pointerCanvasPosition.x = centerX;
+    pointerCanvasPosition.y = centerY;
+    return { x: centerX, y: centerY };
+  }
+
   if (event) {
     const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
     const x = (event.clientX ?? rect.left) - rect.left;
@@ -5091,6 +5101,10 @@ document.addEventListener('pointerlockchange', () => {
   if (locked) {
     dismissTutorialOverlay();
     resetPointerLockScale();
+    if (canvas) {
+      pointerCanvasPosition.x = canvas.width / 2;
+      pointerCanvasPosition.y = canvas.height / 2;
+    }
   } else if (!overlayDismissed) {
     showTutorialOverlay();
     pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
