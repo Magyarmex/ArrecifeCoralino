@@ -129,7 +129,7 @@ runtimeState.bootstrapAttempts += 1;
 const runtimeIssues = Array.isArray(runtimeState.issues)
   ? runtimeState.issues
   : (runtimeState.issues = []);
-const MAX_RUNTIME_ISSUES = 8;
+const MAX_RUNTIME_ISSUES = 12;
 
 const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   ? runtimeState.pendingIssues
@@ -198,7 +198,7 @@ const ambientAudioState = {
 };
 
 const DEFAULT_CAMERA_NEAR_PLANE = 0.1;
-const DEFAULT_CAMERA_FAR_PLANE = 500;
+const DEFAULT_CAMERA_FAR_PLANE = 1200;
 const CAMERA_NEAR_PLANE =
   Number.isFinite(runtimeGlobal.CAMERA_NEAR_PLANE) && runtimeGlobal.CAMERA_NEAR_PLANE > 0
     ? runtimeGlobal.CAMERA_NEAR_PLANE
@@ -207,9 +207,13 @@ const CAMERA_FAR_PLANE =
   Number.isFinite(runtimeGlobal.CAMERA_FAR_PLANE) && runtimeGlobal.CAMERA_FAR_PLANE > CAMERA_NEAR_PLANE
     ? runtimeGlobal.CAMERA_FAR_PLANE
     : DEFAULT_CAMERA_FAR_PLANE;
+const CAMERA_BASE_FAR_PLANE = CAMERA_FAR_PLANE;
+const CAMERA_STAR_MARGIN = 120;
 
 runtimeGlobal.CAMERA_NEAR_PLANE = CAMERA_NEAR_PLANE;
 runtimeGlobal.CAMERA_FAR_PLANE = CAMERA_FAR_PLANE;
+runtimeGlobal.CAMERA_BASE_FAR_PLANE = CAMERA_BASE_FAR_PLANE;
+runtimeGlobal.CAMERA_STAR_MARGIN = CAMERA_STAR_MARGIN;
 
 const cameraClipPlanes =
   runtimeState.cameraClipPlanes && typeof runtimeState.cameraClipPlanes === 'object'
@@ -7895,6 +7899,10 @@ const simulationInfo = {
     starMargin: CAMERA_STAR_MARGIN,
     starFarthest: 0,
     starShortfall: 0,
+    metrics: {
+      starFarthest: 0,
+      starShortfall: 0,
+    },
     adjustments: 0,
     flags: {
       frustumClipping: false,
@@ -7902,6 +7910,8 @@ const simulationInfo = {
     },
   },
 };
+
+const cameraDiagnostics = simulationInfo.camera;
 
 if (typeof window !== 'undefined') {
   window.__simulationInfo = simulationInfo;
@@ -8834,6 +8844,17 @@ function updateDebugConsole(deltaTime) {
   const starVisibility = Number.isFinite(starMetrics.lastVisibility)
     ? starMetrics.lastVisibility.toFixed(2)
     : '0.00';
+  const cameraFarDisplay = Number.isFinite(cameraDiagnostics?.far)
+    ? cameraDiagnostics.far.toFixed(1)
+    : CAMERA_FAR_PLANE.toFixed(1);
+  const cameraMarginDisplay = Number.isFinite(cameraDiagnostics?.starMargin)
+    ? cameraDiagnostics.starMargin.toFixed(1)
+    : '---';
+  const frustumStatus = cameraDiagnostics?.flags?.frustumClipping
+    ? 'ALERTA'
+    : cameraDiagnostics?.flags?.baseFrustumExceeded
+    ? 'AMPLIADO'
+    : 'OK';
 
   const selectionStatus = selectedBlock
     ? `bloque ${selectedBlock.blockX},${selectedBlock.blockZ} (${selectedBlock.height.toFixed(2)}m)`
@@ -9071,8 +9092,12 @@ function loop(currentTime) {
     ];
     simulationInfo.camera.yaw = yaw;
     simulationInfo.camera.pitch = pitch;
-    simulationInfo.camera.clip.near = CAMERA_NEAR_PLANE;
-    simulationInfo.camera.clip.far = CAMERA_FAR_PLANE;
+    if (!simulationInfo.camera.clip || typeof simulationInfo.camera.clip !== 'object') {
+      simulationInfo.camera.clip = { near: CAMERA_NEAR_PLANE, far: CAMERA_FAR_PLANE };
+    } else {
+      simulationInfo.camera.clip.near = CAMERA_NEAR_PLANE;
+      simulationInfo.camera.clip.far = CAMERA_FAR_PLANE;
+    }
     simulationInfo.dayNight = dayNightCycleState;
     simulationInfo.terrain.surfaceStyle = terrainInfo.surfaceStyle;
     simulationInfo.terrain.colorVariance = terrainInfo.colorVariance ?? 0;
