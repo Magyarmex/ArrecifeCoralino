@@ -10252,6 +10252,7 @@ requestAnimationFrame(loop);
       (ARRECIFE_MODULE_STATE.failedAttempts || 0) + 1,
     );
     ARRECIFE_MODULE_STATE.initialized = false;
+    ARRECIFE_BOOT_TARGET.__ARRECIFE_MAIN_INITIALIZED__ = false;
     if (typeof console !== 'undefined' && typeof console.error === 'function') {
       console.error(
         '[Arrecife] Error al inicializar scripts/main.js. Se liberará el bloqueo para reintentos.',
