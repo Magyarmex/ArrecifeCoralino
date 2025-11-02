@@ -1869,7 +1869,7 @@ const vertexSource = `
 `;
 
 const derivativeShaderHeader = derivativesSupported
-  ? '#extension GL_OES_standard_derivatives : enable'
+  ? '#extension GL_OES_standard_derivatives : enable\n'
   : '';
 
 const fragmentNormalComputation = derivativesSupported
@@ -1890,10 +1890,8 @@ const fragmentNormalComputation = derivativesSupported
   }
 `;
 
-const fragmentSource = `
-  precision mediump float;
+const fragmentSource = `${derivativeShaderHeader}  precision mediump float;
   precision mediump int;
-  ${derivativeShaderHeader}
   varying vec3 vColor;
   varying vec3 vPosition;
   uniform vec3 globalLightColor;
