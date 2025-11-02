@@ -2024,6 +2024,15 @@ function reportVolumetricAnomaly(flaggedEntry, context = {}) {
     labels.push(context.name);
   }
   const label = labels.length > 0 ? labels.join(' ') : 'Entidad volumétrica';
+  if (!moduleDiagnostics.volumetric) {
+    moduleDiagnostics.volumetric = { anomalies: 0 };
+  }
+  moduleDiagnostics.volumetric.anomalies += 1;
+  moduleDiagnostics.volumetric.lastAnomaly = {
+    label,
+    reason: flaggedEntry.reason,
+    timestamp: Date.now(),
+  };
   recordRuntimeIssue('warning', 'volumetric-mass', {
     message: `${label} fuera de rango (${flaggedEntry.reason})`,
   });
@@ -2229,6 +2238,14 @@ if (!gl) {
 const derivativeExtension =
   typeof gl.getExtension === 'function' ? gl.getExtension('OES_standard_derivatives') : null;
 const derivativesSupported = Boolean(derivativeExtension);
+if (!moduleDiagnostics.shaders) {
+  moduleDiagnostics.shaders = {};
+}
+moduleDiagnostics.shaders.fragmentHeader = {
+  derivativesSupported,
+  header: derivativesSupported ? '#extension GL_OES_standard_derivatives : enable' : null,
+  recordedAt: Date.now(),
+};
 const lightingDiagnostics = {
   derivativesSupported,
   lastAppliedSunSpecular: 0,
@@ -2443,7 +2460,7 @@ const vertexSource = `
 `;
 
 const derivativeShaderHeader = derivativesSupported
-  ? '#extension GL_OES_standard_derivatives : enable'
+  ? '#extension GL_OES_standard_derivatives : enable\n'
   : '';
 
 const fragmentNormalComputation = derivativesSupported
@@ -2465,9 +2482,8 @@ const fragmentNormalComputation = derivativesSupported
 `;
 
 const fragmentSource = `
-  precision mediump float;
+${derivativeShaderHeader}  precision mediump float;
   precision mediump int;
-  ${derivativeShaderHeader}
   varying vec3 vColor;
   varying vec3 vPosition;
   uniform vec3 globalLightColor;
@@ -2487,6 +2503,7 @@ const fragmentSource = `
   uniform float emissiveStrength;
   uniform float daylightLevel;
   uniform float nightColorRetention;
+  uniform int terrainFlatShading;
 
   const int RENDER_MODE_TERRAIN = 0;
   const int RENDER_MODE_WATER = 1;
@@ -2654,7 +2671,7 @@ const fragmentSource = `
 
     gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), terrainAlpha);
   }
-`;
+`.trim();
 
 const vertexShader = createShader(gl.VERTEX_SHADER, vertexSource);
 const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragmentSource);
@@ -2681,6 +2698,10 @@ const viewProjectionUniform = gl.getUniformLocation(program, 'viewProjection');
 const globalLightColorUniform = gl.getUniformLocation(program, 'globalLightColor');
 const terrainAlphaUniform = gl.getUniformLocation(program, 'terrainAlpha');
 const terrainFlatShadingUniform = gl.getUniformLocation(program, 'terrainFlatShading');
+if (moduleDiagnostics.shaders) {
+  moduleDiagnostics.shaders.terrainFlatShadingUniformBound = Boolean(terrainFlatShadingUniform);
+  moduleDiagnostics.shaders.terrainFlatShadingUniformCheckedAt = Date.now();
+}
 const terrainFlatLightColorUniform = gl.getUniformLocation(
   program,
   'terrainFlatLightColor',
@@ -7640,6 +7661,9 @@ function regenerateRocks(seedString, heightfield, maskfield) {
 
     const fallbackVolume = Math.max(0, ((4 / 3) * Math.PI * scale[0] * scale[1] * scale[2]) || 0);
     const density = randomInRange(random, 2200, 2800);
+    const fallbackMass = Math.max(0, fallbackVolume * density);
+    const expectedMinMass = Math.max(0.5, fallbackMass * 0.3);
+    const expectedMaxMass = Math.max(800, fallbackMass * 1.2);
     const rockId = `rock-${generatedRocks.length + 1}`;
     let massResult;
     if (volumetricEngine) {
@@ -7655,10 +7679,18 @@ function regenerateRocks(seedString, heightfield, maskfield) {
           category: 'rock',
         },
         expectedRange: {
-          min: 2,
-          max: Math.max(800, fallbackVolume * density * 1.2),
+          min: expectedMinMass,
+          max: expectedMaxMass,
         },
       });
+      if (!moduleDiagnostics.volumetric) {
+        moduleDiagnostics.volumetric = { anomalies: 0 };
+      }
+      moduleDiagnostics.volumetric.lastRockExpectedRange = {
+        min: expectedMinMass,
+        max: expectedMaxMass,
+        fallbackMass,
+      };
       if (massResult.flagged) {
         reportVolumetricAnomaly(massResult.flagged, {
           type: 'Roca',
