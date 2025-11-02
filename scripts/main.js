@@ -3027,11 +3027,17 @@ function getPointerPosition(event) {
   }
 
   if (event) {
-    const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
-    const x = (event.clientX ?? rect.left) - rect.left;
-    const y = (event.clientY ?? rect.top) - rect.top;
-    pointerCanvasPosition.x = clamp(x, 0, canvas.width);
-    pointerCanvasPosition.y = clamp(y, 0, canvas.height);
+    const locked = document.pointerLockElement === canvas;
+    if (locked) {
+      pointerCanvasPosition.x = canvas.width / 2;
+      pointerCanvasPosition.y = canvas.height / 2;
+    } else {
+      const rect = canvas.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+      const x = (event.clientX ?? rect.left) - rect.left;
+      const y = (event.clientY ?? rect.top) - rect.top;
+      pointerCanvasPosition.x = clamp(x, 0, canvas.width);
+      pointerCanvasPosition.y = clamp(y, 0, canvas.height);
+    }
   }
 
   return { x: pointerCanvasPosition.x, y: pointerCanvasPosition.y };
