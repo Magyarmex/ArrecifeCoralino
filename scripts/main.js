@@ -1,49 +1,86 @@
-const runtimeGlobal =
-  typeof globalThis !== 'undefined'
-    ? globalThis
-    : typeof self !== 'undefined'
-    ? self
-    : typeof window !== 'undefined'
-    ? window
-    : typeof global !== 'undefined'
-    ? global
-    : {};
+((runtimeGlobalCandidate) => {
+  const runtimeGlobal =
+    runtimeGlobalCandidate && typeof runtimeGlobalCandidate === 'object'
+      ? runtimeGlobalCandidate
+      : {};
 
-let canvas = document.getElementById('scene');
-const overlay = document.getElementById('overlay');
-const simulationHud = document.getElementById('simulation-hud');
-const startButton = document.getElementById('start-button');
-let debugConsole = document.getElementById('debug-console');
-let debugPanel = document.getElementById('debug-panel');
-let debugToggleButton = document.getElementById('debug-toggle');
-const cameraNearDisplay = document.getElementById('camera-near-display');
-const cameraFarDisplay = document.getElementById('camera-far-display');
-const settingsToggle = document.getElementById('settings-toggle');
-const settingsPanel = document.getElementById('settings-panel');
-const seedInput = document.getElementById('seed-input');
-const randomSeedButton = document.getElementById('random-seed');
-const simulationClock = document.getElementById('simulation-clock');
-const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
-const simulationSpeedSlider = document.getElementById('simulation-speed');
-const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
-const simulationSpeedSettingsDisplay = document.getElementById(
-  'simulation-speed-display-settings'
-);
-const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
-const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
-const dayCyclePhaseIcons = Array.from(
-  document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
-);
-const dayCyclePhaseIconMap = new Map(
-  dayCyclePhaseIcons
-    .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
-    .filter(([phase, element]) => phase && element),
-);
-const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
-const musicToggle = document.getElementById('audio-music-toggle');
+  const runtimeState =
+    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ &&
+    typeof runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ === 'object'
+      ? runtimeGlobal.__ARRECIFE_RUNTIME_STATE__
+      : (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ = {
+          bootstrapAttempts: 0,
+          issues: [],
+          fallbackFactories: null,
+          reportedFallbacks: null,
+          uiFallbackEvents: null,
+        });
 
-let debugConsoleHeartbeatId = null;
-const DEBUG_PANEL_HEARTBEAT_MS = 1000;
+  runtimeState.bootstrapGuards = Math.max(0, runtimeState.bootstrapGuards ?? 0);
+
+  if (runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__) {
+    runtimeState.bootstrapGuards += 1;
+    runtimeState.lastBootstrapGuard = Date.now();
+    const issues = Array.isArray(runtimeState.issues)
+      ? runtimeState.issues
+      : (runtimeState.issues = []);
+    issues.push({
+      severity: 'fatal',
+      context: 'bootstrap',
+      error:
+        'Se bloqueó una inicialización duplicada de "scripts/main.js" para evitar conflictos de constantes.',
+      timestamp: runtimeState.lastBootstrapGuard,
+      code: 'duplicate-bootstrap',
+    });
+    while (issues.length > 8) {
+      issues.shift();
+    }
+    runtimeGlobal.__ARRECIFE_DUPLICATE_BOOTSTRAP__ = true;
+    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('[Arrecife] Inicialización duplicada bloqueada.', issues[issues.length - 1]);
+    }
+    return;
+  }
+
+  runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__ = true;
+  runtimeGlobal.__ARRECIFE_DUPLICATE_BOOTSTRAP__ = false;
+  runtimeState.lastBootstrapTime = Date.now();
+
+  let canvas = document.getElementById('scene');
+  const overlay = document.getElementById('overlay');
+  const simulationHud = document.getElementById('simulation-hud');
+  const startButton = document.getElementById('start-button');
+  let debugConsole = document.getElementById('debug-console');
+  let debugPanel = document.getElementById('debug-panel');
+  let debugToggleButton = document.getElementById('debug-toggle');
+  const cameraNearDisplay = document.getElementById('camera-near-display');
+  const cameraFarDisplay = document.getElementById('camera-far-display');
+  const settingsToggle = document.getElementById('settings-toggle');
+  const settingsPanel = document.getElementById('settings-panel');
+  const seedInput = document.getElementById('seed-input');
+  const randomSeedButton = document.getElementById('random-seed');
+  const simulationClock = document.getElementById('simulation-clock');
+  const simulationSpeedIndicator = document.getElementById('simulation-speed-indicator');
+  const simulationSpeedSlider = document.getElementById('simulation-speed');
+  const simulationSpeedDisplay = document.getElementById('simulation-speed-display');
+  const simulationSpeedSettingsDisplay = document.getElementById(
+    'simulation-speed-display-settings',
+  );
+  const dayCycleProgressTrack = document.getElementById('day-cycle-progress-track');
+  const dayCycleProgressFill = document.getElementById('day-cycle-progress-fill');
+  const dayCyclePhaseIcons = Array.from(
+    document?.querySelectorAll?.('[data-day-cycle-phase]') ?? [],
+  );
+  const dayCyclePhaseIconMap = new Map(
+    dayCyclePhaseIcons
+      .map((element) => [element?.getAttribute?.('data-day-cycle-phase'), element])
+      .filter(([phase, element]) => phase && element),
+  );
+  const debugTerrainToggle = document.getElementById('debug-terrain-translucent');
+  const musicToggle = document.getElementById('audio-music-toggle');
+
+  let debugConsoleHeartbeatId = null;
+  const DEBUG_PANEL_HEARTBEAT_MS = 1000;
 
 function createFallbackDebugPanel() {
   const supportsDom =
@@ -149,17 +186,8 @@ function ensureDebugPanelHeartbeat() {
   }, DEBUG_PANEL_HEARTBEAT_MS);
 }
 
-const runtimeState =
-  (runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ =
-    runtimeGlobal.__ARRECIFE_RUNTIME_STATE__ || {
-      bootstrapAttempts: 0,
-      issues: [],
-      fallbackFactories: null,
-      reportedFallbacks: null,
-      uiFallbackEvents: null,
-    });
-
-runtimeState.bootstrapAttempts += 1;
+runtimeState.bootstrapAttempts = Math.max(0, runtimeState.bootstrapAttempts ?? 0) + 1;
+runtimeState.totalBootstraps = Math.max(0, runtimeState.totalBootstraps ?? 0) + 1;
 
 const runtimeIssues = Array.isArray(runtimeState.issues)
   ? runtimeState.issues
@@ -357,6 +385,8 @@ cameraDiagnostics.baseNear = CAMERA_BASE_NEAR_PLANE;
 cameraDiagnostics.baseFar = CAMERA_BASE_FAR_PLANE;
 cameraDiagnostics.currentNear = CAMERA_NEAR_PLANE;
 cameraDiagnostics.currentFar = CAMERA_FAR_PLANE;
+cameraDiagnostics.near = cameraDiagnostics.near ?? CAMERA_NEAR_PLANE;
+cameraDiagnostics.far = cameraDiagnostics.far ?? CAMERA_FAR_PLANE;
 cameraDiagnostics.lastDeviation = cameraClipPlanes.deviation;
 cameraDiagnostics.flags = {
   overrideActive: cameraClipPlanes.overrideActive,
@@ -364,6 +394,32 @@ cameraDiagnostics.flags = {
 };
 cameraDiagnostics.overrides = Math.max(0, cameraClipPlanes.overrides ?? 0);
 cameraDiagnostics.lastOverrideTimestamp = cameraClipPlanes.lastOverrideTimestamp ?? null;
+if (!cameraDiagnostics.metrics || typeof cameraDiagnostics.metrics !== 'object') {
+  cameraDiagnostics.metrics = {
+    starFarthest: 0,
+    starShortfall: 0,
+    marginEstimate: CAMERA_STAR_MARGIN,
+    lastUpdateTime: 0,
+    failedUpdates: 0,
+  };
+} else {
+  cameraDiagnostics.metrics.starFarthest = cameraDiagnostics.metrics.starFarthest ?? 0;
+  cameraDiagnostics.metrics.starShortfall = cameraDiagnostics.metrics.starShortfall ?? 0;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.metrics.marginEstimate ?? CAMERA_STAR_MARGIN;
+  cameraDiagnostics.metrics.lastUpdateTime = cameraDiagnostics.metrics.lastUpdateTime ?? 0;
+  cameraDiagnostics.metrics.failedUpdates = cameraDiagnostics.metrics.failedUpdates ?? 0;
+}
+cameraDiagnostics.adjustments = Number.isFinite(cameraDiagnostics.adjustments)
+  ? cameraDiagnostics.adjustments
+  : 0;
+cameraDiagnostics.starMargin = Number.isFinite(cameraDiagnostics.starMargin)
+  ? cameraDiagnostics.starMargin
+  : CAMERA_STAR_MARGIN;
+cameraDiagnostics.flags = {
+  ...cameraDiagnostics.flags,
+  frustumClipping: Boolean(cameraDiagnostics.flags?.frustumClipping),
+  baseFrustumExceeded: Boolean(cameraDiagnostics.flags?.baseFrustumExceeded),
+};
 
 if (cameraDiagnostics.flags.invalidOrdering) {
   pendingRuntimeIssueQueue.push({
@@ -1160,7 +1216,11 @@ function registerUiFallback(id, message, severity = 'error') {
     uiFallbackEvents.shift();
   }
   if (!existing) {
-    pendingRuntimeIssueQueue.push({ severity, context: 'ui', error: message });
+    pendingRuntimeIssueQueue.push({
+      severity,
+      context: 'ui',
+      error: { message, preserve: true, id },
+    });
   }
   return reportedFallbacks[id];
 }
@@ -1688,16 +1748,37 @@ function updateDiagnosticsToast() {
 
 function recordRuntimeIssue(severity, context, error) {
   const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
+  const preserve = Boolean(error && typeof error === 'object' && error.preserve);
+  const issueId =
+    error && typeof error === 'object' && typeof error.id === 'string' ? error.id : null;
+  const stackTrace =
+    error instanceof Error
+      ? error.stack
+      : error && typeof error.stack === 'string'
+      ? error.stack
+      : null;
   const entry = {
     severity,
     context,
     message: describeIssue(error),
     timestamp,
-    stack: error && typeof error.stack === 'string' ? error.stack : null,
+    stack: stackTrace,
+    preserve,
+    id: issueId,
   };
   runtimeIssues.unshift(entry);
   if (runtimeIssues.length > MAX_RUNTIME_ISSUES) {
-    runtimeIssues.length = MAX_RUNTIME_ISSUES;
+    let removed = false;
+    for (let i = runtimeIssues.length - 1; i >= 0; i -= 1) {
+      if (!runtimeIssues[i]?.preserve) {
+        runtimeIssues.splice(i, 1);
+        removed = true;
+        break;
+      }
+    }
+    if (!removed) {
+      runtimeIssues.length = MAX_RUNTIME_ISSUES;
+    }
   }
   updateDiagnosticsToast();
   return entry;
@@ -8057,6 +8138,14 @@ const simulationInfo = {
     position: [cameraPosition[0], cameraPosition[1], cameraPosition[2]],
     yaw,
     pitch,
+    near: CAMERA_NEAR_PLANE,
+    far: CAMERA_BASE_FAR_PLANE,
+    starMargin: CAMERA_STAR_MARGIN,
+    starFarthest: 0,
+    starShortfall: 0,
+    adjustments: 0,
+    marginEstimate: cameraDiagnostics.metrics?.marginEstimate ?? CAMERA_STAR_MARGIN,
+    failedDiagnostics: cameraDiagnostics.metrics?.failedUpdates ?? 0,
     clip: snapshotCameraClipDiagnostics(),
     clipFlags: {
       overrideActive: Boolean(cameraDiagnostics.flags?.overrideActive),
@@ -8065,6 +8154,10 @@ const simulationInfo = {
     clipOverrides: {
       count: Math.max(0, cameraDiagnostics.overrides ?? 0),
       lastTimestamp: cameraDiagnostics.lastOverrideTimestamp ?? null,
+    },
+    flags: {
+      frustumClipping: Boolean(cameraDiagnostics.flags?.frustumClipping),
+      baseFrustumExceeded: Boolean(cameraDiagnostics.flags?.baseFrustumExceeded),
     },
   },
   dayNight: dayNightCycleState,
@@ -8159,19 +8252,6 @@ const simulationInfo = {
     startupNormalizedTime: lightingDiagnostics.startupNormalizedTime,
     startupLightColor: lightingDiagnostics.startupLightColor.slice(),
     startupSunAltitude: lightingDiagnostics.startupSunAltitude,
-  },
-  camera: {
-    position: initialCameraPosition.slice(),
-    near: CAMERA_NEAR_PLANE,
-    far: CAMERA_BASE_FAR_PLANE,
-    starMargin: CAMERA_STAR_MARGIN,
-    starFarthest: 0,
-    starShortfall: 0,
-    adjustments: 0,
-    flags: {
-      frustumClipping: false,
-      baseFrustumExceeded: false,
-    },
   },
 };
 
@@ -8297,6 +8377,7 @@ function computeCameraFrustum() {
   cameraDiagnostics.starMargin = desiredFar - farthestStar;
   cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
   cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.starMargin;
 
   if (Math.abs(desiredFar - previousFar) > 0.5) {
     cameraDiagnostics.adjustments += 1;
@@ -8304,6 +8385,7 @@ function computeCameraFrustum() {
 
   cameraDiagnostics.far = desiredFar;
   cameraDiagnostics.lastUpdateTime = getTimestamp();
+  cameraDiagnostics.metrics.lastUpdateTime = cameraDiagnostics.lastUpdateTime;
 
   starFieldState.metrics.frustumMargin = cameraDiagnostics.starMargin;
   starFieldState.metrics.baseFarShortfall = cameraDiagnostics.metrics.starShortfall;
@@ -9174,64 +9256,75 @@ function updateDebugConsole(deltaTime) {
     cameraDisplayDiagnostics.lastMissingTimestamp = now;
   }
 
-  const info = [
-    `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
-    `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
-    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
-    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
-    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
-    `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
-    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
-    `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
-    `Planos cámara: base=${baseClipLabel} actual=${activeClipLabel} Δ=${clipDeviation.toFixed(3)} override=${
-      clipOverrideActive ? 'sí' : 'no'
-    } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
-    `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
-    `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
-    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarDisplay} margen_est=${cameraMarginDisplay} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
-    `Luz global: rgb=${lightingDiagnostics.latestLightColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} sol=${lightingDiagnostics.latestSunAltitude.toFixed(1)} luz=${(lightingDiagnostics.latestDaylight * 100).toFixed(0)}%`,
-    `Terreno seed: ${terrainInfo.seed}`,
-    `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
-    `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
-    `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
-    `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
-      featureStats.ravine,
-    )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
-    `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
-      terrainInfo.flags?.textured ? 'sí' : 'no'
-    } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'} iluminación_plana=${
-      terrainInfo.flags?.flatLighting ? 'sí' : 'no'
-    })`,
-    `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
-    `Terreno iluminación plana: rgb=${terrainRenderState.metrics.lastFlatLightColor
-      .map((value) => value.toFixed(2))
-      .join(', ')} luma=${terrainRenderState.metrics.lastFlatLightLuma.toFixed(2)} frame=${
-      terrainRenderState.metrics.flatShadedDrawsLastFrame
-    } total=${terrainRenderState.metrics.flatShadedDrawsTotal} luz_día=${(terrainRenderState.metrics.lastDaylight * 100).toFixed(
-      0,
-    )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
-    `Rocas generadas: ${terrainInfo.rockCount}`,
-    `Modelos disponibles: ${modelLibrary.length}`,
-    `Selección: ${selectionStatus}`,
-    `Movimiento activo: ${activeMovement || 'Ninguno'}`,
-    `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
-    `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
-    `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
-    `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
-    `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
-    `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
-    `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
-    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} radio=${starRadiusMin}–${starRadiusMax} margen=${starMargin} clip=${starClipStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
-    `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
-    `GL error: ${lastGlError}`,
-  ];
+  const cameraFarLabel = CAMERA_FAR_PLANE.toFixed(1);
+  const marginEstimate = Number.isFinite(cameraDiagnostics.metrics.marginEstimate)
+    ? cameraDiagnostics.metrics.marginEstimate
+    : cameraDiagnostics.starMargin;
+  const cameraMarginLabel = Number.isFinite(marginEstimate)
+    ? marginEstimate.toFixed(1)
+    : '---';
+  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'riesgo' : 'seguro';
 
-  if (terrainInfo.massDiagnostics) {
+  let info = [];
+  try {
+    info = [
+      `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
+      `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
+      `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
+      `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
+      `Tiempo sim: ${simulationTime.toFixed(2)}s`,
+      `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
+      `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
+      `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
+      `Planos cámara: base=${baseClipLabel} actual=${activeClipLabel} Δ=${clipDeviation.toFixed(3)} override=${
+        clipOverrideActive ? 'sí' : 'no'
+      } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
+      `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
+      `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
+      `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
+      `Luz global: rgb=${lightingDiagnostics.latestLightColor
+        .map((value) => value.toFixed(2))
+        .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
+        .map((value) => value.toFixed(2))
+        .join(', ')} sol=${lightingDiagnostics.latestSunAltitude.toFixed(1)} luz=${(lightingDiagnostics.latestDaylight * 100).toFixed(0)}%`,
+      `Terreno seed: ${terrainInfo.seed}`,
+      `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
+      `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
+      `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
+      `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
+        featureStats.ravine,
+      )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
+      `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
+        terrainInfo.flags?.textured ? 'sí' : 'no'
+      } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'} iluminación_plana=${
+        terrainInfo.flags?.flatLighting ? 'sí' : 'no'
+      })`,
+      `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
+      `Terreno iluminación plana: rgb=${terrainRenderState.metrics.lastFlatLightColor
+        .map((value) => value.toFixed(2))
+        .join(', ')} luma=${terrainRenderState.metrics.lastFlatLightLuma.toFixed(2)} frame=${
+        terrainRenderState.metrics.flatShadedDrawsLastFrame
+      } total=${terrainRenderState.metrics.flatShadedDrawsTotal} luz_día=${(terrainRenderState.metrics.lastDaylight * 100).toFixed(
+        0,
+      )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
+      `Rocas generadas: ${terrainInfo.rockCount}`,
+      `Modelos disponibles: ${modelLibrary.length}`,
+      `Selección: ${selectionStatus}`,
+      `Movimiento activo: ${activeMovement || 'Ninguno'}`,
+      `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
+      `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+      `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
+      `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
+      `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
+      `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
+      `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
+      `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
+      `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} radio=${starRadiusMin}–${starRadiusMax} margen=${starMargin} clip=${starClipStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+      `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+      `GL error: ${lastGlError}`,
+    ];
+
+    if (terrainInfo.massDiagnostics) {
     const diagnostics = terrainInfo.massDiagnostics;
     const flaggedCount = Array.isArray(diagnostics.flaggedEntities)
       ? diagnostics.flaggedEntities.length
@@ -9404,12 +9497,30 @@ function updateDebugConsole(deltaTime) {
     }
   }
 
-  if (runtimeIssues.length > 0) {
-    info.push('', 'Problemas recientes:');
-    for (const issue of runtimeIssues) {
-      const marker = issue.severity === 'fatal' ? '⛔' : '⚠️';
-      info.push(`${marker} [${issue.timestamp}] ${issue.context}: ${formatIssueMessage(issue)}`);
+    if (runtimeIssues.length > 0) {
+      info.push('', 'Problemas recientes:');
+      for (const issue of runtimeIssues) {
+        const marker = issue.severity === 'fatal' ? '⛔' : '⚠️';
+        info.push(`${marker} [${issue.timestamp}] ${issue.context}: ${formatIssueMessage(issue)}`);
+      }
     }
+  } catch (error) {
+    const errorMessage = error && error.message ? error.message : String(error ?? 'Error desconocido');
+    debugConsoleDiagnostics.lastError = errorMessage;
+    cameraDiagnostics.metrics.failedUpdates = Math.max(
+      0,
+      (cameraDiagnostics.metrics.failedUpdates ?? 0) + 1,
+    );
+    runtimeState.lastDebugPanelError = {
+      timestamp: Date.now(),
+      message: errorMessage,
+    };
+    console.error('Error al generar la salida del panel de depuración', error);
+    info = [
+      `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
+      `⚠️ Panel depuración error: ${errorMessage}`,
+      `Intentos fallidos: ${cameraDiagnostics.metrics.failedUpdates}`,
+    ];
   }
 
   const output = info.join('\n');
@@ -9691,9 +9802,11 @@ function loop(currentTime) {
       cameraInfo.near = cameraDiagnostics.near;
       cameraInfo.far = cameraDiagnostics.far;
       cameraInfo.starMargin = cameraDiagnostics.starMargin;
+      cameraInfo.marginEstimate = cameraDiagnostics.metrics.marginEstimate;
       cameraInfo.starFarthest = cameraDiagnostics.metrics.starFarthest;
       cameraInfo.starShortfall = cameraDiagnostics.metrics.starShortfall;
       cameraInfo.adjustments = cameraDiagnostics.adjustments;
+      cameraInfo.failedDiagnostics = cameraDiagnostics.metrics.failedUpdates;
       if (!cameraInfo.flags || typeof cameraInfo.flags !== 'object') {
         cameraInfo.flags = {};
       }
@@ -9714,3 +9827,14 @@ function loop(currentTime) {
 }
 
 requestAnimationFrame(loop);
+})(
+  typeof globalThis !== 'undefined'
+    ? globalThis
+    : typeof self !== 'undefined'
+    ? self
+    : typeof window !== 'undefined'
+    ? window
+    : typeof global !== 'undefined'
+    ? global
+    : {},
+);
