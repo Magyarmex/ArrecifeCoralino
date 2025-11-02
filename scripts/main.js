@@ -409,6 +409,21 @@ const ORGANISM_CONSTANTS = Object.freeze({
   }),
 });
 
+const WATER_COLUMN_CONSTANTS = Object.freeze({
+  gridResolution: 32,
+  plankton: Object.freeze({
+    maxDensity: 2e12,
+    bandDepth: 2.5,
+    initialSaturation: 0.85,
+    dailyRecovery: 1,
+    migrationRate: 0.18,
+    caloriesPerIndividual: 5e-7,
+  }),
+  eggs: Object.freeze({
+    maxSpawnPerCloud: 64,
+  }),
+});
+
 const NUTRIENT_DENSITIES = Object.freeze({
   fish: Object.freeze({
     carbon: 0.07,
@@ -4055,6 +4070,1531 @@ let rockInfoKeyHandler = null;
 let ignoreNextRockPointerDown = false;
 let pendingRockSelection = null;
 const pointerCanvasPosition = { x: 0, y: 0 };
+
+const waterColumnDiagnostics =
+  runtimeState.waterColumnDiagnostics && typeof runtimeState.waterColumnDiagnostics === 'object'
+    ? runtimeState.waterColumnDiagnostics
+    : (runtimeState.waterColumnDiagnostics = {
+        resets: 0,
+        lastResetTime: 0,
+        lastTickTime: 0,
+        lastTickDelta: 0,
+        lastMetricsUpdate: 0,
+        lastWetColumns: 0,
+        eggDeposits: 0,
+        eggHatches: 0,
+        failedDeposits: 0,
+        overCapacity: 0,
+        migrationTransfers: 0,
+        consumptionEvents: 0,
+        lastError: null,
+      });
+
+function createEmptyWaterColumnMetrics() {
+  return {
+    columns: 0,
+    wetColumns: 0,
+    dryColumns: 0,
+    totalVolume: 0,
+    totalDepth: 0,
+    totalPlanktonDensity: 0,
+    totalSlope: 0,
+    averageDepth: 0,
+    averagePlanktonDensity: 0,
+    averageSlope: 0,
+    minPlanktonDensity: Infinity,
+    maxPlanktonDensity: 0,
+    eggs: 0,
+    eggsBySpecies: Object.create(null),
+    coralSites: 0,
+    kelpSites: 0,
+    shelfColumns: 0,
+    cliffColumns: 0,
+    planktonDepletedColumns: 0,
+    lastUpdate: 0,
+  };
+}
+
+const waterColumnSimulation = {
+  gridSize: Math.max(1, Math.floor(WATER_COLUMN_CONSTANTS.gridResolution)),
+  cellSize:
+    Math.max(1, Math.floor(WATER_COLUMN_CONSTANTS.gridResolution)) > 0
+      ? baseplateSize / Math.max(1, Math.floor(WATER_COLUMN_CONSTANTS.gridResolution))
+      : baseplateSize,
+  columns: [],
+  columnGrid: [],
+  columnById: new Map(),
+  diagnostics: waterColumnDiagnostics,
+  metrics: createEmptyWaterColumnMetrics(),
+};
+
+const WATER_COLUMN_NEIGHBOR_OFFSETS = [
+  [1, 0],
+  [0, 1],
+  [1, 1],
+  [-1, 1],
+];
+
+function cloneWaterChemistryDefaults() {
+  const clone = {};
+  for (const [key, spec] of Object.entries(WATER_CHEMISTRY_DEFAULTS)) {
+    clone[key] = { value: spec.value, units: spec.units };
+  }
+  return clone;
+}
+
+function computeTerrainSlope(sample, cellSize) {
+  if (!sample || !sample.cornerHeights) {
+    return { slope: 0, roughness: 0 };
+  }
+  const { h00, h10, h01, h11 } = sample.cornerHeights;
+  const dx = ((h10 - h00) + (h11 - h01)) * 0.5;
+  const dz = ((h01 - h00) + (h11 - h10)) * 0.5;
+  const divisor = Math.max(cellSize, 0.0001);
+  const gradX = dx / divisor;
+  const gradZ = dz / divisor;
+  const slope = Math.sqrt(gradX * gradX + gradZ * gradZ);
+  const roughness =
+    Math.max(Math.abs(h10 - h00), Math.abs(h01 - h00), Math.abs(h11 - h00)) /
+    divisor;
+  return { slope, roughness };
+}
+
+function createWaterColumn(gridX, gridZ, centerX, centerZ, depth, cellSize, terrainSample) {
+  const area = cellSize * cellSize;
+  const effectiveBand = Math.max(0, Math.min(depth, WATER_COLUMN_CONSTANTS.plankton.bandDepth));
+  const maxIndividuals = area * effectiveBand * WATER_COLUMN_CONSTANTS.plankton.maxDensity;
+  const initialIndividuals = maxIndividuals * WATER_COLUMN_CONSTANTS.plankton.initialSaturation;
+  const maskValue = terrainSample?.mask ?? 0;
+  const { slope, roughness } = computeTerrainSlope(terrainSample, cellSize);
+  const seafloor = waterSurfaceLevel - depth;
+  const coralDepthLimit = waterSurfaceLevel - 12;
+  const coralDepthOk = seafloor >= coralDepthLimit && depth > 0.25 && depth <= 7.2;
+  const isCliff = slope >= 0.45 || roughness >= 0.55;
+  const isShelf = !isCliff && depth <= 6.5;
+  const shelteredByLand = maskValue >= 0.45;
+  const externalShelf = maskValue <= 0.18;
+  const kelpMinDepth = Math.max(0, waterSurfaceLevel - 19);
+  const kelpMaxDepth = Math.max(kelpMinDepth, waterSurfaceLevel - 15);
+  const kelpBand = depth >= kelpMinDepth && depth <= kelpMaxDepth;
+  return {
+    id: `water-${gridX}-${gridZ}`,
+    gridX,
+    gridZ,
+    centerX,
+    centerZ,
+    cellSize,
+    depth,
+    area,
+    seafloor,
+    volume: area * depth,
+    plankton: {
+      individuals: Math.max(0, initialIndividuals),
+      maxIndividuals: Math.max(0, maxIndividuals),
+      density:
+        depth > 0 ? Math.max(0, initialIndividuals) / Math.max(area * Math.max(depth, 0.0001), 1) : 0,
+    },
+    eggClouds: [],
+    chemistry: cloneWaterChemistryDefaults(),
+    metrics: {
+      lastUpdate: 0,
+      lastEggDeposit: null,
+      slope,
+      roughness,
+      mask: maskValue,
+    },
+    flags: {
+      dry: depth <= 0.02,
+      shallow: depth > 0 && depth < 2.5,
+      cliff: isCliff,
+      shelf: isShelf,
+      coralCandidate: coralDepthOk && (isCliff || shelteredByLand),
+      sheltered: shelteredByLand,
+      externalShelf,
+      kelpBand: kelpBand && !shelteredByLand,
+    },
+    terrainHeight: null,
+    mask: null,
+  };
+}
+
+function rebuildWaterColumns(seedString, heightfield) {
+  void seedString;
+  void heightfield;
+  const diagnostics = waterColumnSimulation.diagnostics;
+  const gridSize = waterColumnSimulation.gridSize;
+  const cellSize = gridSize > 0 ? baseplateSize / gridSize : baseplateSize;
+  waterColumnSimulation.cellSize = cellSize;
+  waterColumnSimulation.columns = [];
+  waterColumnSimulation.columnGrid = new Array(gridSize);
+  waterColumnSimulation.columnById = new Map();
+  const half = baseplateSize / 2;
+  diagnostics.resets = Math.max(0, (diagnostics.resets ?? 0) + 1);
+  diagnostics.lastResetTime = Date.now();
+
+  for (let gz = 0; gz < gridSize; gz++) {
+    waterColumnSimulation.columnGrid[gz] = new Array(gridSize);
+    for (let gx = 0; gx < gridSize; gx++) {
+      const centerX = -half + (gx + 0.5) * cellSize;
+      const centerZ = -half + (gz + 0.5) * cellSize;
+      const terrainSample = sampleTerrain(centerX, centerZ);
+      const maskValue = sampleTerrainMask(centerX, centerZ);
+      const groundHeight = terrainSample?.height ?? 0;
+      const depth = Math.max(0, waterSurfaceLevel - groundHeight);
+      const column = createWaterColumn(
+        gx,
+        gz,
+        centerX,
+        centerZ,
+        depth,
+        cellSize,
+        terrainSample ? { ...terrainSample, mask: maskValue } : { mask: maskValue },
+      );
+      column.terrainHeight = groundHeight;
+      column.mask = maskValue;
+      waterColumnSimulation.columnGrid[gz][gx] = column;
+      waterColumnSimulation.columns.push(column);
+      waterColumnSimulation.columnById.set(column.id, column);
+    }
+  }
+
+  updateWaterColumnMetrics();
+  diagnostics.lastError = null;
+  return waterColumnSimulation;
+}
+
+function findWaterColumnAtPosition(worldX, worldZ) {
+  const gridSize = waterColumnSimulation.gridSize;
+  if (gridSize <= 0) {
+    return null;
+  }
+  const half = baseplateSize / 2;
+  const localX = worldX + half;
+  const localZ = worldZ + half;
+  if (localX < 0 || localZ < 0 || localX >= baseplateSize || localZ >= baseplateSize) {
+    return null;
+  }
+  const gx = Math.min(gridSize - 1, Math.max(0, Math.floor((localX / baseplateSize) * gridSize)));
+  const gz = Math.min(gridSize - 1, Math.max(0, Math.floor((localZ / baseplateSize) * gridSize)));
+  return waterColumnSimulation.columnGrid[gz]?.[gx] ?? null;
+}
+
+function updateWaterColumnMetrics() {
+  const metrics = createEmptyWaterColumnMetrics();
+  const columns = waterColumnSimulation.columns;
+  for (const column of columns) {
+    if (!column) {
+      continue;
+    }
+    metrics.columns += 1;
+    if (column.depth <= 0.02 || column.flags?.dry) {
+      metrics.dryColumns += 1;
+      continue;
+    }
+    metrics.wetColumns += 1;
+    metrics.totalVolume += column.area * column.depth;
+    metrics.totalDepth += column.depth;
+    const density = Number.isFinite(column.plankton?.density) ? column.plankton.density : 0;
+    metrics.totalPlanktonDensity += density;
+    metrics.minPlanktonDensity = Math.min(metrics.minPlanktonDensity, density);
+    metrics.maxPlanktonDensity = Math.max(metrics.maxPlanktonDensity, density);
+    metrics.totalSlope += column.metrics?.slope ?? 0;
+    if (column.flags?.coralCandidate) {
+      metrics.coralSites += 1;
+    }
+    if (column.flags?.kelpBand) {
+      metrics.kelpSites += 1;
+    }
+    if (column.flags?.shelf) {
+      metrics.shelfColumns += 1;
+    }
+    if (column.flags?.cliff) {
+      metrics.cliffColumns += 1;
+    }
+    const carryingDensity =
+      column.plankton?.maxIndividuals && column.volume > 0
+        ? column.plankton.maxIndividuals / column.volume
+        : 0;
+    if (carryingDensity > 0 && density <= carryingDensity * 0.25) {
+      metrics.planktonDepletedColumns += 1;
+    }
+    if (Array.isArray(column.eggClouds)) {
+      for (const cloud of column.eggClouds) {
+        if (!cloud) continue;
+        const eggCount = Math.max(0, Math.round(cloud.count ?? 0));
+        metrics.eggs += eggCount;
+        if (cloud.speciesId) {
+          metrics.eggsBySpecies[cloud.speciesId] =
+            Math.max(0, metrics.eggsBySpecies[cloud.speciesId] ?? 0) + eggCount;
+        }
+      }
+    } else if (column.metrics?.eggsBySpecies) {
+      for (const [speciesId, count] of Object.entries(column.metrics.eggsBySpecies)) {
+        if (!speciesId) continue;
+        const safeCount = Math.max(0, Math.round(count ?? 0));
+        metrics.eggsBySpecies[speciesId] =
+          Math.max(0, metrics.eggsBySpecies[speciesId] ?? 0) + safeCount;
+        metrics.eggs += safeCount;
+      }
+    }
+  }
+  metrics.averageDepth = metrics.wetColumns > 0 ? metrics.totalDepth / metrics.wetColumns : 0;
+  metrics.averagePlanktonDensity =
+    metrics.wetColumns > 0 ? metrics.totalPlanktonDensity / metrics.wetColumns : 0;
+  metrics.averageSlope = metrics.wetColumns > 0 ? metrics.totalSlope / metrics.wetColumns : 0;
+  if (!Number.isFinite(metrics.minPlanktonDensity) || metrics.minPlanktonDensity === Infinity) {
+    metrics.minPlanktonDensity = 0;
+  }
+  metrics.lastUpdate = Date.now();
+  waterColumnSimulation.metrics = metrics;
+  waterColumnDiagnostics.lastMetricsUpdate = metrics.lastUpdate;
+  waterColumnDiagnostics.lastWetColumns = metrics.wetColumns;
+}
+
+function withdrawPlankton(columnId, individuals) {
+  const column = columnId ? waterColumnSimulation.columnById.get(columnId) : null;
+  if (!column || !column.plankton || column.plankton.maxIndividuals <= 0) {
+    return 0;
+  }
+  const requested = Math.max(0, Number(individuals) || 0);
+  if (requested <= 0) {
+    return 0;
+  }
+  const available = Math.max(0, column.plankton.individuals ?? 0);
+  const consumed = Math.min(available, requested);
+  if (consumed <= 0) {
+    return 0;
+  }
+  column.plankton.individuals = available - consumed;
+  const volume = column.area * Math.max(column.depth, 0.0001);
+  column.plankton.density = column.plankton.individuals / Math.max(volume, 1);
+  waterColumnDiagnostics.consumptionEvents = Math.max(
+    0,
+    (waterColumnDiagnostics.consumptionEvents ?? 0) + 1,
+  );
+  return consumed;
+}
+
+function depositEggCloud(speciesId, count, options = {}) {
+  const diagnostics = waterColumnSimulation.diagnostics;
+  const species = speciesRegistry ? speciesRegistry.getSpecies(speciesId) : null;
+  if (!species) {
+    diagnostics.failedDeposits = Math.max(0, (diagnostics.failedDeposits ?? 0) + 1);
+    diagnostics.lastError = `Especie no registrada para huevos: ${speciesId}`;
+    return null;
+  }
+  const targetColumn =
+    options.columnId && waterColumnSimulation.columnById.has(options.columnId)
+      ? waterColumnSimulation.columnById.get(options.columnId)
+      : findWaterColumnAtPosition(options.position?.[0] ?? 0, options.position?.[2] ?? 0);
+  if (!targetColumn || targetColumn.depth <= 0) {
+    diagnostics.failedDeposits = Math.max(0, (diagnostics.failedDeposits ?? 0) + 1);
+    diagnostics.lastError = `No se pudo ubicar columna acuática válida para ${speciesId}`;
+    return null;
+  }
+  const hatchDelayDays =
+    Number.isFinite(options.hatchDelayDays) && options.hatchDelayDays > 0
+      ? options.hatchDelayDays
+      : species.eggs?.hatchDelayDays ??
+        species.lifecycle.lifespanDays * species.lifecycle.hatchFraction;
+  const hatchAt = simulationTime + hatchDelayDays * dayNightCycleDuration;
+  const eggCount = Math.max(1, Math.round(count ?? 0));
+  const cloud = {
+    id: `${speciesId}-eggs-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    speciesId,
+    count: eggCount,
+    createdAt: simulationTime,
+    hatchAt,
+    ageSeconds: 0,
+    diagnostics: {
+      tileId: targetColumn.id,
+      anchor: options.tileAnchor || species.eggs?.tileAnchor || 'water-column',
+    },
+  };
+  targetColumn.eggClouds.push(cloud);
+  targetColumn.metrics.lastEggDeposit = simulationTime;
+  if (!targetColumn.metrics.eggsBySpecies) {
+    targetColumn.metrics.eggsBySpecies = Object.create(null);
+  }
+  const speciesEggs = targetColumn.metrics.eggsBySpecies;
+  speciesEggs[speciesId] = Math.max(0, speciesEggs[speciesId] ?? 0) + eggCount;
+  diagnostics.eggDeposits = Math.max(0, (diagnostics.eggDeposits ?? 0) + eggCount);
+  updateWaterColumnMetrics();
+  return cloud;
+}
+
+function tickWaterColumns(deltaTime) {
+  const columns = waterColumnSimulation.columns;
+  const diagnostics = waterColumnSimulation.diagnostics;
+  if (!columns || columns.length === 0) {
+    diagnostics.lastTickDelta = deltaTime;
+    diagnostics.lastTickTime = Date.now();
+    return [];
+  }
+  const secondsPerDay = dayNightCycleDuration > 0 ? dayNightCycleDuration : 1;
+  const recoveryRate =
+    (deltaTime / secondsPerDay) * WATER_COLUMN_CONSTANTS.plankton.dailyRecovery;
+  const migrationRate =
+    (deltaTime / secondsPerDay) * WATER_COLUMN_CONSTANTS.plankton.migrationRate;
+  const clampedRecovery = Math.max(0, Math.min(1, recoveryRate));
+  const clampedMigration = Math.max(0, Math.min(0.5, migrationRate));
+  const hatchedEggs = [];
+  const adjustments = new Float64Array(columns.length);
+  const indexLookup = new Map();
+  for (let i = 0; i < columns.length; i++) {
+    indexLookup.set(columns[i].id, i);
+  }
+  for (let i = 0; i < columns.length; i++) {
+    const column = columns[i];
+    if (!column || column.plankton.maxIndividuals <= 0) {
+      column.plankton.individuals = 0;
+      column.plankton.density = 0;
+      continue;
+    }
+    const target = column.plankton.maxIndividuals;
+    const current = Math.max(0, column.plankton.individuals);
+    const growth = Math.max(0, (target - current) * clampedRecovery);
+    const next = Math.min(target, current + growth);
+    column.plankton.individuals = next;
+    const volume = column.area * Math.max(column.depth, 0.0001);
+    column.plankton.density = next / Math.max(volume, 1);
+  }
+  if (clampedMigration > 0 && columns.length > 1) {
+    const gridSize = waterColumnSimulation.gridSize;
+    for (let gz = 0; gz < waterColumnSimulation.columnGrid.length; gz++) {
+      const row = waterColumnSimulation.columnGrid[gz];
+      if (!row) continue;
+      for (let gx = 0; gx < row.length; gx++) {
+        const column = row[gx];
+        if (!column || column.plankton.maxIndividuals <= 0) {
+          continue;
+        }
+        const sourceIndex = indexLookup.get(column.id);
+        if (sourceIndex === undefined) {
+          continue;
+        }
+        for (const [dx, dz] of WATER_COLUMN_NEIGHBOR_OFFSETS) {
+          const nz = gz + dz;
+          const nx = gx + dx;
+          if (nz < 0 || nz >= gridSize || nx < 0 || nx >= gridSize) {
+            continue;
+          }
+          const neighbor = waterColumnSimulation.columnGrid[nz][nx];
+          if (!neighbor || neighbor.plankton.maxIndividuals <= 0) {
+            continue;
+          }
+          const neighborIndex = indexLookup.get(neighbor.id);
+          if (neighborIndex === undefined) {
+            continue;
+          }
+          const difference = column.plankton.individuals - neighbor.plankton.individuals;
+          if (difference <= 0) {
+            continue;
+          }
+          const transfer = difference * clampedMigration;
+          if (transfer <= 0) {
+            continue;
+          }
+          adjustments[sourceIndex] -= transfer;
+          adjustments[neighborIndex] += transfer;
+          diagnostics.migrationTransfers = Math.max(
+            0,
+            (diagnostics.migrationTransfers ?? 0) + 1,
+          );
+        }
+      }
+    }
+    for (let i = 0; i < columns.length; i++) {
+      const column = columns[i];
+      if (!column || adjustments[i] === 0) {
+        continue;
+      }
+      const next = clamp(
+        column.plankton.individuals + adjustments[i],
+        0,
+        column.plankton.maxIndividuals,
+      );
+      column.plankton.individuals = next;
+      const volume = column.area * Math.max(column.depth, 0.0001);
+      column.plankton.density = next / Math.max(volume, 1);
+    }
+  }
+  if (typeof simulationTime === 'number') {
+    for (const column of columns) {
+      if (!Array.isArray(column.eggClouds) || column.eggClouds.length === 0) {
+        continue;
+      }
+      for (let index = column.eggClouds.length - 1; index >= 0; index--) {
+        const cloud = column.eggClouds[index];
+        if (!cloud) {
+          continue;
+        }
+        cloud.ageSeconds = (cloud.ageSeconds ?? 0) + deltaTime;
+        if (cloud.hatchAt !== undefined && simulationTime >= cloud.hatchAt) {
+          column.eggClouds.splice(index, 1);
+          if (column.metrics?.eggsBySpecies && cloud.speciesId) {
+            const speciesCount = column.metrics.eggsBySpecies[cloud.speciesId] ?? 0;
+            column.metrics.eggsBySpecies[cloud.speciesId] = Math.max(
+              0,
+              speciesCount - Math.max(0, cloud.count ?? 0),
+            );
+          }
+          hatchedEggs.push({ column, cloud });
+          diagnostics.eggHatches = Math.max(
+            0,
+            (diagnostics.eggHatches ?? 0) + Math.max(0, cloud.count ?? 0),
+          );
+        }
+      }
+    }
+  }
+  diagnostics.lastTickDelta = deltaTime;
+  diagnostics.lastTickTime = Date.now();
+  updateWaterColumnMetrics();
+  return hatchedEggs;
+}
+
+waterColumnSimulation.rebuild = rebuildWaterColumns;
+waterColumnSimulation.findColumnAt = findWaterColumnAtPosition;
+waterColumnSimulation.depositEggCloud = depositEggCloud;
+waterColumnSimulation.withdrawPlankton = withdrawPlankton;
+waterColumnSimulation.tick = tickWaterColumns;
+
+runtimeState.waterColumns = waterColumnSimulation;
+runtimeGlobal.__ARRECIFE_WATER_COLUMNS__ = waterColumnSimulation;
+
+const ORGANISM_SIMULATION_LIMIT = 512;
+
+const organismDiagnostics =
+  runtimeState.organismDiagnostics && typeof runtimeState.organismDiagnostics === 'object'
+    ? runtimeState.organismDiagnostics
+    : (runtimeState.organismDiagnostics = {
+        spawns: 0,
+        deaths: 0,
+        hatchedEggs: 0,
+        hatchOverflow: 0,
+        resets: 0,
+        lastResetSeed: null,
+        lastSpawnTime: 0,
+        lastDeathTime: 0,
+        starvations: 0,
+        exhaustionDeaths: 0,
+        reproductionAttempts: 0,
+        reproductionSuccesses: 0,
+        invalidSpeciesRequests: 0,
+        overCapacity: 0,
+        lastError: null,
+        lastTickTime: 0,
+        lastTickDelta: 0,
+        hunts: 0,
+        huntSuccesses: 0,
+        huntFailures: 0,
+        feedingEvents: 0,
+        nutrientTransfers: 0,
+      });
+
+function createEmptyOrganismMetrics() {
+  return {
+    total: 0,
+    alive: 0,
+    dead: 0,
+    baby: 0,
+    juvenile: 0,
+    adult: 0,
+    elderly: 0,
+    starving: 0,
+    sleeping: 0,
+    averageCalories: 0,
+    averageHunger: 0,
+    averageEnergy: 0,
+     averageMass: 0,
+     averageSize: 0,
+    eggsQueued: 0,
+    hatchedThisTick: 0,
+    hatchOverflow: 0,
+     predationEvents: 0,
+     grazingEvents: 0,
+     nutrientTransfers: 0,
+    lastUpdate: 0,
+  };
+}
+
+const organismSimulation = {
+  individuals: [],
+  individualsById: new Map(),
+  diagnostics: organismDiagnostics,
+  metrics: createEmptyOrganismMetrics(),
+  nextId: 1,
+  random: createRandomGenerator(stringToSeed(`${currentSeed}-organisms`)),
+};
+
+function selectWaterColumnForSpecies(species, random) {
+  const columns = waterColumnSimulation.columns;
+  if (!columns || columns.length === 0) {
+    return null;
+  }
+  const rng = typeof random === 'function' ? random : Math.random;
+  const candidates = [];
+  const fallback = [];
+  const preferDeep = [];
+  const preferShallow = [];
+  for (const column of columns) {
+    if (!column || column.flags?.dry) {
+      continue;
+    }
+    fallback.push(column);
+    const depth = column.depth;
+    switch (species?.id) {
+      case 'coral.ball':
+        if (column.flags?.coralCandidate) {
+          candidates.push(column);
+        }
+        break;
+      case 'algae.kelp':
+        if (column.flags?.kelpBand) {
+          candidates.push(column);
+        }
+        break;
+      case 'algae.ball':
+        if (column.flags?.shelf && depth >= 1 && depth <= 8) {
+          candidates.push(column);
+        }
+        break;
+      case 'starfish.common':
+        if (column.flags?.coralCandidate || column.flags?.shelf) {
+          candidates.push(column);
+        }
+        break;
+      case 'lobster.red':
+        if (column.flags?.shelf || column.flags?.coralCandidate) {
+          candidates.push(column);
+        }
+        break;
+      case 'parrotfish.blue':
+        if (depth >= 2 && depth <= 12 && (column.flags?.coralCandidate || column.flags?.shelf)) {
+          candidates.push(column);
+        }
+        break;
+      case 'turtle.green':
+        if (depth >= 1.5 && depth <= 14) {
+          preferShallow.push(column);
+        }
+        break;
+      case 'jellyfish.pink':
+        if (depth >= 1 && depth <= 16) {
+          preferShallow.push(column);
+        }
+        break;
+      case 'shark.reef':
+        if (depth >= 4) {
+          preferDeep.push(column);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  const pool =
+    candidates.length > 0
+      ? candidates
+      : species?.id === 'turtle.green' || species?.id === 'jellyfish.pink'
+      ? preferShallow.length > 0
+        ? preferShallow
+        : fallback
+      : species?.id === 'shark.reef'
+      ? preferDeep.length > 0
+        ? preferDeep
+        : fallback
+      : fallback;
+  if (pool.length === 0) {
+    return null;
+  }
+  const index = Math.min(pool.length - 1, Math.floor(rng() * pool.length));
+  return pool[index];
+}
+
+function rollEggCount(range, random) {
+  if (!range) {
+    return 0;
+  }
+  const min = Number.isFinite(range.min) ? range.min : Number.isFinite(range.max) ? range.max : 0;
+  const max = Number.isFinite(range.max) ? range.max : min;
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return 0;
+  }
+  if (min === max) {
+    return Math.max(0, Math.round(min));
+  }
+  const rng = typeof random === 'function' ? random : Math.random;
+  const value = min + rng() * (max - min);
+  return Math.max(0, Math.round(value));
+}
+
+function deriveOrganismPosition(species, random) {
+  const columns = waterColumnSimulation.columns;
+  const rng = typeof random === 'function' ? random : Math.random;
+  if (!columns || columns.length === 0) {
+    return [0, waterSurfaceLevel - 1, 0];
+  }
+  const chosenColumn = selectWaterColumnForSpecies(species, rng) || columns[0];
+  const column = chosenColumn || columns[0];
+  const jitter = (waterColumnSimulation.cellSize || 1) * 0.45;
+  const offsetX = (rng() - 0.5) * jitter;
+  const offsetZ = (rng() - 0.5) * jitter;
+  let y;
+  const mobility = species?.behaviours?.mobility;
+  if (mobility === 'sessile') {
+    y = column.seafloor;
+  } else if (mobility === 'crawler') {
+    y = column.seafloor + 0.08;
+  } else if (mobility === 'drifter') {
+    y = clamp(
+      column.seafloor + column.depth * (0.75 + rng() * 0.2),
+      column.seafloor + 0.05,
+      waterSurfaceLevel - 0.25,
+    );
+  } else {
+    y = clamp(
+      column.seafloor + column.depth * (0.25 + rng() * 0.5),
+      column.seafloor + 0.12,
+      waterSurfaceLevel - 0.3,
+    );
+  }
+  return [column.centerX + offsetX, y, column.centerZ + offsetZ];
+}
+
+function markOrganismDead(individual, reason) {
+  if (!individual) {
+    return;
+  }
+  individual.flags = individual.flags || {};
+  if (individual.flags.alive === false) {
+    return;
+  }
+  individual.flags.alive = false;
+  individual.flags.deathReason = reason || 'unknown';
+  individual.timeOfDeath = simulationTime;
+  organismDiagnostics.deaths = Math.max(0, (organismDiagnostics.deaths ?? 0) + 1);
+  organismDiagnostics.lastDeathTime = Date.now();
+  if (reason === 'starvation') {
+    organismDiagnostics.starvations = Math.max(
+      0,
+      (organismDiagnostics.starvations ?? 0) + 1,
+    );
+  } else if (reason === 'exhaustion') {
+    organismDiagnostics.exhaustionDeaths = Math.max(
+      0,
+      (organismDiagnostics.exhaustionDeaths ?? 0) + 1,
+    );
+  }
+}
+
+function updateIndividualGrowth(individual, species, secondsPerDay) {
+  if (!individual || !species) {
+    return;
+  }
+  const birthCalories = Math.max(0, species.growth?.caloriesAtBirth ?? 0);
+  const adultCalories = Math.max(birthCalories, species.growth?.caloriesAtAdult ?? birthCalories);
+  const totalCalories = Math.max(0, individual.calories ?? birthCalories);
+  const lifespanDays = Math.max(1, species.lifecycle?.lifespanDays ?? 1);
+  const ageDays = Math.max(0, individual.ageDays ?? 0);
+  const normalizedAge = clampNumber(ageDays / lifespanDays, 0, 2);
+  const expectedAtAge = birthCalories + (adultCalories - birthCalories) * clampNumber(normalizedAge, 0, 1);
+  const baseGrowthCalories = Math.min(Math.max(birthCalories, expectedAtAge), adultCalories);
+  const surplusCalories = Math.max(0, totalCalories - baseGrowthCalories);
+  const effectiveCalories = baseGrowthCalories + surplusCalories;
+  const fatReserves = surplusCalories;
+  individual.fatReserves = fatReserves;
+  const hungerMultiplier = fatReserves > 0 ? 1 + Math.min(fatReserves / adultCalories, 2) * 0.35 : 1;
+  const baseDailyNeed = species.metabolism?.dailyCalories ?? 0;
+  individual.hungerMax = baseDailyNeed * hungerMultiplier;
+  const massKg = massFromCalories(effectiveCalories);
+  individual.massKg = massKg;
+  individual.volumeCubicMeters = volumeFromMass(massKg, species.growth?.densityKey);
+  const sizeScale = Math.pow(effectiveCalories / Math.max(adultCalories, 1), 1 / 3);
+  individual.sizeScale = clamp(sizeScale, 0.2, 3.5);
+  individual.diagnostics = individual.diagnostics || {};
+  individual.diagnostics.lastGrowthUpdate = Date.now();
+  individual.diagnostics.expectedCalories = expectedAtAge;
+  individual.diagnostics.surplusCalories = surplusCalories;
+  if (!Number.isFinite(individual.energyMax)) {
+    individual.energyMax = 480;
+  }
+  if (secondsPerDay > 0 && individual.lifeStage === 'baby') {
+    const growthRate = (effectiveCalories - birthCalories) / adultCalories;
+    individual.diagnostics.growthRate = clampNumber(growthRate, 0, 2);
+  }
+}
+
+function computeAwarenessRadius(species) {
+  const awareness = species?.behaviours?.awareness || {};
+  const vision = Number.isFinite(awareness.vision) ? awareness.vision : 0;
+  const smell = Number.isFinite(awareness.smell) ? awareness.smell : 0;
+  const baseline = species?.behaviours?.mobility === 'sessile' ? 0 : 4;
+  return Math.max(baseline, vision, smell);
+}
+
+function computeMovementSpeed(species, mode) {
+  const mobility = species?.behaviours?.mobility;
+  let base = 0.25;
+  switch (mobility) {
+    case 'drifter':
+      base = 0.22;
+      break;
+    case 'swimmer':
+      base = 0.9;
+      break;
+    case 'crawler':
+      base = 0.35;
+      break;
+    case 'sessile':
+      base = 0;
+      break;
+    default:
+      base = 0.4;
+      break;
+  }
+  if (mode === 'hunt') {
+    return base * Math.max(1.1, species?.behaviours?.sprintMultiplier ?? 1.5);
+  }
+  if (mode === 'flee') {
+    return base * 1.35;
+  }
+  if (mode === 'graze') {
+    return base * 0.6;
+  }
+  return base;
+}
+
+function moveOrganismTowards(individual, species, targetPosition, speed, deltaTime) {
+  if (!individual || !Array.isArray(individual.position) || !Array.isArray(targetPosition)) {
+    return Infinity;
+  }
+  const position = individual.position;
+  const dx = targetPosition[0] - position[0];
+  const dy = targetPosition[1] - position[1];
+  const dz = targetPosition[2] - position[2];
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (distance <= 0.0001 || speed <= 0) {
+    return distance;
+  }
+  const step = speed * deltaTime;
+  const ratio = Math.min(1, step / Math.max(distance, 0.0001));
+  position[0] += dx * ratio;
+  position[1] += dy * ratio;
+  position[2] += dz * ratio;
+  individual.velocity = [
+    (dx / Math.max(distance, 0.0001)) * speed,
+    (dy / Math.max(distance, 0.0001)) * speed,
+    (dz / Math.max(distance, 0.0001)) * speed,
+  ];
+  const column = findWaterColumnAtPosition(position[0], position[2]);
+  if (column) {
+    const mobility = species?.behaviours?.mobility;
+    const minY = mobility === 'crawler' ? column.seafloor + 0.05 : column.seafloor + 0.08;
+    const maxY = waterSurfaceLevel - 0.25;
+    position[1] = clamp(position[1], minY, maxY);
+    individual.waterColumnId = column.id;
+  }
+  const rx = targetPosition[0] - position[0];
+  const ry = targetPosition[1] - position[1];
+  const rz = targetPosition[2] - position[2];
+  return Math.sqrt(rx * rx + ry * ry + rz * rz);
+}
+
+function trackNutrientTransfer(predator, prey) {
+  if (!predator || !prey) {
+    return;
+  }
+  if (!predator.nutrientIntake) {
+    predator.nutrientIntake = Object.create(null);
+  }
+  const source = prey.nutrients || {};
+  for (const [key, value] of Object.entries(source)) {
+    predator.nutrientIntake[key] =
+      Math.max(0, predator.nutrientIntake[key] ?? 0) + Math.max(0, Number(value) || 0);
+  }
+  organismDiagnostics.nutrientTransfers = Math.max(
+    0,
+    (organismDiagnostics.nutrientTransfers ?? 0) + 1,
+  );
+}
+
+function completePredation(predator, predatorSpecies, prey, preySpecies) {
+  if (!predator || !prey || prey.flags?.alive === false) {
+    return false;
+  }
+  const preyCalories = Math.max(0, prey.calories ?? preySpecies?.growth?.caloriesAtAdult ?? 0);
+  predator.calories = Math.max(0, (predator.calories ?? 0) + preyCalories);
+  predator.hunger = predator.hungerMax;
+  predator.flags = predator.flags || {};
+  predator.flags.starving = false;
+  predator.intent = 'saciado';
+  predator.thought = `Se alimentó de ${prey.displayName || prey.speciesId}`;
+  trackNutrientTransfer(predator, prey);
+  markOrganismDead(prey, 'predation');
+  organismDiagnostics.huntSuccesses = Math.max(
+    0,
+    (organismDiagnostics.huntSuccesses ?? 0) + 1,
+  );
+  organismDiagnostics.feedingEvents = Math.max(
+    0,
+    (organismDiagnostics.feedingEvents ?? 0) + 1,
+  );
+  return true;
+}
+
+function applyGrazingBite(predator, predatorSpecies, prey, preySpecies) {
+  if (!predator || !prey || prey.flags?.alive === false) {
+    return false;
+  }
+  const available = Math.max(0, prey.calories ?? 0);
+  if (available <= 0) {
+    return false;
+  }
+  const baseNeed = predatorSpecies.metabolism?.dailyCalories ?? 200;
+  const bite = Math.min(available, baseNeed * 0.2);
+  predator.calories = Math.max(0, (predator.calories ?? 0) + bite);
+  predator.hunger = Math.min(predator.hungerMax ?? baseNeed, (predator.hunger ?? 0) + bite * 0.9);
+  trackNutrientTransfer(predator, prey);
+  prey.calories = Math.max(0, available - bite);
+  prey.hunger = Math.max(0, (prey.hunger ?? preySpecies.metabolism?.dailyCalories ?? 0) - bite * 0.4);
+  if (prey.calories <= Math.max(1, preySpecies.growth?.caloriesAtBirth ?? 0) * 0.25) {
+    markOrganismDead(prey, 'overgrazed');
+  }
+  predator.thought = `Se alimentó de ${prey.displayName || prey.speciesId}`;
+  organismDiagnostics.feedingEvents = Math.max(
+    0,
+    (organismDiagnostics.feedingEvents ?? 0) + 1,
+  );
+  return true;
+}
+
+function handlePredatoryDiet(individual, species, speciesGroups, deltaTime, hungerFraction) {
+  if (!species || !Array.isArray(species.diet?.primary) || species.diet.primary.length === 0) {
+    individual.skipMovementUpdate = false;
+    return;
+  }
+  const targets = species.diet.primary.filter((entry) => entry !== 'sunlight' && entry !== 'plankton');
+  if (targets.length === 0) {
+    individual.skipMovementUpdate = false;
+    return;
+  }
+  if (hungerFraction > 0.85) {
+    individual.skipMovementUpdate = false;
+    return;
+  }
+  const awareness = computeAwarenessRadius(species);
+  const awarenessSq = awareness * awareness;
+  let closest = null;
+  let closestDistSq = Infinity;
+  for (const targetId of targets) {
+    const group = speciesGroups.get(targetId) || [];
+    for (const candidate of group) {
+      if (!candidate || candidate === individual || candidate.flags?.alive === false) {
+        continue;
+      }
+      if (!Array.isArray(candidate.position) || !Array.isArray(individual.position)) {
+        continue;
+      }
+      const dx = candidate.position[0] - individual.position[0];
+      const dy = candidate.position[1] - individual.position[1];
+      const dz = candidate.position[2] - individual.position[2];
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq < closestDistSq && distSq <= awarenessSq) {
+        closest = candidate;
+        closestDistSq = distSq;
+      }
+    }
+  }
+  if (!closest) {
+    individual.intent = 'buscar comida';
+    individual.targetId = null;
+    individual.skipMovementUpdate = false;
+    return;
+  }
+  if (individual.targetId !== closest.id) {
+    organismDiagnostics.hunts = Math.max(0, (organismDiagnostics.hunts ?? 0) + 1);
+  }
+  individual.intent = 'hunt';
+  individual.targetId = closest.id;
+  individual.thought = `Persiguiendo ${closest.displayName || closest.speciesId}`;
+  const predatorSpeed = computeMovementSpeed(species, 'hunt');
+  const remainingDistance = moveOrganismTowards(
+    individual,
+    species,
+    closest.position,
+    predatorSpeed,
+    deltaTime,
+  );
+  individual.skipMovementUpdate = true;
+  const preySpecies = closest.species || speciesRegistry?.getSpecies(closest.speciesId);
+  const captureRadius = preySpecies?.behaviours?.mobility === 'sessile' ? 0.6 : 0.9;
+  if (remainingDistance <= captureRadius) {
+    if (preySpecies?.behaviours?.mobility === 'sessile' && species.behaviours?.mobility === 'crawler') {
+      applyGrazingBite(individual, species, closest, preySpecies);
+    } else {
+      if (!completePredation(individual, species, closest, preySpecies)) {
+        organismDiagnostics.huntFailures = Math.max(
+          0,
+          (organismDiagnostics.huntFailures ?? 0) + 1,
+        );
+      }
+    }
+    individual.targetId = null;
+  }
+}
+
+function handleHatchedEggs(hatchedEggs) {
+  if (!Array.isArray(hatchedEggs) || hatchedEggs.length === 0) {
+    if (organismSimulation.metrics) {
+      organismSimulation.metrics.hatchedThisTick = 0;
+      organismSimulation.metrics.hatchOverflow = 0;
+    }
+    return;
+  }
+  const random = organismSimulation.random || Math.random;
+  let spawned = 0;
+  let overflow = 0;
+  for (const entry of hatchedEggs) {
+    const cloud = entry?.cloud;
+    const column = entry?.column;
+    if (!cloud || !column) {
+      continue;
+    }
+    const total = Math.max(0, cloud.count ?? 0);
+    const speciesId = cloud.speciesId;
+    if (!speciesId || total <= 0) {
+      continue;
+    }
+    const species = speciesRegistry ? speciesRegistry.getSpecies(speciesId) : null;
+    if (!species) {
+      organismDiagnostics.invalidSpeciesRequests = Math.max(
+        0,
+        (organismDiagnostics.invalidSpeciesRequests ?? 0) + 1,
+      );
+      organismDiagnostics.lastError = `Nidada sin especie registrada: ${speciesId}`;
+      continue;
+    }
+    const spawnLimit = Math.max(1, WATER_COLUMN_CONSTANTS.eggs.maxSpawnPerCloud);
+    const allowed = Math.min(total, spawnLimit);
+    const remaining = Math.max(0, total - allowed);
+    for (let i = 0; i < allowed; i++) {
+      if (organismSimulation.individuals.length >= ORGANISM_SIMULATION_LIMIT) {
+        overflow += allowed - i + remaining;
+        organismDiagnostics.overCapacity = Math.max(
+          0,
+          (organismDiagnostics.overCapacity ?? 0) + 1,
+        );
+        break;
+      }
+      const jitter = (waterColumnSimulation.cellSize || 1) * 0.3;
+      const offsetX = (random() - 0.5) * jitter;
+      const offsetZ = (random() - 0.5) * jitter;
+      spawnOrganism(speciesId, {
+        random,
+        ageDays: 0,
+        calories: species.growth.caloriesAtBirth,
+        hunger: species.metabolism.dailyCalories * 0.8,
+        energy: 480 * 0.85,
+        position: [column.centerX + offsetX, column.seafloor + 0.05, column.centerZ + offsetZ],
+      });
+      spawned += 1;
+    }
+    overflow += remaining;
+  }
+  organismDiagnostics.hatchedEggs = Math.max(
+    0,
+    (organismDiagnostics.hatchedEggs ?? 0) + spawned,
+  );
+  organismDiagnostics.hatchOverflow = Math.max(
+    0,
+    (organismDiagnostics.hatchOverflow ?? 0) + overflow,
+  );
+  organismSimulation.metrics.hatchedThisTick = spawned;
+  organismSimulation.metrics.hatchOverflow = overflow;
+}
+
+function spawnOrganism(speciesId, options = {}) {
+  const species = speciesRegistry ? speciesRegistry.getSpecies(speciesId) : null;
+  if (!species) {
+    organismDiagnostics.invalidSpeciesRequests = Math.max(
+      0,
+      (organismDiagnostics.invalidSpeciesRequests ?? 0) + 1,
+    );
+    organismDiagnostics.lastError = `Intento de crear organismo de especie desconocida: ${speciesId}`;
+    return null;
+  }
+  if (organismSimulation.individuals.length >= ORGANISM_SIMULATION_LIMIT) {
+    organismDiagnostics.overCapacity = Math.max(
+      0,
+      (organismDiagnostics.overCapacity ?? 0) + 1,
+    );
+    return null;
+  }
+  const random = options.random || organismSimulation.random || Math.random;
+  const id = options.id || `${speciesId}-${organismSimulation.nextId++}`;
+  const ageDays = Math.max(0, Number(options.ageDays) || 0);
+  const snapshot = speciesRegistry.createIndividualSnapshot(speciesId, {
+    id,
+    ageDays,
+    calories: options.calories,
+    hunger: options.hunger,
+    energy: options.energy,
+    lifeStage: options.lifeStage,
+  });
+  if (!snapshot) {
+    organismDiagnostics.invalidSpeciesRequests = Math.max(
+      0,
+      (organismDiagnostics.invalidSpeciesRequests ?? 0) + 1,
+    );
+    return null;
+  }
+  const sex = options.sex || (random() < 0.5 ? 'female' : 'male');
+  const position = options.position || deriveOrganismPosition(species, random);
+  const energyMax = snapshot.energyMax ?? 480;
+  const individual = {
+    ...snapshot,
+    id,
+    speciesId,
+    species,
+    sex,
+    ageSeconds: ageDays * (dayNightCycleDuration > 0 ? dayNightCycleDuration : 1),
+    position: Array.isArray(position) ? position.slice() : [0, waterSurfaceLevel - 1, 0],
+    velocity: [0, 0, 0],
+    flags: { alive: true, sleeping: false, starving: false, exhausted: false },
+    intent: 'explorar',
+    thought: 'Observando el entorno',
+    reproductionCooldown:
+      Number.isFinite(options.reproductionCooldown) && options.reproductionCooldown >= 0
+        ? options.reproductionCooldown
+        : dayNightCycleDuration * random(),
+    waterColumnId: options.waterColumnId || findWaterColumnAtPosition(position[0], position[2])?.id || null,
+    health: 1,
+    pregnancy: Object.assign(
+      { active: false, progress: 0, eggsCount: 0, elapsed: 0 },
+      snapshot.pregnancy || {},
+    ),
+    energyMax,
+    skipMovementUpdate: false,
+    targetId: null,
+  };
+  if (individual.pregnancy && !Number.isFinite(individual.pregnancy.eggsCount)) {
+    individual.pregnancy.eggsCount = 0;
+  }
+  organismSimulation.individuals.push(individual);
+  organismSimulation.individualsById.set(individual.id, individual);
+  organismDiagnostics.spawns = Math.max(0, (organismDiagnostics.spawns ?? 0) + 1);
+  organismDiagnostics.lastSpawnTime = Date.now();
+  return individual;
+}
+
+function repopulateOrganisms(seedString) {
+  const diagnostics = organismSimulation.diagnostics;
+  organismSimulation.individuals = [];
+  organismSimulation.individualsById = new Map();
+  organismSimulation.metrics = createEmptyOrganismMetrics();
+  organismSimulation.nextId = 1;
+  const seed = stringToSeed(`${seedString ?? currentSeed}-organisms`);
+  organismSimulation.random = createRandomGenerator(seed);
+  diagnostics.resets = Math.max(0, (diagnostics.resets ?? 0) + 1);
+  diagnostics.lastResetSeed = seedString ?? currentSeed;
+  const random = organismSimulation.random || Math.random;
+  const speciesList = speciesRegistry ? speciesRegistry.getAllBlueprints() : [];
+  for (const species of speciesList) {
+    const mobility = species.behaviours?.mobility;
+    const baseCount =
+      mobility === 'sessile' ? 8 : mobility === 'drifter' ? 4 : mobility === 'crawler' ? 5 : 6;
+    for (let index = 0; index < baseCount; index++) {
+      const ageDays = random() * Math.max(1, species.lifecycle.lifespanDays * 0.35);
+      const stage = speciesRegistry.determineLifeStage(species, ageDays);
+      const calories = lerp(
+        species.growth.caloriesAtBirth,
+        species.growth.caloriesAtAdult,
+        clamp01(ageDays / Math.max(1, species.lifecycle.lifespanDays)),
+      );
+      const hunger = species.metabolism.dailyCalories * clamp01(0.5 + random() * 0.45);
+      const energy = 480 * clamp01(0.55 + random() * 0.35);
+      spawnOrganism(species.id, {
+        random,
+        ageDays,
+        calories,
+        hunger,
+        energy,
+        lifeStage: stage,
+      });
+    }
+  }
+  recomputeOrganismMetrics();
+}
+
+function recomputeOrganismMetrics() {
+  const metrics = createEmptyOrganismMetrics();
+  const individuals = organismSimulation.individuals;
+  if (!individuals || individuals.length === 0) {
+    organismSimulation.metrics = metrics;
+    return metrics;
+  }
+  let totalCalories = 0;
+  let totalHunger = 0;
+  let totalEnergy = 0;
+  let totalMass = 0;
+  let totalSize = 0;
+  for (const individual of individuals) {
+    if (!individual) {
+      continue;
+    }
+    metrics.total += 1;
+    if (individual.flags?.alive === false) {
+      metrics.dead += 1;
+    } else {
+      metrics.alive += 1;
+    }
+    const stageKey = individual.lifeStage || 'baby';
+    if (stageKey in metrics) {
+      metrics[stageKey] = Math.max(0, (metrics[stageKey] ?? 0) + 1);
+    }
+    if (individual.flags?.starving) {
+      metrics.starving += 1;
+    }
+    if (individual.flags?.sleeping) {
+      metrics.sleeping += 1;
+    }
+    totalCalories += Math.max(0, individual.calories ?? 0);
+    totalHunger += Math.max(0, individual.hunger ?? 0);
+    totalEnergy += Math.max(0, individual.energy ?? 0);
+    totalMass += Math.max(0, individual.massKg ?? massFromCalories(individual.calories ?? 0));
+    totalSize += Math.max(0, individual.sizeScale ?? 1);
+    if (Array.isArray(individual.pendingEggs)) {
+      metrics.eggsQueued += individual.pendingEggs.reduce(
+        (sum, value) => sum + Math.max(0, Number(value) || 0),
+        0,
+      );
+    }
+  }
+  const divisor = Math.max(1, metrics.total);
+  metrics.averageCalories = totalCalories / divisor;
+  metrics.averageHunger = totalHunger / divisor;
+  metrics.averageEnergy = totalEnergy / divisor;
+  metrics.averageMass = totalMass / divisor;
+  metrics.averageSize = totalSize / divisor;
+  metrics.predationEvents = organismDiagnostics.huntSuccesses ?? 0;
+  metrics.grazingEvents = Math.max(
+    0,
+    (organismDiagnostics.feedingEvents ?? 0) - (organismDiagnostics.huntSuccesses ?? 0),
+  );
+  metrics.nutrientTransfers = organismDiagnostics.nutrientTransfers ?? 0;
+  metrics.lastUpdate = Date.now();
+  organismSimulation.metrics = metrics;
+  return metrics;
+}
+
+function handleOrganismReproduction(individual, species, speciesGroups, deltaTime) {
+  const reproduction = species.reproduction;
+  if (!reproduction || individual.flags?.alive === false || individual.lifeStage !== 'adult') {
+    return;
+  }
+  const secondsPerDay = dayNightCycleDuration > 0 ? dayNightCycleDuration : 1;
+  const hungerDecay = secondsPerDay > 0 ? deltaTime / secondsPerDay : 0;
+  const hungerMax = individual.hungerMax ?? species.metabolism.dailyCalories;
+  const energyMax = individual.energyMax ?? 480;
+  const hungerFraction = hungerMax > 0 ? (individual.hunger ?? hungerMax) / hungerMax : 1;
+  const energyFraction = energyMax > 0 ? (individual.energy ?? energyMax) / energyMax : 1;
+  const random = organismSimulation.random || Math.random;
+  if (reproduction.mode === 'broadcast' || reproduction.mode === 'spores') {
+    if (individual.reproductionCooldown > 0 || hungerFraction < 0.55 || energyFraction < 0.4) {
+      return;
+    }
+    const eggs = rollEggCount(reproduction.eggsPerEvent, random);
+    organismDiagnostics.reproductionAttempts = Math.max(
+      0,
+      (organismDiagnostics.reproductionAttempts ?? 0) + 1,
+    );
+    if (eggs <= 0) {
+      return;
+    }
+    const deposit = depositEggCloud(species.id, eggs, {
+      position: individual.position,
+      tileAnchor: species.eggs?.tileAnchor,
+      hatchDelayDays: species.eggs?.hatchDelayDays,
+    });
+    if (deposit) {
+      organismDiagnostics.reproductionSuccesses = Math.max(
+        0,
+        (organismDiagnostics.reproductionSuccesses ?? 0) + 1,
+      );
+      individual.reproductionCooldown = dayNightCycleDuration * 2;
+      individual.thought = 'Liberó huevos';
+      const metabolicCost = species.metabolism.dailyCalories * 0.25;
+      individual.hunger = Math.max(0, (individual.hunger ?? hungerMax) - metabolicCost);
+      individual.calories = Math.max(0, (individual.calories ?? 0) - metabolicCost * 0.3);
+    }
+    return;
+  }
+  if (individual.sex !== 'female') {
+    return;
+  }
+  const gestationSeconds =
+    species.lifecycle.lifespanDays * species.lifecycle.gestationFraction * secondsPerDay;
+  if (individual.pregnancy?.active) {
+    individual.pregnancy.elapsed = (individual.pregnancy.elapsed ?? 0) + deltaTime;
+    individual.pregnancy.progress = gestationSeconds > 0
+      ? clampNumber(individual.pregnancy.elapsed / gestationSeconds, 0, 1)
+      : 1;
+    const pregnancyDrain = species.metabolism.dailyCalories * hungerDecay *
+      (species.metabolism?.pregnancyExtra ?? ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED);
+    individual.hunger = Math.max(0, (individual.hunger ?? hungerMax) - pregnancyDrain * 0.5);
+    individual.calories = Math.max(0, (individual.calories ?? 0) - pregnancyDrain * 0.25);
+    if (gestationSeconds > 0 && individual.pregnancy.progress >= 1) {
+      const eggs = individual.pregnancy.eggsCount || rollEggCount(reproduction.eggsPerEvent, random);
+      const deposit = depositEggCloud(species.id, eggs, {
+        position: individual.position,
+        tileAnchor: species.eggs?.tileAnchor,
+        hatchDelayDays: species.eggs?.hatchDelayDays,
+      });
+      if (deposit) {
+        organismDiagnostics.reproductionSuccesses = Math.max(
+          0,
+          (organismDiagnostics.reproductionSuccesses ?? 0) + 1,
+        );
+      }
+      individual.pregnancy = { active: false, progress: 0, eggsCount: 0, elapsed: 0 };
+      individual.reproductionCooldown = dayNightCycleDuration * 3;
+      individual.thought = 'Huevos depositados';
+    }
+    return;
+  }
+  if (individual.reproductionCooldown > 0 || hungerFraction < 0.6 || energyFraction < 0.55) {
+    return;
+  }
+  organismDiagnostics.reproductionAttempts = Math.max(
+    0,
+    (organismDiagnostics.reproductionAttempts ?? 0) + 1,
+  );
+  const group = speciesGroups.get(species.id) || [];
+  const mate = group.find(
+    (candidate) =>
+      candidate !== individual &&
+      candidate.sex === 'male' &&
+      candidate.lifeStage === 'adult' &&
+      candidate.flags?.alive !== false &&
+      !candidate.flags?.starving,
+  );
+  if (!mate) {
+    individual.thought = 'Buscando pareja';
+    return;
+  }
+  const eggs = rollEggCount(reproduction.eggsPerEvent, random);
+  if (eggs <= 0) {
+    return;
+  }
+  const maleCost = species.metabolism.dailyCalories * 0.1;
+  mate.reproductionCooldown = Math.max(mate.reproductionCooldown ?? 0, dayNightCycleDuration * 0.5);
+  mate.hunger = Math.max(0, (mate.hunger ?? mate.hungerMax ?? species.metabolism.dailyCalories) - maleCost);
+  mate.calories = Math.max(0, (mate.calories ?? 0) - maleCost * 0.5);
+  mate.thought = 'Se apareó';
+  individual.pregnancy = { active: true, progress: 0, eggsCount: eggs, startTime: simulationTime };
+  individual.reproductionCooldown = dayNightCycleDuration * 2;
+  individual.thought = 'Gestando descendencia';
+}
+
+function tickOrganisms(deltaTime, hatchedEggs = []) {
+  const diagnostics = organismSimulation.diagnostics;
+  diagnostics.lastTickDelta = deltaTime;
+  diagnostics.lastTickTime = Date.now();
+  handleHatchedEggs(hatchedEggs);
+  const individuals = organismSimulation.individuals;
+  if (!individuals || individuals.length === 0) {
+    recomputeOrganismMetrics();
+    return;
+  }
+  const secondsPerDay = dayNightCycleDuration > 0 ? dayNightCycleDuration : 1;
+  const wakeDuration = secondsPerDay / 3;
+  const hungerDecay = secondsPerDay > 0 ? deltaTime / secondsPerDay : 0;
+  const energyDrainRate = wakeDuration > 0 ? 480 / wakeDuration : 0;
+  const daylight = clamp01(dayNightCycleState?.daylight ?? 0);
+  const speciesGroups = new Map();
+  for (const individual of individuals) {
+    if (!individual) continue;
+    const group = speciesGroups.get(individual.speciesId);
+    if (group) {
+      group.push(individual);
+    } else {
+      speciesGroups.set(individual.speciesId, [individual]);
+    }
+  }
+  for (const individual of individuals) {
+    if (!individual) {
+      continue;
+    }
+    const species = individual.species || speciesRegistry?.getSpecies(individual.speciesId);
+    if (!species) {
+      markOrganismDead(individual, 'missing-species');
+      continue;
+    }
+    individual.species = species;
+    if (individual.flags?.alive !== false) {
+      individual.ageSeconds = Math.max(0, (individual.ageSeconds ?? 0) + deltaTime);
+      const ageDays = individual.ageSeconds / secondsPerDay;
+      individual.ageDays = ageDays;
+      individual.lifeStage = speciesRegistry.determineLifeStage(species, ageDays);
+      updateIndividualGrowth(individual, species, secondsPerDay);
+      const pregnancyExtra = individual.pregnancy?.active
+        ? 1 + (species.metabolism?.pregnancyExtra ?? ORGANISM_CONSTANTS.PREGNANCY_EXTRA_NEED)
+        : 1;
+      const elderlyDays =
+        individual.lifeStage === 'elderly'
+          ? Math.max(0, Math.floor(ageDays - species.lifecycle.lifespanDays))
+          : 0;
+      const elderlyExtra = 1 + elderlyDays * (species.metabolism?.elderlyExtra ?? 0);
+      let hungerMax = Math.max(
+        species.metabolism.dailyCalories,
+        Number.isFinite(individual.hungerMax) ? individual.hungerMax : species.metabolism.dailyCalories,
+      );
+      hungerMax *= pregnancyExtra * elderlyExtra;
+      individual.hungerMax = hungerMax;
+      const energyMax = individual.energyMax ?? 480;
+      const metabolicDemand = hungerMax * hungerDecay;
+      individual.hunger = Math.max(0, (individual.hunger ?? hungerMax) - metabolicDemand);
+      if (individual.hunger <= 0) {
+        individual.flags = individual.flags || {};
+        individual.flags.starving = true;
+        const starvationBurn = metabolicDemand * 0.35;
+        individual.calories = Math.max(0, (individual.calories ?? 0) - starvationBurn);
+        if (individual.calories <= species.growth.caloriesAtBirth * 0.15) {
+          markOrganismDead(individual, 'starvation');
+          continue;
+        }
+      } else if (individual.flags) {
+        individual.flags.starving = false;
+      }
+
+      if (species.behaviours?.mobility === 'sessile') {
+        individual.energy = energyMax;
+        if (individual.flags) {
+          individual.flags.sleeping = false;
+          individual.flags.exhausted = false;
+        }
+      } else {
+        individual.energy = Math.max(
+          0,
+          (individual.energy ?? energyMax) - energyDrainRate * deltaTime,
+        );
+        if (individual.energy <= energyMax * 0.08) {
+          individual.flags = individual.flags || {};
+          individual.flags.sleeping = true;
+        }
+        if (individual.flags?.sleeping) {
+          individual.energy = Math.min(energyMax, individual.energy + energyDrainRate * 1.2 * deltaTime);
+          if (individual.energy >= energyMax * 0.95) {
+            individual.flags.sleeping = false;
+          }
+        }
+        if (individual.energy <= 0) {
+          individual.flags = individual.flags || {};
+          individual.flags.exhausted = true;
+          individual.health = Math.max(0, (individual.health ?? 1) - deltaTime / (secondsPerDay * 0.5));
+          if (individual.health <= 0) {
+            markOrganismDead(individual, 'exhaustion');
+            continue;
+          }
+        } else if (individual.flags) {
+          individual.flags.exhausted = false;
+        }
+      }
+
+      if (individual.flags?.alive === false) {
+        continue;
+      }
+
+      if (species.diet?.primary?.includes('sunlight')) {
+        const gained = species.metabolism.dailyCalories * daylight * hungerDecay;
+        individual.hunger = Math.min(hungerMax, (individual.hunger ?? 0) + gained);
+        individual.calories = Math.min(
+          species.growth.caloriesAtAdult * 1.2,
+          (individual.calories ?? 0) + gained,
+        );
+      } else if (species.diet?.primary?.includes('plankton')) {
+        const column = individual.waterColumnId
+          ? waterColumnSimulation.columnById.get(individual.waterColumnId)
+          : findWaterColumnAtPosition(individual.position?.[0] ?? 0, individual.position?.[2] ?? 0);
+        if (column) {
+          const neededCalories = Math.max(0, hungerMax - (individual.hunger ?? hungerMax));
+          if (neededCalories > 0) {
+            const requiredIndividuals =
+              neededCalories /
+              Math.max(WATER_COLUMN_CONSTANTS.plankton.caloriesPerIndividual, 1e-9);
+            const consumed = withdrawPlankton(column.id, requiredIndividuals);
+            if (consumed > 0) {
+              const gainedCalories =
+                consumed * WATER_COLUMN_CONSTANTS.plankton.caloriesPerIndividual;
+              individual.hunger = Math.min(hungerMax, (individual.hunger ?? 0) + gainedCalories);
+              individual.calories = Math.min(
+                species.growth.caloriesAtAdult * 1.2,
+                (individual.calories ?? 0) + gainedCalories,
+              );
+            }
+          }
+        }
+      }
+
+      const hungerFraction = hungerMax > 0 ? (individual.hunger ?? 0) / hungerMax : 1;
+      handlePredatoryDiet(individual, species, speciesGroups, deltaTime, hungerFraction);
+
+      const mobility = species.behaviours?.mobility;
+      if (mobility && mobility !== 'sessile') {
+        const rng = organismSimulation.random || Math.random;
+        individual.movementTimer = Math.max(0, (individual.movementTimer ?? 0) - deltaTime);
+        if (!individual.skipMovementUpdate && individual.movementTimer <= 0) {
+          const angle = rng() * Math.PI * 2;
+          const speed = mobility === 'swimmer' ? 0.6 : mobility === 'drifter' ? 0.25 : 0.18;
+          const vertical =
+            mobility === 'swimmer' ? (rng() - 0.5) * 0.4 : mobility === 'drifter' ? (rng() - 0.5) * 0.2 : 0;
+          individual.velocity = [Math.cos(angle) * speed, vertical, Math.sin(angle) * speed];
+          individual.movementTimer = 5 + rng() * 6;
+        }
+        if (!individual.skipMovementUpdate) {
+          const velocity = individual.velocity || [0, 0, 0];
+          if (individual.position) {
+            individual.position[0] += velocity[0] * deltaTime;
+            individual.position[1] += velocity[1] * deltaTime;
+            individual.position[2] += velocity[2] * deltaTime;
+          } else {
+            individual.position = [
+              velocity[0] * deltaTime,
+              velocity[1] * deltaTime,
+              velocity[2] * deltaTime,
+            ];
+          }
+        }
+        const column = findWaterColumnAtPosition(individual.position[0], individual.position[2]);
+        if (column) {
+          const minY = mobility === 'crawler' ? column.seafloor + 0.05 : column.seafloor + 0.1;
+          const maxY = waterSurfaceLevel - 0.25;
+          individual.position[1] = clamp(individual.position[1], minY, maxY);
+          individual.waterColumnId = column.id;
+        }
+        individual.skipMovementUpdate = false;
+      } else if (individual.position) {
+        const column = findWaterColumnAtPosition(individual.position[0], individual.position[2]);
+        if (column) {
+          individual.position[1] = column.seafloor;
+          individual.waterColumnId = column.id;
+        }
+      }
+
+      handleOrganismReproduction(individual, species, speciesGroups, deltaTime);
+    }
+  }
+  recomputeOrganismMetrics();
+}
+
+organismSimulation.spawn = spawnOrganism;
+organismSimulation.repopulate = repopulateOrganisms;
+organismSimulation.tick = tickOrganisms;
+
+runtimeState.organisms = organismSimulation;
+runtimeGlobal.__ARRECIFE_ORGANISMS__ = organismSimulation;
 
 let previousTime =
   typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -8619,6 +10159,8 @@ function regenerateTerrain(seedString) {
   initializeStarField(seedString);
   regenerateRocks(seedString, heightfield, maskfield);
   regeneratePlants(seedString, heightfield, maskfield);
+  rebuildWaterColumns(seedString, heightfield);
+  repopulateOrganisms(seedString);
 }
 
 function generateRandomSeed() {
@@ -9374,6 +10916,47 @@ const simulationInfo = {
       moonlight: terrainInfo.flatLighting?.moonlight ?? 0,
     },
   },
+  water: {
+    columns: waterColumnSimulation.metrics?.columns ?? 0,
+    wetColumns: waterColumnSimulation.metrics?.wetColumns ?? 0,
+    dryColumns: waterColumnSimulation.metrics?.dryColumns ?? 0,
+    averageDepth: waterColumnSimulation.metrics?.averageDepth ?? 0,
+    averagePlanktonDensity: waterColumnSimulation.metrics?.averagePlanktonDensity ?? 0,
+    averageSlope: waterColumnSimulation.metrics?.averageSlope ?? 0,
+    minPlanktonDensity: waterColumnSimulation.metrics?.minPlanktonDensity ?? 0,
+    maxPlanktonDensity: waterColumnSimulation.metrics?.maxPlanktonDensity ?? 0,
+    eggs: waterColumnSimulation.metrics?.eggs ?? 0,
+    eggsBySpecies:
+      waterColumnSimulation.metrics?.eggsBySpecies &&
+      typeof waterColumnSimulation.metrics.eggsBySpecies === 'object'
+        ? { ...waterColumnSimulation.metrics.eggsBySpecies }
+        : {},
+    coralSites: waterColumnSimulation.metrics?.coralSites ?? 0,
+    kelpSites: waterColumnSimulation.metrics?.kelpSites ?? 0,
+    shelfColumns: waterColumnSimulation.metrics?.shelfColumns ?? 0,
+    cliffColumns: waterColumnSimulation.metrics?.cliffColumns ?? 0,
+    planktonDepletedColumns: waterColumnSimulation.metrics?.planktonDepletedColumns ?? 0,
+    diagnostics: waterColumnDiagnostics,
+  },
+  organisms: {
+    population: organismSimulation.metrics?.total ?? 0,
+    alive: organismSimulation.metrics?.alive ?? 0,
+    dead: organismSimulation.metrics?.dead ?? 0,
+    baby: organismSimulation.metrics?.baby ?? 0,
+    juvenile: organismSimulation.metrics?.juvenile ?? 0,
+    adult: organismSimulation.metrics?.adult ?? 0,
+    elderly: organismSimulation.metrics?.elderly ?? 0,
+    starving: organismSimulation.metrics?.starving ?? 0,
+    sleeping: organismSimulation.metrics?.sleeping ?? 0,
+    hatchedThisTick: organismSimulation.metrics?.hatchedThisTick ?? 0,
+    hatchOverflow: organismSimulation.metrics?.hatchOverflow ?? 0,
+    averageMass: organismSimulation.metrics?.averageMass ?? 0,
+    averageSize: organismSimulation.metrics?.averageSize ?? 0,
+    predationEvents: organismSimulation.metrics?.predationEvents ?? 0,
+    grazingEvents: organismSimulation.metrics?.grazingEvents ?? 0,
+    nutrientTransfers: organismSimulation.metrics?.nutrientTransfers ?? 0,
+    diagnostics: organismDiagnostics,
+  },
   weather: {
     windActive: weatherState.wind.metrics.active,
     windSpawned: weatherState.wind.metrics.spawned,
@@ -9622,6 +11205,8 @@ function updateDayCycleHud() {
 }
 
 function tickSimulation(deltaTime) {
+  const hatchedEggs = tickWaterColumns(deltaTime);
+  tickOrganisms(deltaTime, hatchedEggs);
   tickPlants(deltaTime);
 }
 
@@ -10462,6 +12047,8 @@ function updateDebugConsole(deltaTime) {
     Number.isFinite(value) ? (Math.max(0, value) * 100).toFixed(0) : '0';
 
   const plantMetrics = plantSimulation.metrics ?? createEmptyPlantMetrics();
+  const waterMetrics = waterColumnSimulation.metrics ?? createEmptyWaterColumnMetrics();
+  const organismMetrics = organismSimulation.metrics ?? createEmptyOrganismMetrics();
   const formatMetric = (value, digits = 2) => {
     const finite = Number.isFinite(value) ? value : 0;
     return finite.toFixed(digits);
@@ -10649,6 +12236,16 @@ function updateDebugConsole(deltaTime) {
       0,
     )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
     `Rocas generadas: ${terrainInfo.rockCount}`,
+    `Agua columnas: activas=${waterMetrics.wetColumns}/${waterMetrics.columns} profundidad=${formatMetric(
+      waterMetrics.averageDepth,
+    )}m plancton=${formatMetric(
+      waterMetrics.averagePlanktonDensity,
+      0,
+    )} ind/m³ huevos=${waterMetrics.eggs} coral=${waterMetrics.coralSites} kelp=${waterMetrics.kelpSites} cantiles=${waterMetrics.cliffColumns} pendientes=${formatMetric(
+      waterMetrics.averageSlope,
+    )} agotadas=${waterMetrics.planktonDepletedColumns}`,
+    `Organismos: vivos=${organismMetrics.alive}/${organismMetrics.total} baby=${organismMetrics.baby} juv=${organismMetrics.juvenile} adult=${organismMetrics.adult} elder=${organismMetrics.elderly} dormidos=${organismMetrics.sleeping} hambrientos=${organismMetrics.starving}`,
+    `Organismos métricas: masa=${formatMetric(organismMetrics.averageMass, 1)}kg tamaño=${formatMetric(organismMetrics.averageSize, 2)} pred=${organismMetrics.predationEvents} past=${organismMetrics.grazingEvents} nutrientes=${organismMetrics.nutrientTransfers}`,
     `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
@@ -10708,6 +12305,16 @@ function updateDebugConsole(deltaTime) {
         0,
       )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
       `Rocas generadas: ${terrainInfo.rockCount}`,
+      `Agua columnas: activas=${waterMetrics.wetColumns}/${waterMetrics.columns} profundidad=${formatMetric(
+        waterMetrics.averageDepth,
+      )}m plancton=${formatMetric(
+        waterMetrics.averagePlanktonDensity,
+        0,
+      )} ind/m³ huevos=${waterMetrics.eggs} coral=${waterMetrics.coralSites} kelp=${waterMetrics.kelpSites} cantiles=${waterMetrics.cliffColumns} pendientes=${formatMetric(
+        waterMetrics.averageSlope,
+      )} agotadas=${waterMetrics.planktonDepletedColumns}`,
+      `Organismos: vivos=${organismMetrics.alive}/${organismMetrics.total} baby=${organismMetrics.baby} juv=${organismMetrics.juvenile} adult=${organismMetrics.adult} elder=${organismMetrics.elderly} dormidos=${organismMetrics.sleeping} hambrientos=${organismMetrics.starving}`,
+      `Organismos métricas: masa=${formatMetric(organismMetrics.averageMass, 1)}kg tamaño=${formatMetric(organismMetrics.averageSize, 2)} pred=${organismMetrics.predationEvents} past=${organismMetrics.grazingEvents} nutrientes=${organismMetrics.nutrientTransfers}`,
       `Modelos disponibles: ${modelLibrary.length}`,
       `Selección: ${selectionStatus}`,
       `Movimiento activo: ${activeMovement || 'Ninguno'}`,
@@ -11093,6 +12700,42 @@ function loop(currentTime) {
       daylight: terrainInfo.flatLighting?.daylight ?? 0,
       moonlight: terrainInfo.flatLighting?.moonlight ?? 0,
     };
+    const waterMetrics = waterColumnSimulation.metrics ?? createEmptyWaterColumnMetrics();
+    simulationInfo.water.columns = waterMetrics.columns;
+    simulationInfo.water.wetColumns = waterMetrics.wetColumns;
+    simulationInfo.water.dryColumns = waterMetrics.dryColumns;
+    simulationInfo.water.averageDepth = waterMetrics.averageDepth;
+    simulationInfo.water.averagePlanktonDensity = waterMetrics.averagePlanktonDensity;
+    simulationInfo.water.minPlanktonDensity = waterMetrics.minPlanktonDensity;
+    simulationInfo.water.maxPlanktonDensity = waterMetrics.maxPlanktonDensity;
+    simulationInfo.water.eggs = waterMetrics.eggs;
+    simulationInfo.water.averageSlope = waterMetrics.averageSlope;
+    simulationInfo.water.coralSites = waterMetrics.coralSites;
+    simulationInfo.water.kelpSites = waterMetrics.kelpSites;
+    simulationInfo.water.shelfColumns = waterMetrics.shelfColumns;
+    simulationInfo.water.cliffColumns = waterMetrics.cliffColumns;
+    simulationInfo.water.planktonDepletedColumns = waterMetrics.planktonDepletedColumns;
+    simulationInfo.water.eggsBySpecies =
+      waterMetrics.eggsBySpecies && typeof waterMetrics.eggsBySpecies === 'object'
+        ? { ...waterMetrics.eggsBySpecies }
+        : {};
+    const organismMetrics = organismSimulation.metrics ?? createEmptyOrganismMetrics();
+    simulationInfo.organisms.population = organismMetrics.total;
+    simulationInfo.organisms.alive = organismMetrics.alive;
+    simulationInfo.organisms.dead = organismMetrics.dead;
+    simulationInfo.organisms.baby = organismMetrics.baby;
+    simulationInfo.organisms.juvenile = organismMetrics.juvenile;
+    simulationInfo.organisms.adult = organismMetrics.adult;
+    simulationInfo.organisms.elderly = organismMetrics.elderly;
+    simulationInfo.organisms.starving = organismMetrics.starving;
+    simulationInfo.organisms.sleeping = organismMetrics.sleeping;
+    simulationInfo.organisms.hatchedThisTick = organismMetrics.hatchedThisTick;
+    simulationInfo.organisms.hatchOverflow = organismMetrics.hatchOverflow;
+    simulationInfo.organisms.averageMass = organismMetrics.averageMass;
+    simulationInfo.organisms.averageSize = organismMetrics.averageSize;
+    simulationInfo.organisms.predationEvents = organismMetrics.predationEvents;
+    simulationInfo.organisms.grazingEvents = organismMetrics.grazingEvents;
+    simulationInfo.organisms.nutrientTransfers = organismMetrics.nutrientTransfers;
     const cloudState = weatherState.clouds ?? {};
     const cloudMetrics = cloudState.metrics ?? {};
     const starMetrics = starFieldState.metrics ?? {};
