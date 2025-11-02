@@ -1021,9 +1021,12 @@ function computeWaterTileVolume(selection) {
       ]
     : [selection.height, selection.height, selection.height, selection.height];
 
+  const waterLevel =
+    selection.waterLevel !== undefined ? selection.waterLevel : seaLevel;
+
   let depthSum = 0;
   for (const height of heights) {
-    depthSum += Math.max(0, waterSurfaceLevel - height);
+    depthSum += Math.max(0, waterLevel - height);
   }
 
   const averageDepth = depthSum / heights.length;
