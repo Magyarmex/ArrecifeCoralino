@@ -300,7 +300,7 @@ function update(deltaTime) {
     -Math.cos(yaw) * Math.cos(pitch),
   ];
 
-  const flatForward = normalize([forwardDirection[0], 0, forwardDirection[2]]);
+  const flatForward = normalize([Math.sin(yaw), 0, -Math.cos(yaw)]);
   const rightDirection = normalize(cross(flatForward, worldUp));
 
   let moveVector = [0, 0, 0];
