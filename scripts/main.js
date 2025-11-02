@@ -1887,9 +1887,8 @@ const fragmentNormalComputation = derivativesSupported
   }
 `;
 
-const fragmentSource = `
+const fragmentSource = `${derivativeShaderHeader ? `${derivativeShaderHeader}\n` : ''}
   precision mediump float;
-  ${derivativeShaderHeader}
   varying vec3 vColor;
   varying vec3 vPosition;
   uniform vec3 globalLightColor;
