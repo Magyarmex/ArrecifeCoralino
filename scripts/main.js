@@ -4134,6 +4134,36 @@ function render() {
     drawStats.total += 1;
   }
 
+  if (rockVertexCount > 0) {
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, 1);
+    }
+    bindGeometry(rockBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
+    drawStats.rocks += 1;
+    drawStats.total += 1;
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+  }
+
+  if (plantSimulation.geometryDirty) {
+    rebuildPlantGeometry();
+  }
+
+  if (plantVertexCount > 0) {
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, 1);
+    }
+    bindGeometry(plantBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, plantVertexCount);
+    drawStats.plants += 1;
+    drawStats.total += 1;
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+  }
+
   if (waterVertexCount > 0) {
     const blendingAlreadyActive = terrainRenderState.translucent;
     let temporarilyEnabledBlend = false;
@@ -4177,36 +4207,6 @@ function render() {
     }
     if (temporarilyEnabledBlend && typeof gl.disable === 'function') {
       gl.disable(gl.BLEND);
-    }
-  }
-
-  if (rockVertexCount > 0) {
-    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
-      gl.uniform1f(terrainAlphaUniform, 1);
-    }
-    bindGeometry(rockBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, rockVertexCount);
-    drawStats.rocks += 1;
-    drawStats.total += 1;
-    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
-      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
-    }
-  }
-
-  if (plantSimulation.geometryDirty) {
-    rebuildPlantGeometry();
-  }
-
-  if (plantVertexCount > 0) {
-    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
-      gl.uniform1f(terrainAlphaUniform, 1);
-    }
-    bindGeometry(plantBuffer);
-    gl.drawArrays(gl.TRIANGLES, 0, plantVertexCount);
-    drawStats.plants += 1;
-    drawStats.total += 1;
-    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
-      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
     }
   }
 
