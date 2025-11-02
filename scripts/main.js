@@ -430,13 +430,13 @@ function createLookAtMatrix(eye, target, up) {
 
 function multiplyMatrices(a, b) {
   const result = new Float32Array(16);
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 4; col++) {
+  for (let col = 0; col < 4; col++) {
+    for (let row = 0; row < 4; row++) {
       let sum = 0;
       for (let i = 0; i < 4; i++) {
-        sum += a[i + row * 4] * b[col + i * 4];
+        sum += a[i * 4 + row] * b[col * 4 + i];
       }
-      result[col + row * 4] = sum;
+      result[col * 4 + row] = sum;
     }
   }
   return result;
