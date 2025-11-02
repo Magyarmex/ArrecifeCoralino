@@ -306,7 +306,7 @@ runtimeState.totalBootstraps = Math.max(0, runtimeState.totalBootstraps ?? 0) + 
 const runtimeIssues = Array.isArray(runtimeState.issues)
   ? runtimeState.issues
   : (runtimeState.issues = []);
-const MAX_RUNTIME_ISSUES = 8;
+const MAX_RUNTIME_ISSUES = 16;
 
 const debugConsoleDiagnostics =
   runtimeState.debugConsoleDiagnostics && typeof runtimeState.debugConsoleDiagnostics === 'object'
@@ -330,10 +330,9 @@ const cameraDisplayDiagnostics =
         lastUpdateTime: 0,
         missingElements: 0,
         lastMissingTimestamp: null,
-        frustumStatusUpdates: 0,
+        lastMarginEstimate: null,
         lastFrustumStatus: 'seguro',
-        lastFrustumClipping: false,
-        lastFrustumStatusChange: null,
+        marginSamples: 0,
       });
 
 const simulationInfoDiagnostics =
@@ -604,32 +603,19 @@ cameraDiagnostics.flags = {
 };
 cameraDiagnostics.overrides = Math.max(0, cameraClipPlanes.overrides ?? 0);
 cameraDiagnostics.lastOverrideTimestamp = cameraClipPlanes.lastOverrideTimestamp ?? null;
-if (!cameraDiagnostics.metrics || typeof cameraDiagnostics.metrics !== 'object') {
-  cameraDiagnostics.metrics = {
-    starFarthest: 0,
-    starShortfall: 0,
-    marginEstimate: ARRECIFE_CAMERA_STAR_MARGIN,
-    lastUpdateTime: 0,
-    failedUpdates: 0,
-  };
-} else {
-  cameraDiagnostics.metrics.starFarthest = cameraDiagnostics.metrics.starFarthest ?? 0;
-  cameraDiagnostics.metrics.starShortfall = cameraDiagnostics.metrics.starShortfall ?? 0;
-  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.metrics.marginEstimate ?? ARRECIFE_CAMERA_STAR_MARGIN;
-  cameraDiagnostics.metrics.lastUpdateTime = cameraDiagnostics.metrics.lastUpdateTime ?? 0;
-  cameraDiagnostics.metrics.failedUpdates = cameraDiagnostics.metrics.failedUpdates ?? 0;
-}
-cameraDiagnostics.adjustments = Number.isFinite(cameraDiagnostics.adjustments)
-  ? cameraDiagnostics.adjustments
-  : 0;
+cameraDiagnostics.adjustments = Math.max(0, cameraDiagnostics.adjustments ?? 0);
+cameraDiagnostics.metrics =
+  cameraDiagnostics.metrics && typeof cameraDiagnostics.metrics === 'object'
+    ? cameraDiagnostics.metrics
+    : {
+        starFarthest: CAMERA_BASE_FAR_PLANE,
+        starShortfall: 0,
+        marginEstimate: CAMERA_STAR_MARGIN,
+      };
 cameraDiagnostics.starMargin = Number.isFinite(cameraDiagnostics.starMargin)
   ? cameraDiagnostics.starMargin
-  : ARRECIFE_CAMERA_STAR_MARGIN;
-cameraDiagnostics.flags = {
-  ...cameraDiagnostics.flags,
-  frustumClipping: Boolean(cameraDiagnostics.flags?.frustumClipping),
-  baseFrustumExceeded: Boolean(cameraDiagnostics.flags?.baseFrustumExceeded),
-};
+  : CAMERA_STAR_MARGIN;
+cameraDiagnostics.lastUpdateTime = cameraDiagnostics.lastUpdateTime ?? 0;
 
 if (cameraDiagnostics.flags.invalidOrdering) {
   pendingRuntimeIssueQueue.push({
@@ -1425,13 +1411,10 @@ function registerUiFallback(id, message, severity = 'error') {
   if (uiFallbackEvents.length > MAX_UI_FALLBACK_EVENTS) {
     uiFallbackEvents.shift();
   }
-  if (!existing) {
-    pendingRuntimeIssueQueue.push({
-      severity,
-      context: 'ui',
-      error: { message, preserve: true, id },
-    });
-  }
+  const issueMessage =
+    count > 1 ? `${message} (repetido ${count} veces)` : message;
+  const issueSeverity = count > 1 ? 'warning' : severity;
+  recordRuntimeIssue(issueSeverity, 'ui', issueMessage);
   return reportedFallbacks[id];
 }
 
@@ -1716,6 +1699,10 @@ const diagnosticsToast =
     ? createDiagnosticsToast()
     : null;
 
+if (diagnosticsToast) {
+  runtimeGlobal.__ARRECIFE_DIAGNOSTICS_TOAST__ = diagnosticsToast;
+}
+
 const overlayErrorMessage =
   overlay && typeof document?.createElement === 'function' && typeof overlay.appendChild === 'function'
     ? createOverlayErrorMessage(overlay)
@@ -1904,6 +1891,14 @@ function createOverlayErrorMessage(container) {
   return element;
 }
 
+function getDiagnosticsToast() {
+  const toast = runtimeGlobal.__ARRECIFE_DIAGNOSTICS_TOAST__;
+  if (toast && typeof toast === 'object') {
+    return toast;
+  }
+  return null;
+}
+
 function describeIssue(error) {
   if (!error) {
     return 'Error desconocido';
@@ -1934,23 +1929,24 @@ function formatIssueMessage(entry) {
 }
 
 function updateDiagnosticsToast() {
-  if (!diagnosticsToast) {
+  const toast = getDiagnosticsToast();
+  if (!toast) {
     return;
   }
   if (runtimeIssues.length === 0) {
-    diagnosticsToast.hidden = true;
+    toast.hidden = true;
     return;
   }
   const latest = runtimeIssues[0];
-  diagnosticsToast.hidden = false;
-  diagnosticsToast.textContent = `[${latest.timestamp}] ${
+  toast.hidden = false;
+  toast.textContent = `[${latest.timestamp}] ${
     latest.severity === 'fatal' ? 'Error crítico' : 'Problema'
   } en ${latest.context}: ${formatIssueMessage(latest)}`;
-  diagnosticsToast.style.background =
+  toast.style.background =
     latest.severity === 'fatal'
       ? 'rgba(162, 44, 44, 0.92)'
       : 'rgba(164, 115, 42, 0.92)';
-  diagnosticsToast.style.borderColor =
+  toast.style.borderColor =
     latest.severity === 'fatal'
       ? 'rgba(255, 128, 128, 0.65)'
       : 'rgba(255, 214, 153, 0.65)';
@@ -8698,6 +8694,7 @@ function computeCameraFrustum() {
   cameraDiagnostics.metrics.starFarthest = farthestStar;
   cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - ARRECIFE_CAMERA_BASE_FAR);
   cameraDiagnostics.starMargin = desiredFar - farthestStar;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.starMargin;
   cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
   cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
   cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.starMargin;
@@ -9599,8 +9596,18 @@ function updateDebugConsole(deltaTime) {
     typeof cameraDiagnostics.lastOverrideTimestamp === 'number'
       ? new Date(cameraDiagnostics.lastOverrideTimestamp).toISOString()
       : cameraDiagnostics.lastOverrideTimestamp ?? 'n/d';
-  const baseClipLabel = `${ARRECIFE_CAMERA_BASE_NEAR.toFixed(2)}/${ARRECIFE_CAMERA_BASE_FAR.toFixed(1)}`;
-  const activeClipLabel = `${ARRECIFE_CAMERA_NEAR.toFixed(2)}/${ARRECIFE_CAMERA_FAR.toFixed(1)}`;
+  const baseClipLabel = `${CAMERA_BASE_NEAR_PLANE.toFixed(2)}/${CAMERA_BASE_FAR_PLANE.toFixed(1)}`;
+  const activeClipLabel = `${CAMERA_NEAR_PLANE.toFixed(2)}/${CAMERA_FAR_PLANE.toFixed(1)}`;
+  const cameraFarLabel = CAMERA_FAR_PLANE.toFixed(1);
+  const marginEstimate = Number.isFinite(cameraDiagnostics.metrics?.marginEstimate)
+    ? cameraDiagnostics.metrics.marginEstimate
+    : Number.isFinite(cameraDiagnostics.starMargin)
+    ? cameraDiagnostics.starMargin
+    : CAMERA_STAR_MARGIN;
+  const cameraMarginLabel = Number.isFinite(marginEstimate)
+    ? marginEstimate.toFixed(1)
+    : CAMERA_STAR_MARGIN.toFixed(1);
+  const frustumStatus = cameraDiagnostics.flags?.frustumClipping ? 'riesgo' : 'seguro';
 
   const now = Date.now();
   cameraDisplayDiagnostics.lastUpdateTime = now;
@@ -9631,24 +9638,69 @@ function updateDebugConsole(deltaTime) {
   if (missingCameraDisplays > 0) {
     cameraDisplayDiagnostics.lastMissingTimestamp = now;
   }
-
-  const cameraFarLabel = ARRECIFE_CAMERA_FAR.toFixed(1);
-  const marginEstimate = Number.isFinite(cameraDiagnostics.metrics.marginEstimate)
-    ? cameraDiagnostics.metrics.marginEstimate
-    : cameraDiagnostics.starMargin;
-  const cameraMarginLabel = Number.isFinite(marginEstimate)
-    ? marginEstimate.toFixed(1)
-    : '---';
-  const frustumClippingActive = Boolean(cameraDiagnostics.flags?.frustumClipping);
-  if (cameraDisplayDiagnostics.lastFrustumClipping !== frustumClippingActive) {
-    cameraDisplayDiagnostics.lastFrustumStatusChange = now;
-  }
-  cameraDisplayDiagnostics.lastFrustumClipping = frustumClippingActive;
-  cameraDisplayDiagnostics.lastFrustumStatus = frustumClippingActive ? 'riesgo' : 'seguro';
-  cameraDisplayDiagnostics.frustumStatusUpdates = Math.max(
+  cameraDisplayDiagnostics.lastMarginEstimate = marginEstimate;
+  cameraDisplayDiagnostics.lastFrustumStatus = frustumStatus;
+  cameraDisplayDiagnostics.marginSamples = Math.max(
     0,
-    (cameraDisplayDiagnostics.frustumStatusUpdates ?? 0) + 1,
+    (cameraDisplayDiagnostics.marginSamples ?? 0) + 1,
   );
+
+  const info = [
+    `Estado: ${pointerLocked ? 'Explorando' : 'En espera'}`,
+    `FPS: ${displayedFps ? displayedFps.toFixed(1) : '---'}`,
+    `TPS: ${displayedTps ? displayedTps.toFixed(1) : '---'} (objetivo: ${targetTickRate.toFixed(1)})`,
+    `Velocidad sim: ${simulationSpeed.toFixed(1)}×`,
+    `Tiempo sim: ${simulationTime.toFixed(2)}s`,
+    `Ciclo día/noche: ${(dayNightCycleState.normalizedTime * 24).toFixed(1)}h (luz ${(dayNightCycleState.intensity * 100).toFixed(0)}%)`,
+    `Ticks totales: ${totalTicks} (cuadro: ${ticksLastFrame})`,
+    `Cámara: x=${cameraPosition[0].toFixed(2)} y=${cameraPosition[1].toFixed(2)} z=${cameraPosition[2].toFixed(2)}`,
+    `Planos cámara: base=${baseClipLabel} actual=${activeClipLabel} Δ=${clipDeviation.toFixed(3)} override=${
+      clipOverrideActive ? 'sí' : 'no'
+    } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
+    `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
+    `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
+    `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
+    `Luz global: rgb=${lightingDiagnostics.latestLightColor
+      .map((value) => value.toFixed(2))
+      .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
+      .map((value) => value.toFixed(2))
+      .join(', ')} sol=${lightingDiagnostics.latestSunAltitude.toFixed(1)} luz=${(lightingDiagnostics.latestDaylight * 100).toFixed(0)}%`,
+    `Terreno seed: ${terrainInfo.seed}`,
+    `Terreno translúcido: ${seeThroughTerrain ? 'Sí' : 'No'}`,
+    `Altura terreno: min=${terrainInfo.minHeight.toFixed(2)}m max=${terrainInfo.maxHeight.toFixed(2)}m`,
+    `Terreno visible: ${visiblePercentage.toFixed(1)}% (${terrainInfo.visibleVertices}/${terrainInfo.vertexCount})`,
+    `Terreno características: cañón=${formatFeaturePercent(featureStats.canyon)}% barranco=${formatFeaturePercent(
+      featureStats.ravine,
+    )}% acantilado=${formatFeaturePercent(featureStats.cliffs)}%`,
+    `Terreno estilo: ${terrainInfo.surfaceStyle ?? 'n/d'} (plano=${terrainInfo.flags?.flatColor ? 'sí' : 'no'} texturizado=${
+      terrainInfo.flags?.textured ? 'sí' : 'no'
+    } especular=${terrainInfo.flags?.lowSpecular ? 'bajo' : 'normal'} iluminación_plana=${
+      terrainInfo.flags?.flatLighting ? 'sí' : 'no'
+    })`,
+    `Terreno color varianza: ${(terrainInfo.colorVariance ?? 0).toFixed(4)}`,
+    `Terreno iluminación plana: rgb=${terrainRenderState.metrics.lastFlatLightColor
+      .map((value) => value.toFixed(2))
+      .join(', ')} luma=${terrainRenderState.metrics.lastFlatLightLuma.toFixed(2)} frame=${
+      terrainRenderState.metrics.flatShadedDrawsLastFrame
+    } total=${terrainRenderState.metrics.flatShadedDrawsTotal} luz_día=${(terrainRenderState.metrics.lastDaylight * 100).toFixed(
+      0,
+    )}% luz_luna=${(terrainRenderState.metrics.lastMoonlight * 100).toFixed(0)}%`,
+    `Rocas generadas: ${terrainInfo.rockCount}`,
+    `Modelos disponibles: ${modelLibrary.length}`,
+    `Selección: ${selectionStatus}`,
+    `Movimiento activo: ${activeMovement || 'Ninguno'}`,
+    `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
+    `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
+    `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
+    `Iluminación: sol=${(dayNightCycleState.sunlightIntensity * 100).toFixed(0)}% luna=${(dayNightCycleState.moonlightIntensity * 100).toFixed(0)}%`,
+    `Cuerpos celestes: plantilla=${celestialGeometryState.flags.templateValid ? 'OK' : 'ERROR'} sol=${celestialGeometryState.flags.sunGeometryValid ? 'OK' : 'ERROR'} luna=${celestialGeometryState.flags.moonGeometryValid ? 'OK' : 'ERROR'}`,
+    `Celeste métricas: plantillas=${celestialGeometryState.metrics.templateBuilds} errores=${celestialGeometryState.metrics.templateBuildErrors} subidas sol=${celestialGeometryState.metrics.sunUploads} luna=${celestialGeometryState.metrics.moonUploads} fallos=${celestialGeometryState.metrics.uploadErrors}`,
+    `Estrellas: total=${starMetrics.count ?? 0} brillantes=${starMetrics.bright ?? 0} tenues=${starMetrics.dim ?? 0} visibilidad=${starVisibility} estado=${starStatus} radio=${starRadiusMin}–${starRadiusMax} margen=${starMargin} clip=${starClipStatus} reconstrucciones=${starMetrics.rebuilds ?? 0}`,
+    `Geometría: terreno=${baseplateVertexCount} bloques=${blockGridVertexCount} chunks=${chunkGridVertexCount}`,
+    `GL error: ${lastGlError}`,
+  ];
 
   let info = [];
   try {
@@ -10181,6 +10233,11 @@ function loop(currentTime) {
       cameraDisplayDebug.missingElements = cameraDisplayDiagnostics.missingElements ?? 0;
       cameraDisplayDebug.lastMissingTimestamp =
         cameraDisplayDiagnostics.lastMissingTimestamp ?? null;
+      cameraDisplayDebug.lastMarginEstimate =
+        cameraDisplayDiagnostics.lastMarginEstimate ?? null;
+      cameraDisplayDebug.lastFrustumStatus =
+        cameraDisplayDiagnostics.lastFrustumStatus ?? 'seguro';
+      cameraDisplayDebug.marginSamples = cameraDisplayDiagnostics.marginSamples ?? 0;
     }
     if (simulationInfo.audio) {
       simulationInfo.audio.enabled = ambientAudioState.enabled;
