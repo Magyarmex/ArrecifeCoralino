@@ -1,4 +1,89 @@
-((runtimeGlobalCandidate) => {
+var ARRECIFE_BOOT_TARGET =
+  typeof globalThis !== 'undefined'
+    ? globalThis
+    : typeof self !== 'undefined'
+    ? self
+    : typeof window !== 'undefined'
+    ? window
+    : typeof global !== 'undefined'
+    ? global
+    : {};
+
+var ARRECIFE_MODULE_STATE =
+  ARRECIFE_BOOT_TARGET.__ARRECIFE_MAIN_MODULE__ ||
+  (ARRECIFE_BOOT_TARGET.__ARRECIFE_MAIN_MODULE__ = {
+    attempts: 0,
+    duplicates: 0,
+    lastAttempt: 0,
+    lastDuplicate: 0,
+    lastError: null,
+    active: false,
+    initialized: false,
+    lastSuccess: 0,
+    failedAttempts: 0,
+  });
+
+ARRECIFE_MODULE_STATE.attempts =
+  Math.max(0, ARRECIFE_MODULE_STATE.attempts || 0) + 1;
+ARRECIFE_MODULE_STATE.lastAttempt = Date.now();
+
+if (ARRECIFE_MODULE_STATE.initialized || ARRECIFE_MODULE_STATE.active) {
+  ARRECIFE_MODULE_STATE.duplicates = Math.max(
+    0,
+    (ARRECIFE_MODULE_STATE.duplicates || 0) + 1,
+  );
+  ARRECIFE_MODULE_STATE.lastDuplicate = ARRECIFE_MODULE_STATE.lastAttempt;
+  var duplicateRuntimeState = ARRECIFE_BOOT_TARGET.__ARRECIFE_RUNTIME_STATE__;
+  if (duplicateRuntimeState && typeof duplicateRuntimeState === 'object') {
+    var duplicateIssues = Array.isArray(duplicateRuntimeState.issues)
+      ? duplicateRuntimeState.issues
+      : (duplicateRuntimeState.issues = []);
+    duplicateRuntimeState.bootstrapGuards = Math.max(
+      0,
+      (duplicateRuntimeState.bootstrapGuards || 0) + 1,
+    );
+    duplicateRuntimeState.lastBootstrapGuard =
+      ARRECIFE_MODULE_STATE.lastDuplicate;
+    var duplicateDiagnostics =
+      duplicateRuntimeState.moduleDiagnostics &&
+      typeof duplicateRuntimeState.moduleDiagnostics === 'object'
+        ? duplicateRuntimeState.moduleDiagnostics
+        : (duplicateRuntimeState.moduleDiagnostics = {});
+    duplicateDiagnostics.bootstrap = {
+      attempts: ARRECIFE_MODULE_STATE.attempts,
+      duplicates: ARRECIFE_MODULE_STATE.duplicates,
+      lastAttempt: ARRECIFE_MODULE_STATE.lastAttempt,
+      lastDuplicate: ARRECIFE_MODULE_STATE.lastDuplicate,
+      lastSuccess: ARRECIFE_MODULE_STATE.lastSuccess,
+      failedAttempts: ARRECIFE_MODULE_STATE.failedAttempts,
+      lastError: ARRECIFE_MODULE_STATE.lastError,
+      active: ARRECIFE_MODULE_STATE.active,
+      skipped: true,
+    };
+    duplicateIssues.push({
+      severity: 'fatal',
+      context: 'bootstrap',
+      error:
+        'Se detectó una carga duplicada de "scripts/main.js" y se omitió para evitar conflictos de constantes.',
+      timestamp: ARRECIFE_MODULE_STATE.lastDuplicate,
+      code: 'duplicate-module-bootstrap',
+    });
+    while (duplicateIssues.length > 8) {
+      duplicateIssues.shift();
+    }
+  }
+  if (typeof console !== 'undefined' && typeof console.error === 'function') {
+    console.error('[Arrecife] scripts/main.js ignorado por carga duplicada.', {
+      attempts: ARRECIFE_MODULE_STATE.attempts,
+      duplicates: ARRECIFE_MODULE_STATE.duplicates,
+      lastDuplicate: ARRECIFE_MODULE_STATE.lastDuplicate,
+      lastSuccess: ARRECIFE_MODULE_STATE.lastSuccess,
+    });
+  }
+} else {
+  ARRECIFE_MODULE_STATE.active = true;
+  try {
+    ((runtimeGlobalCandidate, moduleState) => {
   const runtimeGlobal =
     runtimeGlobalCandidate && typeof runtimeGlobalCandidate === 'object'
       ? runtimeGlobalCandidate
@@ -17,6 +102,30 @@
         });
 
   runtimeState.bootstrapGuards = Math.max(0, runtimeState.bootstrapGuards ?? 0);
+
+  moduleState = moduleState || {};
+  moduleState.runtimeStateRef = runtimeState;
+  moduleState.lastRuntimeSync = Date.now();
+  moduleState.runtimeIssuesSnapshot = Array.isArray(runtimeState.issues)
+    ? runtimeState.issues.slice(-4)
+    : [];
+
+  const moduleDiagnostics =
+    runtimeState.moduleDiagnostics && typeof runtimeState.moduleDiagnostics === 'object'
+      ? runtimeState.moduleDiagnostics
+      : (runtimeState.moduleDiagnostics = {});
+
+  moduleDiagnostics.bootstrap = {
+    attempts: moduleState.attempts,
+    duplicates: moduleState.duplicates,
+    lastAttempt: moduleState.lastAttempt,
+    lastDuplicate: moduleState.lastDuplicate,
+    lastSuccess: moduleState.lastSuccess,
+    failedAttempts: moduleState.failedAttempts,
+    lastError: moduleState.lastError,
+    active: moduleState.active,
+    skipped: false,
+  };
 
   if (runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__) {
     runtimeState.bootstrapGuards += 1;
@@ -45,6 +154,11 @@
   runtimeGlobal.__ARRECIFE_MAIN_INITIALIZED__ = true;
   runtimeGlobal.__ARRECIFE_DUPLICATE_BOOTSTRAP__ = false;
   runtimeState.lastBootstrapTime = Date.now();
+  moduleState.lastBootstrapTime = runtimeState.lastBootstrapTime;
+  if (moduleDiagnostics.bootstrap) {
+    moduleDiagnostics.bootstrap.lastBootstrapTime =
+      runtimeState.lastBootstrapTime;
+  }
 
   let canvas = document.getElementById('scene');
   const overlay = document.getElementById('overlay');
@@ -10048,14 +10162,41 @@ function loop(currentTime) {
 }
 
 requestAnimationFrame(loop);
-})(
-  typeof globalThis !== 'undefined'
-    ? globalThis
-    : typeof self !== 'undefined'
-    ? self
-    : typeof window !== 'undefined'
-    ? window
-    : typeof global !== 'undefined'
-    ? global
-    : {},
-);
+    })(ARRECIFE_BOOT_TARGET, ARRECIFE_MODULE_STATE);
+    ARRECIFE_MODULE_STATE.initialized = true;
+    ARRECIFE_MODULE_STATE.lastSuccess = Date.now();
+  } catch (bootstrapError) {
+    ARRECIFE_MODULE_STATE.lastError =
+      bootstrapError && bootstrapError.message
+        ? String(bootstrapError.message)
+        : String(bootstrapError);
+    ARRECIFE_MODULE_STATE.failedAttempts = Math.max(
+      0,
+      (ARRECIFE_MODULE_STATE.failedAttempts || 0) + 1,
+    );
+    ARRECIFE_MODULE_STATE.initialized = false;
+    if (typeof console !== 'undefined' && typeof console.error === 'function') {
+      console.error(
+        '[Arrecife] Error al inicializar scripts/main.js. Se liberará el bloqueo para reintentos.',
+        bootstrapError,
+      );
+    }
+    throw bootstrapError;
+  } finally {
+    ARRECIFE_MODULE_STATE.active = false;
+  }
+  var finalRuntimeState = ARRECIFE_BOOT_TARGET.__ARRECIFE_RUNTIME_STATE__;
+  if (finalRuntimeState && typeof finalRuntimeState === 'object') {
+    var finalDiagnostics =
+      finalRuntimeState.moduleDiagnostics &&
+      typeof finalRuntimeState.moduleDiagnostics === 'object'
+        ? finalRuntimeState.moduleDiagnostics
+        : (finalRuntimeState.moduleDiagnostics = {});
+    if (finalDiagnostics.bootstrap) {
+      finalDiagnostics.bootstrap.active = false;
+      finalDiagnostics.bootstrap.lastSuccess = ARRECIFE_MODULE_STATE.lastSuccess;
+      finalDiagnostics.bootstrap.failedAttempts = ARRECIFE_MODULE_STATE.failedAttempts;
+      finalDiagnostics.bootstrap.lastError = ARRECIFE_MODULE_STATE.lastError;
+    }
+  }
+}
