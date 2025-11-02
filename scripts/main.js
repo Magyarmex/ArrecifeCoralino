@@ -147,7 +147,7 @@ const uiFallbackEvents = Array.isArray(runtimeState.uiFallbackEvents)
   ? runtimeState.uiFallbackEvents
   : (runtimeState.uiFallbackEvents = []);
 
-const AMBIENT_MUSIC_TRACK_URL = 'aquatic-downtime-363761.mp3';
+const AMBIENT_MUSIC_TRACK_URL = '../aquatic-downtime-363761.mp3';
 
 const ambientAudioState = {
   supported:
