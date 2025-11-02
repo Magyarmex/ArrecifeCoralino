@@ -418,64 +418,156 @@ const ambientAudioState = {
   underwater: false,
 };
 
-const DEFAULT_CAMERA_NEAR_PLANE = 0.1;
-const DEFAULT_CAMERA_FAR_PLANE = 500;
+const ARRECIFE_DEFAULT_CAMERA_NEAR = 0.1;
+const ARRECIFE_DEFAULT_CAMERA_FAR = 500;
 
-const CAMERA_BASE_NEAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_BASE_NEAR_PLANE) && runtimeGlobal.CAMERA_BASE_NEAR_PLANE > 0
-    ? runtimeGlobal.CAMERA_BASE_NEAR_PLANE
-    : DEFAULT_CAMERA_NEAR_PLANE;
-const CAMERA_BASE_FAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_BASE_FAR_PLANE) && runtimeGlobal.CAMERA_BASE_FAR_PLANE > CAMERA_BASE_NEAR_PLANE
-    ? runtimeGlobal.CAMERA_BASE_FAR_PLANE
-    : DEFAULT_CAMERA_FAR_PLANE;
+const ARRECIFE_CAMERA_BASE_NEAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR) && runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR > 0
+    ? runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR
+    : ARRECIFE_DEFAULT_CAMERA_NEAR;
+const ARRECIFE_CAMERA_BASE_FAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR) && runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR > ARRECIFE_CAMERA_BASE_NEAR
+    ? runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR
+    : ARRECIFE_DEFAULT_CAMERA_FAR;
 
-const CAMERA_NEAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_NEAR_PLANE) && runtimeGlobal.CAMERA_NEAR_PLANE > 0
-    ? runtimeGlobal.CAMERA_NEAR_PLANE
-    : CAMERA_BASE_NEAR_PLANE;
-const CAMERA_FAR_PLANE =
-  Number.isFinite(runtimeGlobal.CAMERA_FAR_PLANE) && runtimeGlobal.CAMERA_FAR_PLANE > CAMERA_NEAR_PLANE
-    ? runtimeGlobal.CAMERA_FAR_PLANE
-    : CAMERA_BASE_FAR_PLANE;
+const ARRECIFE_CAMERA_NEAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_NEAR) && runtimeGlobal.ARRECIFE_CAMERA_NEAR > 0
+    ? runtimeGlobal.ARRECIFE_CAMERA_NEAR
+    : ARRECIFE_CAMERA_BASE_NEAR;
+const ARRECIFE_CAMERA_FAR =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_FAR) && runtimeGlobal.ARRECIFE_CAMERA_FAR > ARRECIFE_CAMERA_NEAR
+    ? runtimeGlobal.ARRECIFE_CAMERA_FAR
+    : ARRECIFE_CAMERA_BASE_FAR;
 
-runtimeGlobal.CAMERA_BASE_NEAR_PLANE = CAMERA_BASE_NEAR_PLANE;
-runtimeGlobal.CAMERA_BASE_FAR_PLANE = CAMERA_BASE_FAR_PLANE;
-runtimeGlobal.CAMERA_NEAR_PLANE = CAMERA_NEAR_PLANE;
-runtimeGlobal.CAMERA_FAR_PLANE = CAMERA_FAR_PLANE;
+runtimeGlobal.ARRECIFE_CAMERA_BASE_NEAR = ARRECIFE_CAMERA_BASE_NEAR;
+runtimeGlobal.ARRECIFE_CAMERA_BASE_FAR = ARRECIFE_CAMERA_BASE_FAR;
+runtimeGlobal.ARRECIFE_CAMERA_NEAR = ARRECIFE_CAMERA_NEAR;
+runtimeGlobal.ARRECIFE_CAMERA_FAR = ARRECIFE_CAMERA_FAR;
 
-const MIN_CAMERA_STAR_MARGIN = 40;
-const DEFAULT_CAMERA_STAR_MARGIN = 120;
-const CAMERA_STAR_MARGIN =
-  Number.isFinite(runtimeGlobal.CAMERA_STAR_MARGIN) &&
-  runtimeGlobal.CAMERA_STAR_MARGIN >= MIN_CAMERA_STAR_MARGIN
-    ? runtimeGlobal.CAMERA_STAR_MARGIN
-    : DEFAULT_CAMERA_STAR_MARGIN;
+const MIN_ARRECIFE_CAMERA_STAR_MARGIN = 40;
+const DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN = 120;
+const ARRECIFE_CAMERA_STAR_MARGIN =
+  Number.isFinite(runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN) &&
+  runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN >= MIN_ARRECIFE_CAMERA_STAR_MARGIN
+    ? runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN
+    : DEFAULT_ARRECIFE_CAMERA_STAR_MARGIN;
 
-runtimeGlobal.CAMERA_STAR_MARGIN = CAMERA_STAR_MARGIN;
+runtimeGlobal.ARRECIFE_CAMERA_STAR_MARGIN = ARRECIFE_CAMERA_STAR_MARGIN;
+
+const cameraNamespaceDiagnostics =
+  runtimeState.cameraNamespaceDiagnostics && typeof runtimeState.cameraNamespaceDiagnostics === 'object'
+    ? runtimeState.cameraNamespaceDiagnostics
+    : (runtimeState.cameraNamespaceDiagnostics = {
+        legacyBindings: 0,
+        mismatchedValues: 0,
+        lastCheck: 0,
+        lastMismatchDetail: null,
+        reportedLegacyNotice: false,
+        reportedMismatchNotice: false,
+      });
+
+runtimeGlobal.__ARRECIFE_CAMERA_NAMESPACE__ = cameraNamespaceDiagnostics;
+
+const legacyCameraNear = runtimeGlobal.CAMERA_NEAR_PLANE;
+const legacyCameraFar = runtimeGlobal.CAMERA_FAR_PLANE;
+const legacyCameraMargin = runtimeGlobal.CAMERA_STAR_MARGIN;
+
+const legacyBindings = [];
+if (legacyCameraNear !== undefined) {
+  legacyBindings.push('near');
+}
+if (legacyCameraFar !== undefined) {
+  legacyBindings.push('far');
+}
+if (legacyCameraMargin !== undefined) {
+  legacyBindings.push('margin');
+}
+
+cameraNamespaceDiagnostics.lastCheck = Date.now();
+cameraNamespaceDiagnostics.legacyBindings = legacyBindings.length;
+cameraNamespaceDiagnostics.mismatchedValues = 0;
+cameraNamespaceDiagnostics.lastMismatchDetail = null;
+
+if (legacyBindings.length > 0) {
+  const mismatches = [];
+  if (
+    typeof legacyCameraNear === 'number' &&
+    Math.abs(legacyCameraNear - ARRECIFE_CAMERA_NEAR) > 0.0001
+  ) {
+    mismatches.push('near');
+  }
+  if (typeof legacyCameraFar === 'number' && Math.abs(legacyCameraFar - ARRECIFE_CAMERA_FAR) > 0.1) {
+    mismatches.push('far');
+  }
+  if (
+    typeof legacyCameraMargin === 'number' &&
+    Math.abs(legacyCameraMargin - ARRECIFE_CAMERA_STAR_MARGIN) > 0.5
+  ) {
+    mismatches.push('margin');
+  }
+
+  cameraNamespaceDiagnostics.mismatchedValues = mismatches.length;
+  cameraNamespaceDiagnostics.lastMismatchDetail = {
+    bindings: legacyBindings.slice(),
+    mismatches: mismatches.slice(),
+    legacy: {
+      near: legacyCameraNear,
+      far: legacyCameraFar,
+      margin: legacyCameraMargin,
+    },
+    active: {
+      near: ARRECIFE_CAMERA_NEAR,
+      far: ARRECIFE_CAMERA_FAR,
+      margin: ARRECIFE_CAMERA_STAR_MARGIN,
+    },
+  };
+
+  if (mismatches.length > 0) {
+    if (!cameraNamespaceDiagnostics.reportedMismatchNotice) {
+      cameraNamespaceDiagnostics.reportedMismatchNotice = true;
+      pendingRuntimeIssueQueue.push({
+        severity: 'warning',
+        context: 'camera-namespace',
+        error:
+          'Constantes heredadas de cámara encontradas con valores distintos a los prefijados (near/far/margin).',
+      });
+    }
+  } else if (!cameraNamespaceDiagnostics.reportedLegacyNotice) {
+    cameraNamespaceDiagnostics.reportedLegacyNotice = true;
+    pendingRuntimeIssueQueue.push({
+      severity: 'info',
+      context: 'camera-namespace',
+        error:
+          'Se detectaron constantes heredadas de cámara que coinciden con los valores actuales. Se conservarán para compatibilidad.',
+    });
+  }
+} else {
+  cameraNamespaceDiagnostics.reportedLegacyNotice = false;
+  cameraNamespaceDiagnostics.reportedMismatchNotice = false;
+}
 
 const cameraClipPlanes =
   runtimeState.cameraClipPlanes && typeof runtimeState.cameraClipPlanes === 'object'
     ? runtimeState.cameraClipPlanes
     : (runtimeState.cameraClipPlanes = {
-        near: CAMERA_NEAR_PLANE,
-        far: CAMERA_FAR_PLANE,
-        baseNear: CAMERA_BASE_NEAR_PLANE,
-        baseFar: CAMERA_BASE_FAR_PLANE,
+        near: ARRECIFE_CAMERA_NEAR,
+        far: ARRECIFE_CAMERA_FAR,
+        baseNear: ARRECIFE_CAMERA_BASE_NEAR,
+        baseFar: ARRECIFE_CAMERA_BASE_FAR,
         lastUpdated: 0,
         deviation: 0,
       });
 
-cameraClipPlanes.near = CAMERA_NEAR_PLANE;
-cameraClipPlanes.far = CAMERA_FAR_PLANE;
-cameraClipPlanes.baseNear = CAMERA_BASE_NEAR_PLANE;
-cameraClipPlanes.baseFar = CAMERA_BASE_FAR_PLANE;
+cameraClipPlanes.near = ARRECIFE_CAMERA_NEAR;
+cameraClipPlanes.far = ARRECIFE_CAMERA_FAR;
+cameraClipPlanes.baseNear = ARRECIFE_CAMERA_BASE_NEAR;
+cameraClipPlanes.baseFar = ARRECIFE_CAMERA_BASE_FAR;
 cameraClipPlanes.deviation = Math.max(
-  Math.abs(CAMERA_NEAR_PLANE - CAMERA_BASE_NEAR_PLANE),
-  Math.abs(CAMERA_FAR_PLANE - CAMERA_BASE_FAR_PLANE),
+  Math.abs(ARRECIFE_CAMERA_NEAR - ARRECIFE_CAMERA_BASE_NEAR),
+  Math.abs(ARRECIFE_CAMERA_FAR - ARRECIFE_CAMERA_BASE_FAR),
 );
 cameraClipPlanes.overrideActive = cameraClipPlanes.deviation > 0.0001;
-cameraClipPlanes.invalidOrdering = CAMERA_FAR_PLANE <= CAMERA_NEAR_PLANE;
+cameraClipPlanes.invalidOrdering = ARRECIFE_CAMERA_FAR <= ARRECIFE_CAMERA_NEAR;
 cameraClipPlanes.lastUpdated =
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
 cameraClipPlanes.overrides = Math.max(0, (cameraClipPlanes.overrides ?? 0) + (cameraClipPlanes.overrideActive ? 1 : 0));
@@ -495,12 +587,12 @@ const cameraDiagnostics =
         flags: { overrideActive: false, invalidOrdering: false },
       });
 
-cameraDiagnostics.baseNear = CAMERA_BASE_NEAR_PLANE;
-cameraDiagnostics.baseFar = CAMERA_BASE_FAR_PLANE;
-cameraDiagnostics.currentNear = CAMERA_NEAR_PLANE;
-cameraDiagnostics.currentFar = CAMERA_FAR_PLANE;
-cameraDiagnostics.near = cameraDiagnostics.near ?? CAMERA_NEAR_PLANE;
-cameraDiagnostics.far = cameraDiagnostics.far ?? CAMERA_FAR_PLANE;
+cameraDiagnostics.baseNear = ARRECIFE_CAMERA_BASE_NEAR;
+cameraDiagnostics.baseFar = ARRECIFE_CAMERA_BASE_FAR;
+cameraDiagnostics.currentNear = ARRECIFE_CAMERA_NEAR;
+cameraDiagnostics.currentFar = ARRECIFE_CAMERA_FAR;
+cameraDiagnostics.near = cameraDiagnostics.near ?? ARRECIFE_CAMERA_NEAR;
+cameraDiagnostics.far = cameraDiagnostics.far ?? ARRECIFE_CAMERA_FAR;
 cameraDiagnostics.lastDeviation = cameraClipPlanes.deviation;
 cameraDiagnostics.flags = {
   overrideActive: cameraClipPlanes.overrideActive,
@@ -512,14 +604,14 @@ if (!cameraDiagnostics.metrics || typeof cameraDiagnostics.metrics !== 'object')
   cameraDiagnostics.metrics = {
     starFarthest: 0,
     starShortfall: 0,
-    marginEstimate: CAMERA_STAR_MARGIN,
+    marginEstimate: ARRECIFE_CAMERA_STAR_MARGIN,
     lastUpdateTime: 0,
     failedUpdates: 0,
   };
 } else {
   cameraDiagnostics.metrics.starFarthest = cameraDiagnostics.metrics.starFarthest ?? 0;
   cameraDiagnostics.metrics.starShortfall = cameraDiagnostics.metrics.starShortfall ?? 0;
-  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.metrics.marginEstimate ?? CAMERA_STAR_MARGIN;
+  cameraDiagnostics.metrics.marginEstimate = cameraDiagnostics.metrics.marginEstimate ?? ARRECIFE_CAMERA_STAR_MARGIN;
   cameraDiagnostics.metrics.lastUpdateTime = cameraDiagnostics.metrics.lastUpdateTime ?? 0;
   cameraDiagnostics.metrics.failedUpdates = cameraDiagnostics.metrics.failedUpdates ?? 0;
 }
@@ -528,7 +620,7 @@ cameraDiagnostics.adjustments = Number.isFinite(cameraDiagnostics.adjustments)
   : 0;
 cameraDiagnostics.starMargin = Number.isFinite(cameraDiagnostics.starMargin)
   ? cameraDiagnostics.starMargin
-  : CAMERA_STAR_MARGIN;
+  : ARRECIFE_CAMERA_STAR_MARGIN;
 cameraDiagnostics.flags = {
   ...cameraDiagnostics.flags,
   frustumClipping: Boolean(cameraDiagnostics.flags?.frustumClipping),
@@ -548,10 +640,10 @@ runtimeGlobal.__ARRECIFE_CAMERA_DIAGNOSTICS__ = cameraDiagnostics;
 
 function snapshotCameraClipDiagnostics() {
   return {
-    baseNear: CAMERA_BASE_NEAR_PLANE,
-    baseFar: CAMERA_BASE_FAR_PLANE,
-    near: CAMERA_NEAR_PLANE,
-    far: CAMERA_FAR_PLANE,
+    baseNear: ARRECIFE_CAMERA_BASE_NEAR,
+    baseFar: ARRECIFE_CAMERA_BASE_FAR,
+    near: ARRECIFE_CAMERA_NEAR,
+    far: ARRECIFE_CAMERA_FAR,
     deviation: cameraDiagnostics.lastDeviation ?? 0,
     overrideActive: Boolean(cameraDiagnostics.flags?.overrideActive),
     invalidOrdering: Boolean(cameraDiagnostics.flags?.invalidOrdering),
@@ -2977,34 +3069,20 @@ const CLOUD_PUFF_SUBDIVISIONS = 1;
 const CELESTIAL_SUBDIVISIONS = 1;
 const CELESTIAL_SUN_RADIUS = 42;
 const CELESTIAL_MOON_RADIUS = 32;
-const STAR_COUNT = 360;
-const STAR_FIELD_RADIUS = 940;
-const STAR_MIN_SIZE = 2.6;
-const STAR_MAX_SIZE = 5.8;
-const STAR_BRIGHT_THRESHOLD = 0.72;
-const STAR_GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-
-const CAMERA_NEAR_PLANE = 0.1;
-const CAMERA_BASE_FAR_PLANE = 500;
-const CAMERA_STAR_MARGIN = 220;
-
-const cameraDiagnostics = {
-  near: CAMERA_NEAR_PLANE,
-  far: CAMERA_BASE_FAR_PLANE,
-  baseFar: CAMERA_BASE_FAR_PLANE,
-  starMargin: CAMERA_STAR_MARGIN,
-  adjustments: 0,
-  lastUpdateTime: 0,
-  metrics: {
-    starFarthest: 0,
-    starShortfall: 0,
-  },
-  flags: {
-    frustumClipping: false,
-    baseFrustumExceeded: false,
-  },
-  warnedFrustum: false,
-};
+const STAR_COUNT = 180;
+const STAR_FIELD_MARGIN = Math.max(
+  MIN_ARRECIFE_CAMERA_STAR_MARGIN,
+  Math.min(ARRECIFE_CAMERA_STAR_MARGIN, Math.max(MIN_ARRECIFE_CAMERA_STAR_MARGIN, ARRECIFE_CAMERA_FAR * 0.6)),
+);
+const STAR_FIELD_RADIUS = Math.max(180, ARRECIFE_CAMERA_FAR - STAR_FIELD_MARGIN);
+const STAR_FIELD_RADIUS_JITTER = Math.max(
+  30,
+  Math.min(120, Math.max(0, STAR_FIELD_RADIUS * 0.35)),
+);
+const STAR_FIELD_MIN_RADIUS = Math.max(120, STAR_FIELD_RADIUS - STAR_FIELD_RADIUS_JITTER);
+const STAR_MIN_SIZE = 3.2;
+const STAR_MAX_SIZE = 7.6;
+const STAR_BRIGHT_THRESHOLD = 0.74;
 
 runtimeGlobal.STAR_FIELD_MARGIN = STAR_FIELD_MARGIN;
 runtimeGlobal.STAR_FIELD_RADIUS = STAR_FIELD_RADIUS;
@@ -3055,18 +3133,15 @@ const starFieldState = {
     lastDrawTime: 0,
     rebuilds: 0,
     lastError: null,
-    coverageScore: 0,
-    verticalSkew: 0,
-    invalidStars: 0,
-    distributionIssue: null,
-    farthestDistance: 0,
-    frustumMargin: 0,
-    baseFarShortfall: 0,
+    margin: STAR_FIELD_MARGIN,
+    radiusMax: STAR_FIELD_RADIUS,
+    radiusMin: STAR_FIELD_MIN_RADIUS,
+    radiusJitter: STAR_FIELD_RADIUS_JITTER,
+    farPlane: ARRECIFE_CAMERA_FAR,
   },
   flags: {
     geometryValid: false,
-    distributionValid: true,
-    frustumSafe: true,
+    clipSafe: STAR_FIELD_RADIUS < ARRECIFE_CAMERA_FAR,
   },
   needsUpload: true,
 };
@@ -4074,18 +4149,13 @@ function initializeStarField(seedString) {
   starFieldState.metrics.lastVisibility = 0;
   starFieldState.metrics.lastDrawTime = 0;
   starFieldState.metrics.rebuilds = 0;
-  starFieldState.metrics.coverageScore = coverageScore;
-  starFieldState.metrics.verticalSkew = verticalSkew;
-  starFieldState.metrics.invalidStars = invalidStars;
-  starFieldState.metrics.distributionIssue = distributionValid
-    ? null
-    : `Distribución irregular: cobertura=${coverageScore.toFixed(2)} estrellas inválidas=${invalidStars}`;
-  starFieldState.metrics.farthestDistance = farthestDistance;
-  starFieldState.metrics.baseFarShortfall = baseFarShortfall;
-  starFieldState.metrics.frustumMargin = estimatedMargin;
+  starFieldState.metrics.margin = STAR_FIELD_MARGIN;
+  starFieldState.metrics.radiusMax = STAR_FIELD_RADIUS;
+  starFieldState.metrics.radiusMin = STAR_FIELD_MIN_RADIUS;
+  starFieldState.metrics.radiusJitter = STAR_FIELD_RADIUS_JITTER;
+  starFieldState.metrics.farPlane = ARRECIFE_CAMERA_FAR;
   starFieldState.flags.geometryValid = false;
-  starFieldState.flags.distributionValid = distributionValid;
-  starFieldState.flags.frustumSafe = baseFarShortfall <= 0;
+  starFieldState.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= ARRECIFE_CAMERA_FAR;
   starFieldState.needsUpload = true;
   starVertexCount = 0;
 
@@ -4342,8 +4412,8 @@ function rebuildStarFieldGeometry() {
   state.metrics.radiusMax = STAR_FIELD_RADIUS;
   state.metrics.radiusMin = STAR_FIELD_MIN_RADIUS;
   state.metrics.radiusJitter = STAR_FIELD_RADIUS_JITTER;
-  state.metrics.farPlane = CAMERA_FAR_PLANE;
-  state.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= CAMERA_FAR_PLANE;
+  state.metrics.farPlane = ARRECIFE_CAMERA_FAR;
+  state.flags.clipSafe = STAR_FIELD_RADIUS + 1 <= ARRECIFE_CAMERA_FAR;
 
   if (!stars || stars.length === 0) {
     state.vertexData = new Float32Array(0);
@@ -8359,13 +8429,13 @@ const simulationInfo = {
     position: [cameraPosition[0], cameraPosition[1], cameraPosition[2]],
     yaw,
     pitch,
-    near: CAMERA_NEAR_PLANE,
-    far: CAMERA_BASE_FAR_PLANE,
-    starMargin: CAMERA_STAR_MARGIN,
+    near: ARRECIFE_CAMERA_NEAR,
+    far: ARRECIFE_CAMERA_BASE_FAR,
+    starMargin: ARRECIFE_CAMERA_STAR_MARGIN,
     starFarthest: 0,
     starShortfall: 0,
     adjustments: 0,
-    marginEstimate: cameraDiagnostics.metrics?.marginEstimate ?? CAMERA_STAR_MARGIN,
+    marginEstimate: cameraDiagnostics.metrics?.marginEstimate ?? ARRECIFE_CAMERA_STAR_MARGIN,
     failedDiagnostics: cameraDiagnostics.metrics?.failedUpdates ?? 0,
     clip: snapshotCameraClipDiagnostics(),
     clipFlags: {
@@ -8459,9 +8529,11 @@ const simulationInfo = {
     geometryMetrics: celestialGeometryState.metrics,
     stars: starFieldState.metrics.count,
     starMetrics: starFieldState.metrics,
-    starsHealthy:
-      starFieldState.flags.geometryValid && starFieldState.flags.distributionValid !== false,
-    starDistributionHealthy: starFieldState.flags.distributionValid !== false,
+    starsHealthy: starFieldState.flags.geometryValid,
+    starRadius: STAR_FIELD_RADIUS,
+    starRadiusMin: STAR_FIELD_MIN_RADIUS,
+    starMargin: STAR_FIELD_MARGIN,
+    starClipSafe: STAR_FIELD_RADIUS + 1 <= ARRECIFE_CAMERA_FAR,
   },
   lighting: {
     global: lightingDiagnostics.latestLightColor.slice(),
@@ -8614,13 +8686,13 @@ function tickSimulation(deltaTime) {
 
 function computeCameraFrustum() {
   const farthestStar = Math.max(0, starFieldState.metrics?.farthestDistance ?? STAR_FIELD_RADIUS);
-  const desiredFar = Math.max(CAMERA_BASE_FAR_PLANE, farthestStar + CAMERA_STAR_MARGIN);
-  const near = CAMERA_NEAR_PLANE;
+  const desiredFar = Math.max(ARRECIFE_CAMERA_BASE_FAR, farthestStar + ARRECIFE_CAMERA_STAR_MARGIN);
+  const near = ARRECIFE_CAMERA_NEAR;
   const previousFar = cameraDiagnostics.far;
 
   cameraDiagnostics.near = near;
   cameraDiagnostics.metrics.starFarthest = farthestStar;
-  cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - CAMERA_BASE_FAR_PLANE);
+  cameraDiagnostics.metrics.starShortfall = Math.max(0, farthestStar - ARRECIFE_CAMERA_BASE_FAR);
   cameraDiagnostics.starMargin = desiredFar - farthestStar;
   cameraDiagnostics.flags.baseFrustumExceeded = cameraDiagnostics.metrics.starShortfall > 0.01;
   cameraDiagnostics.flags.frustumClipping = cameraDiagnostics.starMargin < 5;
@@ -8706,7 +8778,12 @@ function update(deltaTime) {
   updateAmbientAudioMix(isUnderwater);
 
   const target = add(cameraPosition, forwardDirection);
-  const projection = createPerspectiveMatrix((60 * Math.PI) / 180, canvas.width / canvas.height, frustum.near, frustum.far);
+  const projection = createPerspectiveMatrix(
+    (60 * Math.PI) / 180,
+    canvas.width / canvas.height,
+    ARRECIFE_CAMERA_NEAR,
+    ARRECIFE_CAMERA_FAR,
+  );
   const view = createLookAtMatrix(cameraPosition, target, worldUp);
   const viewProjection = multiplyMatrices(projection, view);
   inverseViewProjectionMatrix = invertMatrix(viewProjection);
@@ -8724,8 +8801,8 @@ function update(deltaTime) {
 
   gl.uniformMatrix4fv(viewProjectionUniform, false, viewProjection);
 
-  cameraClipPlanes.near = CAMERA_NEAR_PLANE;
-  cameraClipPlanes.far = CAMERA_FAR_PLANE;
+  cameraClipPlanes.near = ARRECIFE_CAMERA_NEAR;
+  cameraClipPlanes.far = ARRECIFE_CAMERA_FAR;
   cameraClipPlanes.lastUpdated =
     typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
@@ -9518,8 +9595,8 @@ function updateDebugConsole(deltaTime) {
     typeof cameraDiagnostics.lastOverrideTimestamp === 'number'
       ? new Date(cameraDiagnostics.lastOverrideTimestamp).toISOString()
       : cameraDiagnostics.lastOverrideTimestamp ?? 'n/d';
-  const baseClipLabel = `${CAMERA_BASE_NEAR_PLANE.toFixed(2)}/${CAMERA_BASE_FAR_PLANE.toFixed(1)}`;
-  const activeClipLabel = `${CAMERA_NEAR_PLANE.toFixed(2)}/${CAMERA_FAR_PLANE.toFixed(1)}`;
+  const baseClipLabel = `${ARRECIFE_CAMERA_BASE_NEAR.toFixed(2)}/${ARRECIFE_CAMERA_BASE_FAR.toFixed(1)}`;
+  const activeClipLabel = `${ARRECIFE_CAMERA_NEAR.toFixed(2)}/${ARRECIFE_CAMERA_FAR.toFixed(1)}`;
 
   const now = Date.now();
   cameraDisplayDiagnostics.lastUpdateTime = now;
@@ -9533,7 +9610,7 @@ function updateDebugConsole(deltaTime) {
     typeof cameraNearDisplay === 'object' &&
     'textContent' in cameraNearDisplay
   ) {
-    cameraNearDisplay.textContent = CAMERA_NEAR_PLANE.toFixed(2);
+    cameraNearDisplay.textContent = ARRECIFE_CAMERA_NEAR.toFixed(2);
   } else {
     missingCameraDisplays += 1;
   }
@@ -9542,7 +9619,7 @@ function updateDebugConsole(deltaTime) {
     typeof cameraFarDisplay === 'object' &&
     'textContent' in cameraFarDisplay
   ) {
-    cameraFarDisplay.textContent = CAMERA_FAR_PLANE.toFixed(1);
+    cameraFarDisplay.textContent = ARRECIFE_CAMERA_FAR.toFixed(1);
   } else {
     missingCameraDisplays += 1;
   }
@@ -9551,7 +9628,7 @@ function updateDebugConsole(deltaTime) {
     cameraDisplayDiagnostics.lastMissingTimestamp = now;
   }
 
-  const cameraFarLabel = CAMERA_FAR_PLANE.toFixed(1);
+  const cameraFarLabel = ARRECIFE_CAMERA_FAR.toFixed(1);
   const marginEstimate = Number.isFinite(cameraDiagnostics.metrics.marginEstimate)
     ? cameraDiagnostics.metrics.marginEstimate
     : cameraDiagnostics.starMargin;
@@ -9576,7 +9653,7 @@ function updateDebugConsole(deltaTime) {
       } orden=${clipInvalidOrdering ? 'inválido' : 'ok'}`,
       `Overrides cámara: acumulados=${cameraOverrides} último=${lastOverrideLabel}`,
       `Orientación: yaw=${((yaw * 180) / Math.PI).toFixed(1)}° pitch=${((pitch * 180) / Math.PI).toFixed(1)}°`,
-      `Frustum cámara: near=${CAMERA_NEAR_PLANE.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
+      `Frustum cámara: near=${ARRECIFE_CAMERA_NEAR.toFixed(2)} far=${cameraFarLabel} margen_est=${cameraMarginLabel} estado=${frustumStatus} ajustes=${cameraDiagnostics.adjustments}`,
       `Luz global: rgb=${lightingDiagnostics.latestLightColor
         .map((value) => value.toFixed(2))
         .join(', ')} ambient=${lightingDiagnostics.latestAmbientColor
