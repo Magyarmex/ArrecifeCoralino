@@ -681,6 +681,47 @@ body.tutorial-active #simulation-hud {
   font-weight: 600;
 }
 
+.water-info__chemistry,
+.water-info__flags {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.water-info__chemistry h3,
+.water-info__flags h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(189, 229, 255, 0.78);
+}
+
+.water-info__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.water-info__list-item {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(18, 30, 42, 0.6);
+  border: 1px solid rgba(122, 196, 255, 0.28);
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.85rem;
+}
+
+.water-info__list-item--empty {
+  text-align: center;
+  font-style: italic;
+  opacity: 0.72;
+}
+
 .water-info__hint {
   margin: 0;
   font-size: 0.78rem;
@@ -919,4 +960,140 @@ body.tutorial-active #simulation-hud {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(224, 255, 233, 0.62);
+}
+
+.organism-info {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 47;
+}
+
+.organism-info[hidden] {
+  display: none !important;
+}
+
+.organism-info__content {
+  width: min(360px, calc(100vw - 48px));
+  padding: 22px 26px;
+  border-radius: 18px;
+  background: rgba(18, 24, 36, 0.96);
+  border: 1px solid rgba(142, 205, 255, 0.42);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: #e2f4ff;
+  backdrop-filter: blur(5px);
+}
+
+.organism-info__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.organism-info__header h2 {
+  margin: 0;
+  font-size: 1.28rem;
+  letter-spacing: 0.05em;
+}
+
+.organism-info__close {
+  appearance: none;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 1.45rem;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f1f7ff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.organism-info__close:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.organism-info__thought {
+  margin: 0;
+  font-size: 0.95rem;
+  font-style: italic;
+  color: rgba(210, 233, 255, 0.82);
+}
+
+.organism-info__stats {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.94rem;
+}
+
+.organism-info__stats dt {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.76;
+}
+
+.organism-info__stats dd {
+  margin: 2px 0 0;
+  font-size: 1.06rem;
+  font-weight: 600;
+}
+
+.organism-info__nutrients {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.organism-info__nutrients h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(199, 230, 255, 0.78);
+}
+
+.organism-info__nutrient-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.organism-info__nutrient-item {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(20, 32, 44, 0.65);
+  border: 1px solid rgba(142, 205, 255, 0.35);
+  font-family: "Fira Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  font-size: 0.85rem;
+}
+
+.organism-info__nutrient-item--empty {
+  text-align: center;
+  font-style: italic;
+  opacity: 0.72;
+}
+
+.organism-info__hint {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(199, 230, 255, 0.62);
 }
