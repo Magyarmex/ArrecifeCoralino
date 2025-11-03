@@ -525,7 +525,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       awareness: { vision: 0, smell: 0, memoryMinutes: 0 },
     }),
     visuals: Object.freeze({
-      model: 'coral-ball',
+      model: 'coral.ball',
       coloration: 'bright -> muted by depth',
       maxDepth: 12,
     }),
@@ -570,7 +570,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       awareness: { vision: 0, smell: 0, memoryMinutes: 0 },
     }),
     visuals: Object.freeze({
-      model: 'kelp-strand',
+      model: 'algae.kelp',
       coloration: 'green vertical strands',
       verticality: true,
     }),
@@ -614,7 +614,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       awareness: { vision: 0, smell: 0, memoryMinutes: 0 },
     }),
     visuals: Object.freeze({
-      model: 'algae-ball',
+      model: 'algae.ball',
       coloration: 'brown-green radial strands',
     }),
     eggs: Object.freeze({
@@ -657,7 +657,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       awareness: { vision: 6, smell: 6, memoryMinutes: 3 },
     }),
     visuals: Object.freeze({
-      model: 'jellyfish-pink',
+      model: 'jellyfish.pink',
       coloration: 'semi-transparent pink bell with tentacles',
     }),
     eggs: Object.freeze({
@@ -701,7 +701,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       awareness: { vision: 30, smell: 8, memoryMinutes: 3 },
     }),
     visuals: Object.freeze({
-      model: 'sea-turtle',
+      model: 'turtle.green',
       coloration: 'brown shell with green limbs',
     }),
     eggs: Object.freeze({
@@ -740,11 +740,11 @@ const SPECIES_BLUEPRINTS = Object.freeze({
     }),
     behaviours: Object.freeze({
       mobility: 'crawler',
-      tasks: ['wander', 'find-food', 'find-mate', 'sleep'],
+      tasks: ['wander', 'find-food', 'hunt', 'find-mate', 'sleep'],
       awareness: { vision: 0, smell: 8, memoryMinutes: 3 },
     }),
     visuals: Object.freeze({
-      model: 'starfish',
+      model: 'starfish.common',
       coloration: 'beige and pink arms',
     }),
     eggs: Object.freeze({
@@ -789,7 +789,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       awareness: { vision: 20, smell: 8, memoryMinutes: 3 },
     }),
     visuals: Object.freeze({
-      model: 'lobster',
+      model: 'lobster.red',
       coloration: 'bright red rectangle with limbs',
     }),
     eggs: Object.freeze({
@@ -832,7 +832,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       awareness: { vision: 30, smell: 8, memoryMinutes: 3 },
     }),
     visuals: Object.freeze({
-      model: 'parrotfish',
+      model: 'parrotfish.blue',
       coloration: 'turquoise gradient with pink accents',
     }),
     eggs: Object.freeze({
@@ -877,7 +877,7 @@ const SPECIES_BLUEPRINTS = Object.freeze({
       sprintMultiplier: 3,
     }),
     visuals: Object.freeze({
-      model: 'reef-shark',
+      model: 'shark.reef',
       coloration: 'grey body with white belly',
     }),
     eggs: Object.freeze({
@@ -951,6 +951,46 @@ const ORGANISM_RENDER_SPECS = Object.freeze({
       shell: [0.9, 0.2, 0.24],
       accent: [0.76, 0.16, 0.2],
       eye: [0.08, 0.08, 0.08],
+    },
+  },
+  'coral.ball': {
+    type: 'coral',
+    baseLength: 0.9,
+    baseWidth: 0.9,
+    baseHeight: 0.85,
+    boundingRadius: 0.65,
+    colors: {
+      body: [0.38, 0.78, 0.6],
+      stalk: [0.28, 0.64, 0.5],
+      branch: [0.72, 0.92, 0.76],
+      polyp: [0.98, 0.88, 0.68],
+      tip: [0.94, 0.96, 0.82],
+    },
+  },
+  'algae.kelp': {
+    type: 'kelp',
+    baseLength: 1.2,
+    baseWidth: 0.5,
+    baseHeight: 1.8,
+    boundingRadius: 0.85,
+    colors: {
+      body: [0.32, 0.74, 0.34],
+      stalk: [0.24, 0.58, 0.28],
+      frond: [0.42, 0.78, 0.32],
+      frondTip: [0.8, 0.94, 0.52],
+      tip: [0.82, 0.96, 0.58],
+    },
+  },
+  'algae.ball': {
+    type: 'algaeBall',
+    baseLength: 0.9,
+    baseWidth: 0.9,
+    baseHeight: 0.78,
+    boundingRadius: 0.6,
+    colors: {
+      body: [0.28, 0.62, 0.32],
+      branch: [0.44, 0.78, 0.46],
+      tip: [0.76, 0.9, 0.52],
     },
   },
   'parrotfish.blue': {
@@ -4698,7 +4738,7 @@ waterColumnSimulation.tick = tickWaterColumns;
 runtimeState.waterColumns = waterColumnSimulation;
 runtimeGlobal.__ARRECIFE_WATER_COLUMNS__ = waterColumnSimulation;
 
-const ORGANISM_SIMULATION_LIMIT = 512;
+const ORGANISM_SIMULATION_LIMIT = 1000;
 
 const organismDiagnostics =
   runtimeState.organismDiagnostics && typeof runtimeState.organismDiagnostics === 'object'
@@ -10207,6 +10247,24 @@ function createOrganismPalette(spec, individual) {
   if (!palette.tentacle) {
     palette.tentacle = finalizeOrganismColor(mixColor(palette.body, [0.88, 0.52, 0.8], 0.5), individual);
   }
+  if (!palette.stalk && palette.body) {
+    palette.stalk = finalizeOrganismColor(mixColor(palette.body, [0.38, 0.74, 0.54], 0.3), individual);
+  }
+  if (!palette.branch && palette.body) {
+    palette.branch = finalizeOrganismColor(mixColor(palette.body, [0.82, 0.94, 0.76], 0.45), individual);
+  }
+  if (!palette.tip && palette.branch) {
+    palette.tip = finalizeOrganismColor(mixColor(palette.branch, [0.96, 0.98, 0.82], 0.55), individual);
+  }
+  if (!palette.polyp && palette.tip) {
+    palette.polyp = finalizeOrganismColor(mixColor(palette.tip, [0.99, 0.92, 0.78], 0.5), individual);
+  }
+  if (!palette.frond && palette.stalk) {
+    palette.frond = finalizeOrganismColor(mixColor(palette.stalk, [0.36, 0.76, 0.32], 0.55), individual);
+  }
+  if (!palette.frondTip && palette.frond) {
+    palette.frondTip = finalizeOrganismColor(mixColor(palette.frond, [0.78, 0.94, 0.48], 0.6), individual);
+  }
   if (!palette.top && palette.body) {
     palette.top = palette.body;
   }
@@ -10332,6 +10390,261 @@ function appendBoxLocal(target, transform, min, max, topColor, bottomColor, side
   pushQuadLocal(target, transform, vertices.rtf, vertices.rbf, vertices.rbb, vertices.rtb, side, side, side, side);
   pushQuadLocal(target, transform, vertices.ltf, vertices.rtf, vertices.rbf, vertices.lbf, side, side, side, side);
   pushQuadLocal(target, transform, vertices.ltb, vertices.rtb, vertices.rbb, vertices.lbb, side, side, side, side);
+}
+
+function addCoralBallGeometry(target, transform, palette, seed = 0, spec = {}) {
+  const vertexStart = target.length;
+  const segments = Math.max(6, Math.floor(spec.segments ?? 12));
+  const layers = Math.max(2, Math.floor(spec.layers ?? 4));
+  const radius = spec.radius ?? 0.48;
+  const height = spec.height ?? 0.92;
+  const stalkColor = palette.stalk ?? palette.branch ?? palette.body;
+  const branchColor = palette.branch ?? palette.body;
+  const tipColor = palette.tip ?? palette.polyp ?? branchColor;
+  const polypColor = palette.polyp ?? tipColor;
+  const baseBottom = -height * 0.45;
+  const baseTop = height * 0.05;
+
+  // Central stalk approximated by segmented prism
+  for (let i = 0; i < segments; i++) {
+    const t0 = i / segments;
+    const t1 = (i + 1) / segments;
+    const angle0 = t0 * Math.PI * 2;
+    const angle1 = t1 * Math.PI * 2;
+    const wobble0 = (seededRandom(seed, 101 + i) - 0.5) * 0.08;
+    const wobble1 = (seededRandom(seed, 201 + i) - 0.5) * 0.08;
+    const bottom0 = [
+      Math.cos(angle0) * radius * 0.28 + wobble0,
+      baseBottom,
+      Math.sin(angle0) * radius * 0.28 + wobble0,
+    ];
+    const bottom1 = [
+      Math.cos(angle1) * radius * 0.28 + wobble1,
+      baseBottom,
+      Math.sin(angle1) * radius * 0.28 + wobble1,
+    ];
+    const top0 = [
+      Math.cos(angle0) * radius * 0.36 + wobble0 * 0.6,
+      baseTop,
+      Math.sin(angle0) * radius * 0.36 + wobble0 * 0.6,
+    ];
+    const top1 = [
+      Math.cos(angle1) * radius * 0.36 + wobble1 * 0.6,
+      baseTop,
+      Math.sin(angle1) * radius * 0.36 + wobble1 * 0.6,
+    ];
+    pushQuadLocal(target, transform, top0, top1, bottom1, bottom0, stalkColor, stalkColor, stalkColor, stalkColor);
+  }
+
+  const crownHeight = height * 0.55;
+  const apex = [0, baseTop + crownHeight, 0];
+
+  // Branch layers forming spherical canopy
+  for (let layer = 0; layer < layers; layer++) {
+    const layerFraction = (layer + 1) / (layers + 1);
+    const ringHeight = lerp(baseTop * 0.2, apex[1] * 0.92, layerFraction);
+    const ringRadius = radius * lerp(0.55, 1.08, layerFraction);
+    const coreRadius = ringRadius * 0.45;
+    for (let i = 0; i < segments; i++) {
+      const t0 = i / segments;
+      const t1 = (i + 1) / segments;
+      const midpoint = (t0 + t1) * 0.5;
+      const angle0 = t0 * Math.PI * 2;
+      const angle1 = t1 * Math.PI * 2;
+      const angleMid = midpoint * Math.PI * 2;
+      const swayX = (seededRandom(seed, layer * 311 + i * 17) - 0.5) * radius * 0.2;
+      const swayZ = (seededRandom(seed, layer * 677 + i * 19) - 0.5) * radius * 0.2;
+      const swayY = (seededRandom(seed, layer * 997 + i * 23) - 0.3) * radius * 0.15;
+      const inner = [
+        Math.cos(angleMid) * coreRadius,
+        ringHeight - radius * 0.08,
+        Math.sin(angleMid) * coreRadius,
+      ];
+      const left = [
+        Math.cos(angle0) * ringRadius,
+        ringHeight,
+        Math.sin(angle0) * ringRadius,
+      ];
+      const right = [
+        Math.cos(angle1) * ringRadius,
+        ringHeight,
+        Math.sin(angle1) * ringRadius,
+      ];
+      const tip = [
+        Math.cos(angleMid) * ringRadius * 1.18 + swayX,
+        ringHeight + radius * 0.28 + swayY,
+        Math.sin(angleMid) * ringRadius * 1.18 + swayZ,
+      ];
+
+      pushTriangleLocal(target, transform, inner, left, tip, branchColor, branchColor, tipColor);
+      pushTriangleLocal(target, transform, inner, tip, right, branchColor, tipColor, branchColor);
+      pushTriangleLocal(target, transform, tip, left, inner, tipColor, branchColor, branchColor);
+      pushTriangleLocal(target, transform, tip, inner, right, tipColor, branchColor, branchColor);
+
+      const polypTop = [
+        tip[0] * 0.96,
+        tip[1] + radius * 0.12,
+        tip[2] * 0.96,
+      ];
+      pushTriangleLocal(target, transform, tip, polypTop, left, tipColor, polypColor, branchColor);
+      pushTriangleLocal(target, transform, tip, right, polypTop, tipColor, branchColor, polypColor);
+    }
+  }
+
+  // Upper cap linking final layer to apex
+  for (let i = 0; i < segments; i++) {
+    const t0 = i / segments;
+    const t1 = (i + 1) / segments;
+    const angle0 = t0 * Math.PI * 2;
+    const angle1 = t1 * Math.PI * 2;
+    const ringRadius = radius * 0.75;
+    const topLeft = [Math.cos(angle0) * ringRadius, apex[1] - radius * 0.12, Math.sin(angle0) * ringRadius];
+    const topRight = [Math.cos(angle1) * ringRadius, apex[1] - radius * 0.12, Math.sin(angle1) * ringRadius];
+    pushTriangleLocal(target, transform, topLeft, apex, topRight, tipColor, tipColor, tipColor);
+  }
+
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function addKelpGeometry(target, transform, palette, seed = 0, spec = {}) {
+  const vertexStart = target.length;
+  const fronds = Math.max(3, Math.floor(spec.fronds ?? 7));
+  const height = spec.height ?? 1.8;
+  const baseRadius = spec.baseRadius ?? 0.16;
+  const baseHoldfastRadius = baseRadius * 0.9;
+  const frondWidthBase = spec.frondWidth ?? 0.08;
+  const stalkColor = palette.stalk ?? palette.frond ?? palette.body;
+  const frondColor = palette.frond ?? palette.tip ?? palette.body;
+  const tipColor = palette.frondTip ?? palette.tip ?? frondColor;
+  const baseY = -height * 0.5;
+
+  // Holdfast base
+  for (let i = 0; i < fronds; i++) {
+    const angle0 = (i / fronds) * Math.PI * 2;
+    const angle1 = ((i + 1) / fronds) * Math.PI * 2;
+    const baseA = [
+      Math.cos(angle0) * baseHoldfastRadius,
+      baseY,
+      Math.sin(angle0) * baseHoldfastRadius,
+    ];
+    const baseB = [
+      Math.cos(angle1) * baseHoldfastRadius,
+      baseY,
+      Math.sin(angle1) * baseHoldfastRadius,
+    ];
+    const center = [0, baseY - frondWidthBase * 0.25, 0];
+    pushTriangleLocal(target, transform, center, baseA, baseB, stalkColor, stalkColor, stalkColor);
+  }
+
+  // Fronds
+  for (let i = 0; i < fronds; i++) {
+    const angle = (i / fronds) * Math.PI * 2;
+    const bend = (seededRandom(seed, 401 + i * 37) - 0.5) * 0.5;
+    const sway = (seededRandom(seed, 807 + i * 71) - 0.5) * 0.35;
+    const width = frondWidthBase + (seededRandom(seed, 977 + i * 17) - 0.3) * 0.05;
+    const perpX = -Math.sin(angle);
+    const perpZ = Math.cos(angle);
+    const base = [
+      Math.cos(angle) * baseRadius,
+      baseY,
+      Math.sin(angle) * baseRadius,
+    ];
+    const mid = [
+      base[0] * 0.6 + bend * 0.2,
+      0,
+      base[2] * 0.6 + bend * 0.2,
+    ];
+    const tip = [
+      Math.cos(angle + bend * 0.3) * baseRadius * 0.18 + sway,
+      height * 0.5,
+      Math.sin(angle + bend * 0.3) * baseRadius * 0.18 + sway * 0.6,
+    ];
+    const leftBase = [base[0] + perpX * width, base[1], base[2] + perpZ * width];
+    const rightBase = [base[0] - perpX * width, base[1], base[2] - perpZ * width];
+    const leftMid = [mid[0] + perpX * width * 0.7, mid[1], mid[2] + perpZ * width * 0.7];
+    const rightMid = [mid[0] - perpX * width * 0.7, mid[1], mid[2] - perpZ * width * 0.7];
+    const leftTip = [tip[0] + perpX * width * 0.35, tip[1], tip[2] + perpZ * width * 0.35];
+    const rightTip = [tip[0] - perpX * width * 0.35, tip[1], tip[2] - perpZ * width * 0.35];
+
+    pushTriangleLocal(target, transform, leftBase, leftMid, leftTip, stalkColor, frondColor, tipColor);
+    pushTriangleLocal(target, transform, leftBase, leftTip, mid, stalkColor, tipColor, frondColor);
+    pushTriangleLocal(target, transform, rightBase, rightTip, rightMid, stalkColor, tipColor, frondColor);
+    pushTriangleLocal(target, transform, rightBase, mid, rightTip, stalkColor, frondColor, tipColor);
+    pushTriangleLocal(target, transform, leftTip, rightTip, rightMid, tipColor, tipColor, frondColor);
+    pushTriangleLocal(target, transform, leftTip, rightMid, leftMid, tipColor, frondColor, frondColor);
+  }
+
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function addBallAlgaeGeometry(target, transform, palette, seed = 0, spec = {}) {
+  const vertexStart = target.length;
+  const rings = Math.max(3, Math.floor(spec.rings ?? 5));
+  const segments = Math.max(6, Math.floor(spec.segments ?? 14));
+  const radius = spec.radius ?? 0.44;
+  const baseColor = palette.body ?? palette.branch ?? [0.3, 0.66, 0.34];
+  const tipColor = palette.tip ?? mixColor(baseColor, [0.82, 0.96, 0.68], 0.6);
+
+  const ringPoints = [];
+  for (let ring = 0; ring <= rings; ring++) {
+    const v = ring / rings;
+    const phi = (v - 0.5) * Math.PI;
+    const y = Math.sin(phi) * radius;
+    const ringRadius = Math.max(0, Math.cos(phi) * radius);
+    const row = [];
+    for (let seg = 0; seg < segments; seg++) {
+      const u = (seg / segments) * Math.PI * 2;
+      const jitter = (seededRandom(seed, ring * 409 + seg * 23) - 0.5) * radius * 0.05;
+      const x = Math.cos(u) * ringRadius + jitter;
+      const z = Math.sin(u) * ringRadius + jitter;
+      row.push([x, y, z]);
+    }
+    ringPoints.push(row);
+  }
+
+  for (let ring = 0; ring < rings; ring++) {
+    const current = ringPoints[ring];
+    const next = ringPoints[ring + 1];
+    for (let seg = 0; seg < segments; seg++) {
+      const nextSeg = (seg + 1) % segments;
+      const p0 = current[seg];
+      const p1 = current[nextSeg];
+      const p2 = next[seg];
+      const p3 = next[nextSeg];
+      const c0 = clampColorTriplet(
+        mixColor(
+          baseColor,
+          tipColor,
+          clamp01((p0[1] / (radius * 1.1) + 1) * 0.5),
+        ),
+      );
+      const c1 = clampColorTriplet(
+        mixColor(
+          baseColor,
+          tipColor,
+          clamp01((p1[1] / (radius * 1.1) + 1) * 0.5),
+        ),
+      );
+      const c2 = clampColorTriplet(
+        mixColor(
+          baseColor,
+          tipColor,
+          clamp01((p2[1] / (radius * 1.1) + 1) * 0.5),
+        ),
+      );
+      const c3 = clampColorTriplet(
+        mixColor(
+          baseColor,
+          tipColor,
+          clamp01((p3[1] / (radius * 1.1) + 1) * 0.5),
+        ),
+      );
+      pushTriangleLocal(target, transform, p0, p2, p1, c0, c2, c1);
+      pushTriangleLocal(target, transform, p1, p2, p3, c1, c2, c3);
+    }
+  }
+
+  return (target.length - vertexStart) / floatsPerVertex;
 }
 
 function addJellyfishGeometry(target, transform, palette, seed = 0) {
@@ -10740,6 +11053,15 @@ function appendOrganismInstanceVertices(target, individual, species) {
   const vertexStart = target.length;
 
   switch (spec.type) {
+    case 'coral':
+      addCoralBallGeometry(target, transform, palette, seed, spec);
+      break;
+    case 'kelp':
+      addKelpGeometry(target, transform, palette, seed, spec);
+      break;
+    case 'algaeBall':
+      addBallAlgaeGeometry(target, transform, palette, seed, spec);
+      break;
     case 'jellyfish':
       addJellyfishGeometry(target, transform, palette, seed);
       break;
