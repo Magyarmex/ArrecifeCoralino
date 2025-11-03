@@ -10614,6 +10614,7 @@ function addFishEyes(target, transform, palette, options = {}) {
 }
 
 function addFishGeometry(target, transform, palette, seed = 0, options = {}) {
+  const vertexStart = target.length;
   const noseLength = options.noseLength ?? 0.58;
   const midRadius = options.midRadius ?? 0.28;
   const midHeight = options.midHeight ?? 0.22;
