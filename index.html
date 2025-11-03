@@ -270,7 +270,35 @@
             <dt>Volumen estimado</dt>
             <dd id="water-info-volume">—</dd>
           </div>
+          <div>
+            <dt>Profundidad</dt>
+            <dd id="water-info-depth">—</dd>
+          </div>
+          <div>
+            <dt>Plancton disponible</dt>
+            <dd id="water-info-plankton">—</dd>
+          </div>
+          <div>
+            <dt>Nubes de huevos</dt>
+            <dd id="water-info-eggs">—</dd>
+          </div>
         </dl>
+        <section class="water-info__chemistry" aria-label="Química disuelta">
+          <h3>Química disuelta</h3>
+          <ul id="water-info-chemistry" class="water-info__list">
+            <li class="water-info__list-item water-info__list-item--empty">
+              Sin datos químicos
+            </li>
+          </ul>
+        </section>
+        <section class="water-info__flags" aria-label="Características del hábitat">
+          <h3>Características</h3>
+          <ul id="water-info-flags" class="water-info__list">
+            <li class="water-info__list-item water-info__list-item--empty">
+              Sin características relevantes
+            </li>
+          </ul>
+        </section>
         <p class="water-info__hint">Haz clic fuera para cerrar</p>
       </div>
     </aside>
@@ -365,6 +393,74 @@
           </div>
         </dl>
         <p class="plant-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
+    <aside
+      id="organism-info"
+      class="organism-info"
+      hidden
+      data-ui-element="organism-panel"
+    >
+      <div class="organism-info__content">
+        <header class="organism-info__header">
+          <h2>Habitante seleccionado</h2>
+          <button
+            type="button"
+            id="organism-info-close"
+            class="organism-info__close"
+            aria-label="Cerrar información del habitante"
+          >
+            ×
+          </button>
+        </header>
+        <p id="organism-info-thought" class="organism-info__thought">—</p>
+        <dl class="organism-info__stats">
+          <div>
+            <dt>Especie</dt>
+            <dd id="organism-info-species">—</dd>
+          </div>
+          <div>
+            <dt>Identidad</dt>
+            <dd id="organism-info-identity">—</dd>
+          </div>
+          <div>
+            <dt>Etapa vital</dt>
+            <dd id="organism-info-stage">—</dd>
+          </div>
+          <div>
+            <dt>Edad (lore)</dt>
+            <dd id="organism-info-age-lore">—</dd>
+          </div>
+          <div>
+            <dt>Edad (real)</dt>
+            <dd id="organism-info-age-real">—</dd>
+          </div>
+          <div>
+            <dt>Energía</dt>
+            <dd id="organism-info-energy">—</dd>
+          </div>
+          <div>
+            <dt>Hambre</dt>
+            <dd id="organism-info-hunger">—</dd>
+          </div>
+          <div>
+            <dt>Calorías &amp; masa</dt>
+            <dd id="organism-info-mass">—</dd>
+          </div>
+          <div>
+            <dt>Estado</dt>
+            <dd id="organism-info-status">—</dd>
+          </div>
+        </dl>
+        <section class="organism-info__nutrients" aria-label="Nutrientes almacenados">
+          <h3>Nutrientes corporales</h3>
+          <ul id="organism-info-nutrients" class="organism-info__nutrient-list">
+            <li class="organism-info__nutrient-item organism-info__nutrient-item--empty">
+              Sin datos nutricionales
+            </li>
+          </ul>
+        </section>
+        <p class="organism-info__hint">Haz clic fuera para cerrar</p>
       </div>
     </aside>
     <script type="module" src="scripts/models-library.mjs"></script>

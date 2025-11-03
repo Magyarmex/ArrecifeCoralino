@@ -890,6 +890,97 @@ const SPECIES_BLUEPRINTS = Object.freeze({
   }),
 });
 
+const ORGANISM_RENDER_SPECS = Object.freeze({
+  default: {
+    type: 'fish',
+    baseLength: 1,
+    baseWidth: 0.45,
+    baseHeight: 0.38,
+    boundingRadius: 0.55,
+    colors: {
+      body: [0.32, 0.68, 0.82],
+      belly: [0.48, 0.82, 0.9],
+      fin: [0.28, 0.56, 0.76],
+      eye: [0.08, 0.08, 0.08],
+    },
+  },
+  'jellyfish.pink': {
+    type: 'jellyfish',
+    baseLength: 0.8,
+    baseWidth: 0.8,
+    baseHeight: 0.5,
+    boundingRadius: 0.45,
+    colors: {
+      bellTop: [0.98, 0.72, 0.86],
+      bellBottom: [0.94, 0.52, 0.78],
+      tentacle: [0.88, 0.45, 0.78],
+    },
+  },
+  'turtle.green': {
+    type: 'turtle',
+    baseLength: 1.4,
+    baseWidth: 1,
+    baseHeight: 0.52,
+    boundingRadius: 0.92,
+    colors: {
+      shell: [0.41, 0.31, 0.18],
+      shellHighlight: [0.58, 0.44, 0.24],
+      head: [0.48, 0.72, 0.48],
+      limb: [0.42, 0.64, 0.46],
+      eye: [0.05, 0.05, 0.05],
+    },
+  },
+  'starfish.common': {
+    type: 'starfish',
+    baseLength: 0.9,
+    baseWidth: 0.9,
+    baseHeight: 0.2,
+    boundingRadius: 0.6,
+    colors: {
+      body: [0.95, 0.78, 0.72],
+      underside: [0.88, 0.64, 0.58],
+    },
+  },
+  'lobster.red': {
+    type: 'lobster',
+    baseLength: 1,
+    baseWidth: 0.42,
+    baseHeight: 0.28,
+    boundingRadius: 0.58,
+    colors: {
+      shell: [0.9, 0.2, 0.24],
+      accent: [0.76, 0.16, 0.2],
+      eye: [0.08, 0.08, 0.08],
+    },
+  },
+  'parrotfish.blue': {
+    type: 'fish',
+    baseLength: 1.3,
+    baseWidth: 0.5,
+    baseHeight: 0.4,
+    boundingRadius: 0.75,
+    colors: {
+      body: [0.2, 0.76, 0.78],
+      belly: [0.34, 0.88, 0.86],
+      fin: [0.76, 0.36, 0.72],
+      eye: [0.06, 0.06, 0.08],
+    },
+  },
+  'shark.reef': {
+    type: 'shark',
+    baseLength: 2.6,
+    baseWidth: 0.88,
+    baseHeight: 0.6,
+    boundingRadius: 1.35,
+    colors: {
+      top: [0.66, 0.7, 0.74],
+      belly: [0.94, 0.96, 0.98],
+      fin: [0.56, 0.6, 0.66],
+      eye: [0.08, 0.08, 0.08],
+    },
+  },
+});
+
 class SpeciesRegistry {
   constructor(blueprints, options = {}) {
     this.blueprints = new Map();
@@ -2315,6 +2406,16 @@ const selectionCloseButton =
 const waterInfoPanel = document.getElementById('water-info') ?? fallbackFactories.infoPanel();
 const waterInfoVolumeField =
   document.getElementById('water-info-volume') ?? fallbackFactories.textField();
+const waterInfoDepthField =
+  document.getElementById('water-info-depth') ?? fallbackFactories.textField();
+const waterInfoPlanktonField =
+  document.getElementById('water-info-plankton') ?? fallbackFactories.textField();
+const waterInfoEggsField =
+  document.getElementById('water-info-eggs') ?? fallbackFactories.textField();
+const waterInfoChemistryList =
+  document.getElementById('water-info-chemistry') ?? fallbackFactories.list();
+const waterInfoFlagsList =
+  document.getElementById('water-info-flags') ?? fallbackFactories.list();
 const waterInfoCloseButton =
   document.getElementById('water-info-close') ?? fallbackFactories.button();
 const plantInfoPanel = document.getElementById('plant-info') ?? fallbackFactories.infoPanel();
@@ -2330,6 +2431,33 @@ const plantInfoNutrientsField =
   document.getElementById('plant-info-nutrients') ?? fallbackFactories.textField();
 const plantInfoCloseButton =
   document.getElementById('plant-info-close') ?? fallbackFactories.button();
+
+const organismInfoPanel =
+  document.getElementById('organism-info') ?? fallbackFactories.infoPanel();
+const organismInfoThoughtField =
+  document.getElementById('organism-info-thought') ?? fallbackFactories.textField();
+const organismInfoSpeciesField =
+  document.getElementById('organism-info-species') ?? fallbackFactories.textField();
+const organismInfoIdentityField =
+  document.getElementById('organism-info-identity') ?? fallbackFactories.textField();
+const organismInfoStageField =
+  document.getElementById('organism-info-stage') ?? fallbackFactories.textField();
+const organismInfoAgeLoreField =
+  document.getElementById('organism-info-age-lore') ?? fallbackFactories.textField();
+const organismInfoAgeRealField =
+  document.getElementById('organism-info-age-real') ?? fallbackFactories.textField();
+const organismInfoEnergyField =
+  document.getElementById('organism-info-energy') ?? fallbackFactories.textField();
+const organismInfoHungerField =
+  document.getElementById('organism-info-hunger') ?? fallbackFactories.textField();
+const organismInfoMassField =
+  document.getElementById('organism-info-mass') ?? fallbackFactories.textField();
+const organismInfoStatusField =
+  document.getElementById('organism-info-status') ?? fallbackFactories.textField();
+const organismInfoNutrientsList =
+  document.getElementById('organism-info-nutrients') ?? fallbackFactories.list();
+const organismInfoCloseButton =
+  document.getElementById('organism-info-close') ?? fallbackFactories.button();
 
 const rockInfoPanel = document.getElementById('rock-info') ?? fallbackFactories.infoPanel();
 const rockInfoTypeField =
@@ -2535,6 +2663,11 @@ let pendingPlantSelection = null;
 let ignoreNextPlantPointerDown = false;
 let plantInfoPointerHandler = null;
 let plantInfoKeyHandler = null;
+let activeOrganismSelection = null;
+let pendingOrganismSelection = null;
+let ignoreNextOrganismPointerDown = false;
+let organismInfoPointerHandler = null;
+let organismInfoKeyHandler = null;
 let debugPanelExpanded = false;
 let suppressNextSelectionPointerDown = false;
 let suppressNextSelectionClick = false;
@@ -3889,6 +4022,7 @@ const chunkGridBuffer = createBuffer(new Float32Array(0));
 const selectionHighlightBuffer = createBuffer(new Float32Array(0));
 const rockBuffer = createBuffer(new Float32Array(0));
 const plantBuffer = createBuffer(new Float32Array(0));
+const organismBuffer = createBuffer(new Float32Array(0));
 const windBuffer = createBuffer(new Float32Array(0));
 const cloudBuffer = createBuffer(new Float32Array(0));
 const sunBuffer = createBuffer(new Float32Array(0));
@@ -3899,6 +4033,7 @@ let blockGridVertexCount = 0;
 let chunkGridVertexCount = 0;
 let rockVertexCount = 0;
 let plantVertexCount = 0;
+let organismVertexCount = 0;
 let selectionHighlightVertexCount = 0;
 let waterVertexCount = 0;
 let waterVertexData = null;
@@ -4607,14 +4742,14 @@ function createEmptyOrganismMetrics() {
     averageCalories: 0,
     averageHunger: 0,
     averageEnergy: 0,
-     averageMass: 0,
-     averageSize: 0,
+    averageMass: 0,
+    averageSize: 0,
     eggsQueued: 0,
     hatchedThisTick: 0,
     hatchOverflow: 0,
-     predationEvents: 0,
-     grazingEvents: 0,
-     nutrientTransfers: 0,
+    predationEvents: 0,
+    grazingEvents: 0,
+    nutrientTransfers: 0,
     lastUpdate: 0,
   };
 }
@@ -4626,6 +4761,16 @@ const organismSimulation = {
   metrics: createEmptyOrganismMetrics(),
   nextId: 1,
   random: createRandomGenerator(stringToSeed(`${currentSeed}-organisms`)),
+  geometryDirty: true,
+  renderDiagnostics: {
+    rebuilds: 0,
+    lastRebuildTime: 0,
+    lastVertexCount: 0,
+    lastAliveRendered: 0,
+    lastError: null,
+    failures: 0,
+    lastFailureTime: 0,
+  },
 };
 
 function selectWaterColumnForSpecies(species, random) {
@@ -4787,6 +4932,7 @@ function markOrganismDead(individual, reason) {
       (organismDiagnostics.exhaustionDeaths ?? 0) + 1,
     );
   }
+  organismSimulation.geometryDirty = true;
 }
 
 function updateIndividualGrowth(individual, species, secondsPerDay) {
@@ -4820,6 +4966,15 @@ function updateIndividualGrowth(individual, species, secondsPerDay) {
   if (!Number.isFinite(individual.energyMax)) {
     individual.energyMax = 480;
   }
+  const renderSpec =
+    ORGANISM_RENDER_SPECS[individual.speciesId] ||
+    ORGANISM_RENDER_SPECS[species.id] ||
+    ORGANISM_RENDER_SPECS.default;
+  const scale = individual.sizeScale ?? 1;
+  const baseHeight = renderSpec?.baseHeight ?? 0.4;
+  const baseRadius = renderSpec?.boundingRadius ?? Math.max(renderSpec?.baseLength ?? 1, renderSpec?.baseWidth ?? 0.6) * 0.5;
+  individual.boundingRadius = Math.max(0.1, baseRadius * scale);
+  individual.boundingHeight = Math.max(0.1, baseHeight * scale);
   if (secondsPerDay > 0 && individual.lifeStage === 'baby') {
     const growthRate = (effectiveCalories - birthCalories) / adultCalories;
     individual.diagnostics.growthRate = clampNumber(growthRate, 0, 2);
@@ -4888,6 +5043,10 @@ function moveOrganismTowards(individual, species, targetPosition, speed, deltaTi
     (dy / Math.max(distance, 0.0001)) * speed,
     (dz / Math.max(distance, 0.0001)) * speed,
   ];
+  const planarSpeed = Math.hypot(individual.velocity[0], individual.velocity[2]);
+  if (planarSpeed > 0.01) {
+    individual.orientationYaw = Math.atan2(individual.velocity[0], individual.velocity[2]);
+  }
   const column = findWaterColumnAtPosition(position[0], position[2]);
   if (column) {
     const mobility = species?.behaviours?.mobility;
@@ -5178,14 +5337,22 @@ function spawnOrganism(speciesId, options = {}) {
     energyMax,
     skipMovementUpdate: false,
     targetId: null,
+    orientationYaw: random() * Math.PI * 2,
+    renderSeed: random(),
   };
   if (individual.pregnancy && !Number.isFinite(individual.pregnancy.eggsCount)) {
     individual.pregnancy.eggsCount = 0;
   }
+  updateIndividualGrowth(
+    individual,
+    species,
+    dayNightCycleDuration > 0 ? dayNightCycleDuration : 1,
+  );
   organismSimulation.individuals.push(individual);
   organismSimulation.individualsById.set(individual.id, individual);
   organismDiagnostics.spawns = Math.max(0, (organismDiagnostics.spawns ?? 0) + 1);
   organismDiagnostics.lastSpawnTime = Date.now();
+  organismSimulation.geometryDirty = true;
   return individual;
 }
 
@@ -5195,6 +5362,7 @@ function repopulateOrganisms(seedString) {
   organismSimulation.individualsById = new Map();
   organismSimulation.metrics = createEmptyOrganismMetrics();
   organismSimulation.nextId = 1;
+  resetOrganismGeometry();
   const seed = stringToSeed(`${seedString ?? currentSeed}-organisms`);
   organismSimulation.random = createRandomGenerator(seed);
   diagnostics.resets = Math.max(0, (diagnostics.resets ?? 0) + 1);
@@ -5566,6 +5734,10 @@ function tickOrganisms(deltaTime, hatchedEggs = []) {
               velocity[2] * deltaTime,
             ];
           }
+          const planarSpeed = Math.hypot(velocity[0], velocity[2]);
+          if (planarSpeed > 0.01) {
+            individual.orientationYaw = Math.atan2(velocity[0], velocity[2]);
+          }
         }
         const column = findWaterColumnAtPosition(individual.position[0], individual.position[2]);
         if (column) {
@@ -5586,6 +5758,7 @@ function tickOrganisms(deltaTime, hatchedEggs = []) {
       handleOrganismReproduction(individual, species, speciesGroups, deltaTime);
     }
   }
+  organismSimulation.geometryDirty = true;
   recomputeOrganismMetrics();
 }
 
@@ -5633,6 +5806,7 @@ const drawStats = {
   water: 0,
   rocks: 0,
   plants: 0,
+  organisms: 0,
   wind: 0,
   clouds: 0,
   celestial: 0,
@@ -7787,6 +7961,7 @@ function clearSelection() {
   }
   closeWaterInfo();
   closePlantInfo();
+  closeOrganismInfo();
   closeRockInfo();
 }
 
@@ -7839,6 +8014,27 @@ function setDebugPanelExpanded(expanded) {
   }
 }
 
+const WATER_COLUMN_FLAG_LABELS = Object.freeze({
+  coralCandidate: 'Hábitat apto para coral',
+  kelpBand: 'Franja de kelp',
+  cliff: 'Talud pronunciado',
+  shelf: 'Plataforma costera',
+  shallow: 'Aguas someras',
+  sheltered: 'Protegido por tierra',
+  externalShelf: 'Borde exterior',
+  dry: 'Expuesto',
+});
+
+const NUTRIENT_LABELS = Object.freeze({
+  carbon: 'Carbono',
+  nitrogen: 'Nitrógeno',
+  phosphorus: 'Fósforo',
+  sulfur: 'Azufre',
+  magnesium: 'Magnesio',
+  calcium: 'Calcio',
+  potassium: 'Potasio',
+});
+
 function computeWaterTileVolume(selection) {
   if (!selection) {
     return 0;
@@ -7882,7 +8078,123 @@ function updateWaterInfoPanel(selection) {
 
   const volume = computeWaterTileVolume(selection);
   if (waterInfoVolumeField) {
-    waterInfoVolumeField.textContent = `${volume.toFixed(2)} m³`;
+    waterInfoVolumeField.textContent = `${formatNumber(volume, 2)} m³`;
+  }
+
+  const column = selection
+    ? findWaterColumnAtPosition(
+        selection.worldPosition?.[0] ?? 0,
+        selection.worldPosition?.[2] ?? 0,
+      )
+    : null;
+
+  if (waterInfoDepthField) {
+    if (column) {
+      const depthText = `${formatNumber(column.depth ?? 0, 2)} m`;
+      const seafloorText = Number.isFinite(column.seafloor)
+        ? ` (fondo: ${formatNumber(column.seafloor, 2)} m)`
+        : '';
+      waterInfoDepthField.textContent = `${depthText}${seafloorText}`;
+    } else {
+      waterInfoDepthField.textContent = '—';
+    }
+  }
+
+  if (waterInfoPlanktonField) {
+    if (column?.plankton) {
+      const density = column.plankton.density ?? 0;
+      const individuals = column.plankton.individuals ?? 0;
+      const maxIndividuals = column.plankton.maxIndividuals ?? 0;
+      const saturation = maxIndividuals > 0 ? individuals / maxIndividuals : 0;
+      waterInfoPlanktonField.textContent = `${formatNumber(density, 2)} ind/m³ (${formatNumber(
+        individuals,
+        0,
+      )} / ${formatNumber(maxIndividuals, 0)} • ${formatPercent(saturation)})`;
+    } else {
+      waterInfoPlanktonField.textContent = '—';
+    }
+  }
+
+  if (waterInfoEggsField) {
+    if (column && Array.isArray(column.eggClouds) && column.eggClouds.length > 0) {
+      let totalEggs = 0;
+      const speciesSet = new Set();
+      for (const cloud of column.eggClouds) {
+        const count = Math.max(0, Math.round(cloud?.count ?? 0));
+        totalEggs += count;
+        if (cloud?.speciesId) {
+          speciesSet.add(cloud.speciesId);
+        }
+      }
+      waterInfoEggsField.textContent = `${formatNumber(totalEggs, 0)} huevos (${speciesSet.size} especies)`;
+    } else {
+      waterInfoEggsField.textContent = 'Sin huevos';
+    }
+  }
+
+  if (waterInfoChemistryList) {
+    if (column?.chemistry) {
+      const chemistryEntries = Object.entries(column.chemistry)
+        .filter(([, spec]) => Number.isFinite(spec?.value))
+        .map(([key, spec]) => {
+          const name = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ');
+          const label = name.charAt(0).toUpperCase() + name.slice(1);
+          const units = spec?.units ? ` ${spec.units}` : '';
+          return `${label.trim()}: ${formatNumber(spec.value, 2)}${units}`;
+        });
+      populateUiList(waterInfoChemistryList, chemistryEntries, {
+        itemClass: 'water-info__list-item',
+        emptyItemClass: 'water-info__list-item water-info__list-item--empty',
+        emptyLabel: 'Sin datos químicos',
+      });
+    } else {
+      populateUiList(waterInfoChemistryList, [], {
+        itemClass: 'water-info__list-item',
+        emptyItemClass: 'water-info__list-item water-info__list-item--empty',
+        emptyLabel: 'Sin datos químicos',
+      });
+    }
+  }
+
+  if (waterInfoFlagsList) {
+    if (column) {
+      const flags = [];
+      if (column.flags) {
+        for (const [flag, label] of Object.entries(WATER_COLUMN_FLAG_LABELS)) {
+          if (column.flags[flag]) {
+            flags.push(label);
+          }
+        }
+      }
+      const plankton = column.plankton;
+      if (plankton) {
+        const target = plankton.maxIndividuals ?? 0;
+        const stock = plankton.individuals ?? 0;
+        if (target > 0 && stock <= target * 0.25) {
+          flags.push('Plancton en declive');
+        }
+      }
+      if (column.metrics?.eggsBySpecies) {
+        const totalEggs = Object.values(column.metrics.eggsBySpecies).reduce(
+          (sum, value) => sum + Math.max(0, Number(value) || 0),
+          0,
+        );
+        if (totalEggs > 0) {
+          flags.push(`Huevos suspendidos: ${formatNumber(totalEggs, 0)}`);
+        }
+      }
+      populateUiList(waterInfoFlagsList, flags, {
+        itemClass: 'water-info__list-item',
+        emptyItemClass: 'water-info__list-item water-info__list-item--empty',
+        emptyLabel: 'Sin características relevantes',
+      });
+    } else {
+      populateUiList(waterInfoFlagsList, [], {
+        itemClass: 'water-info__list-item',
+        emptyItemClass: 'water-info__list-item water-info__list-item--empty',
+        emptyLabel: 'Sin características relevantes',
+      });
+    }
   }
 }
 
@@ -7930,6 +8242,7 @@ function openWaterInfo(selection, event) {
 
   closeRockInfo();
   closePlantInfo();
+  closeOrganismInfo();
 
   activeWaterSelection = selection;
   updateWaterInfoPanel(selection);
@@ -8059,6 +8372,7 @@ function openPlantInfo(plantOrHit, event) {
   }
 
   closeRockInfo();
+  closeOrganismInfo();
   activePlantSelection = plant;
   updatePlantInfoPanel(plant);
   plantInfoPanel.hidden = false;
@@ -8105,6 +8419,248 @@ function openPlantInfo(plantOrHit, event) {
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('pointerdown', plantInfoPointerHandler, true);
     document.addEventListener('keydown', plantInfoKeyHandler, true);
+  }
+}
+
+function translateLifeStage(stage) {
+  switch (stage) {
+    case 'baby':
+      return 'Cría';
+    case 'juvenile':
+      return 'Juvenil';
+    case 'adult':
+      return 'Adulto';
+    case 'elderly':
+      return 'Anciano';
+    default:
+      return stage || '—';
+  }
+}
+
+function translateSex(sex) {
+  switch (sex) {
+    case 'female':
+      return 'Hembra';
+    case 'male':
+      return 'Macho';
+    default:
+      return 'Indeterminado';
+  }
+}
+
+function closeOrganismInfo(options = {}) {
+  const { restoreCamera = false, event } = options;
+  activeOrganismSelection = null;
+  pendingOrganismSelection = null;
+  ignoreNextOrganismPointerDown = false;
+
+  if (organismInfoPanel) {
+    organismInfoPanel.hidden = true;
+    if (typeof organismInfoPanel.setAttribute === 'function') {
+      organismInfoPanel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  if (
+    organismInfoPointerHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('pointerdown', organismInfoPointerHandler, true);
+  }
+
+  if (
+    organismInfoKeyHandler &&
+    typeof document !== 'undefined' &&
+    typeof document.removeEventListener === 'function'
+  ) {
+    document.removeEventListener('keydown', organismInfoKeyHandler, true);
+  }
+
+  if (restoreCamera) {
+    requestCameraControl(event);
+  }
+}
+
+function updateOrganismInfoPanel(individual = activeOrganismSelection) {
+  const target = individual ?? activeOrganismSelection;
+  if (!target) {
+    return;
+  }
+
+  const species = target.species ?? speciesRegistry?.getSpecies(target.speciesId);
+
+  if (organismInfoThoughtField) {
+    organismInfoThoughtField.textContent = target.thought || '—';
+  }
+  if (organismInfoSpeciesField) {
+    organismInfoSpeciesField.textContent = species?.displayName || target.speciesId || '—';
+  }
+  if (organismInfoIdentityField) {
+    const sexLabel = translateSex(target.sex);
+    organismInfoIdentityField.textContent = target.id
+      ? `${target.id} • ${sexLabel}`
+      : sexLabel;
+  }
+  if (organismInfoStageField) {
+    organismInfoStageField.textContent = translateLifeStage(target.lifeStage);
+  }
+  if (organismInfoAgeLoreField) {
+    const ageDays = Math.max(0, target.ageDays ?? 0);
+    organismInfoAgeLoreField.textContent = `${formatNumber(ageDays, 1)} años`;
+  }
+  if (organismInfoAgeRealField) {
+    organismInfoAgeRealField.textContent = formatDurationHMS(target.ageSeconds ?? 0);
+  }
+
+  const hungerMax = target.hungerMax ?? species?.metabolism?.dailyCalories ?? 0;
+  const hungerCurrent = Math.max(0, target.hunger ?? 0);
+  const hungerFraction = hungerMax > 0 ? clamp01(hungerCurrent / hungerMax) : 0;
+  if (organismInfoHungerField) {
+    organismInfoHungerField.textContent = `${formatPercent(hungerFraction)} (${formatNumber(
+      hungerCurrent,
+      0,
+    )} / ${formatNumber(hungerMax, 0)} kcal)`;
+  }
+
+  const energyMax = target.energyMax ?? 480;
+  const energyCurrent = Math.max(0, target.energy ?? 0);
+  const energyFraction = energyMax > 0 ? clamp01(energyCurrent / energyMax) : 0;
+  if (organismInfoEnergyField) {
+    organismInfoEnergyField.textContent = `${formatPercent(energyFraction)} (${formatNumber(
+      energyCurrent,
+      0,
+    )} / ${formatNumber(energyMax, 0)})`;
+  }
+
+  const calories = Math.max(0, target.calories ?? 0);
+  const massKg = Number.isFinite(target.massKg)
+    ? target.massKg
+    : massFromCalories(calories);
+  if (organismInfoMassField) {
+    organismInfoMassField.textContent = `${formatNumber(calories, 0)} kcal • ${formatNumber(
+      massKg,
+      2,
+    )} kg`;
+  }
+
+  if (organismInfoStatusField) {
+    const statuses = [];
+    if (target.flags?.alive === false) {
+      statuses.push('Muerto');
+    } else {
+      if (target.flags?.sleeping) {
+        statuses.push('Durmiendo');
+      }
+      if (target.flags?.starving) {
+        statuses.push('Hambriento');
+      }
+      if (target.flags?.exhausted) {
+        statuses.push('Exhausto');
+      }
+      if (target.pregnancy?.active) {
+        const progress = Number.isFinite(target.pregnancy.progress)
+          ? formatPercent(target.pregnancy.progress, 0)
+          : 'En curso';
+        statuses.push(`Gestando (${progress})`);
+      }
+      if (target.intent) {
+        const intent = target.intent.charAt(0).toUpperCase() + target.intent.slice(1);
+        statuses.push(intent);
+      }
+    }
+    organismInfoStatusField.textContent = statuses.length > 0 ? statuses.join(' • ') : '—';
+  }
+
+  if (organismInfoNutrientsList) {
+    const nutrientEntries = [];
+    const base = target.nutrients || {};
+    const intake = target.nutrientIntake || {};
+    const nutrientKeys = new Set([
+      ...Object.keys(base),
+      ...Object.keys(intake),
+    ]);
+    for (const key of nutrientKeys) {
+      const amount = Math.max(0, Number(base[key]) || 0);
+      const intakeAmount = Math.max(0, Number(intake[key]) || 0);
+      const label = NUTRIENT_LABELS[key] || key.charAt(0).toUpperCase() + key.slice(1);
+      let entry = `${label}: ${formatNumber(amount, 2)} g`;
+      if (intakeAmount > 0) {
+        entry += ` (+${formatNumber(intakeAmount, 2)} g ingeridos)`;
+      }
+      nutrientEntries.push(entry);
+    }
+    nutrientEntries.sort();
+    populateUiList(organismInfoNutrientsList, nutrientEntries, {
+      itemClass: 'organism-info__nutrient-item',
+      emptyItemClass:
+        'organism-info__nutrient-item organism-info__nutrient-item--empty',
+      emptyLabel: 'Sin datos nutricionales',
+    });
+  }
+}
+
+function openOrganismInfo(selection, event) {
+  if (!organismInfoPanel) {
+    return;
+  }
+
+  const individual = selection?.individual ?? selection;
+  if (!individual) {
+    closeOrganismInfo();
+    return;
+  }
+
+  closeWaterInfo();
+  closePlantInfo();
+  closeRockInfo();
+
+  activeOrganismSelection = individual;
+  updateOrganismInfoPanel(individual);
+  organismInfoPanel.hidden = false;
+  if (typeof organismInfoPanel.setAttribute === 'function') {
+    organismInfoPanel.setAttribute('aria-hidden', 'false');
+  }
+  ignoreNextOrganismPointerDown = event?.type === 'pointerdown';
+
+  if (!organismInfoPointerHandler) {
+    organismInfoPointerHandler = (pointerEvent) => {
+      if (pointerEvent.button !== undefined && pointerEvent.button !== 0) {
+        return;
+      }
+      if (ignoreNextOrganismPointerDown) {
+        ignoreNextOrganismPointerDown = false;
+        return;
+      }
+      suppressNextSelectionPointerDown = true;
+      suppressNextSelectionClick = true;
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => {
+          suppressNextSelectionPointerDown = false;
+        }, 0);
+        setTimeout(() => {
+          suppressNextSelectionClick = false;
+        }, 0);
+      } else {
+        suppressNextSelectionPointerDown = false;
+        suppressNextSelectionClick = false;
+      }
+      closeOrganismInfo({ restoreCamera: true, event: pointerEvent });
+    };
+  }
+
+  if (!organismInfoKeyHandler) {
+    organismInfoKeyHandler = (keyboardEvent) => {
+      if (keyboardEvent.key === 'Escape' || keyboardEvent.key === 'Esc') {
+        keyboardEvent.preventDefault();
+        closeOrganismInfo({ restoreCamera: true, event: keyboardEvent });
+      }
+    };
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('pointerdown', organismInfoPointerHandler, true);
+    document.addEventListener('keydown', organismInfoKeyHandler, true);
   }
 }
 
@@ -8223,6 +8779,7 @@ function openRockInfo(rockOrHit, event) {
 
   closeWaterInfo();
   closePlantInfo();
+  closeOrganismInfo();
   activeRockSelection = rock;
   updateRockInfoPanel(rock);
   rockInfoPanel.hidden = false;
@@ -8537,6 +9094,79 @@ function pickPlantAt(pointerX, pointerY) {
     return null;
   }
   return intersectPlants(ray.origin, ray.direction);
+}
+
+function intersectOrganism(origin, direction, individual, species) {
+  if (!individual || individual.flags?.alive === false) {
+    return null;
+  }
+  if (!Array.isArray(individual.position)) {
+    return null;
+  }
+  const position = individual.position;
+  const baseRadius = Math.max(0.15, individual.boundingRadius ?? 0.6);
+  const height = Math.max(baseRadius * 2, individual.boundingHeight ?? baseRadius * 2);
+  const mobility = species?.behaviours?.mobility;
+  const centerY = mobility === 'crawler' ? position[1] + height * 0.5 : position[1];
+  const center = [position[0], centerY, position[2]];
+  const oc = [origin[0] - center[0], origin[1] - center[1], origin[2] - center[2]];
+  const a = dot(direction, direction);
+  const b = 2 * dot(oc, direction);
+  const c = dot(oc, oc) - baseRadius * baseRadius;
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < 0) {
+    return null;
+  }
+  const sqrtDiscriminant = Math.sqrt(discriminant);
+  const t0 = (-b - sqrtDiscriminant) / (2 * a);
+  const t1 = (-b + sqrtDiscriminant) / (2 * a);
+  let t = null;
+  if (t0 >= 0) {
+    t = t0;
+  } else if (t1 >= 0) {
+    t = t1;
+  }
+  if (t === null) {
+    return null;
+  }
+  return {
+    distance: t,
+    point: [
+      origin[0] + direction[0] * t,
+      origin[1] + direction[1] * t,
+      origin[2] + direction[2] * t,
+    ],
+    individual,
+  };
+}
+
+function pickOrganismAt(pointerX, pointerY) {
+  const individuals = organismSimulation?.individuals;
+  if (!individuals || individuals.length === 0) {
+    return null;
+  }
+  const ray = createPointerRay(pointerX, pointerY);
+  if (!ray) {
+    return null;
+  }
+  let closest = null;
+  for (const individual of individuals) {
+    if (!individual || individual.flags?.alive === false) {
+      continue;
+    }
+    const species = individual.species || speciesRegistry?.getSpecies(individual.speciesId);
+    if (!species) {
+      continue;
+    }
+    const hit = intersectOrganism(ray.origin, ray.direction, individual, species);
+    if (!hit) {
+      continue;
+    }
+    if (!closest || hit.distance < closest.distance) {
+      closest = { individual, distance: hit.distance, point: hit.point };
+    }
+  }
+  return closest;
 }
 
 function intersectRock(origin, direction, rock) {
@@ -9484,6 +10114,732 @@ function computePlantMass(plant) {
   }
 
   return Math.max(0, result.mass ?? 0);
+}
+
+function resolveColorTriplet(input, fallback = [0.5, 0.5, 0.5]) {
+  if (Array.isArray(input)) {
+    const color = [
+      Number.isFinite(input[0]) ? input[0] : fallback[0],
+      Number.isFinite(input[1]) ? input[1] : fallback[1],
+      Number.isFinite(input[2]) ? input[2] : fallback[2],
+    ];
+    return clampColorTriplet(color);
+  }
+  return fallback.slice();
+}
+
+function clampColorTriplet(color) {
+  return [clamp01(color[0] ?? 0), clamp01(color[1] ?? 0), clamp01(color[2] ?? 0)];
+}
+
+function seededRandom(seed, salt = 0) {
+  const base = Number.isFinite(seed) ? seed : 0;
+  const value = Math.sin((base * 977 + salt * 57.3 + 0.5) * 43758.5453123);
+  return value - Math.floor(value);
+}
+
+function applyColorVariation(color, seed, salt = 0, amount = 0.1) {
+  const variation = clamp01(Math.abs(amount));
+  if (variation <= 0) {
+    return clampColorTriplet(color);
+  }
+  const offset0 = seededRandom(seed, salt + 11) - 0.5;
+  const offset1 = seededRandom(seed, salt + 23) - 0.5;
+  const offset2 = seededRandom(seed, salt + 37) - 0.5;
+  return clampColorTriplet([
+    color[0] + offset0 * variation,
+    color[1] + offset1 * variation,
+    color[2] + offset2 * variation,
+  ]);
+}
+
+function finalizeOrganismColor(color, individual) {
+  let result = clampColorTriplet(color);
+  if (individual?.lifeStage === 'elderly') {
+    result = clampColorTriplet(mixColor(result, [0.62, 0.62, 0.64], 0.4));
+  }
+  if (individual?.flags?.starving) {
+    result = clampColorTriplet(mixColor(result, [0.85, 0.46, 0.38], 0.25));
+  }
+  if (individual?.flags?.sleeping) {
+    result = clampColorTriplet(mixColor(result, [0.82, 0.9, 1], 0.18));
+  }
+  return result;
+}
+
+function createOrganismPalette(spec, individual) {
+  const palette = {};
+  const seed = Number.isFinite(individual?.renderSeed) ? individual.renderSeed : Math.random();
+  const colors = spec && typeof spec.colors === 'object' ? spec.colors : {};
+  let salt = 1;
+  for (const [key, value] of Object.entries(colors)) {
+    const base = resolveColorTriplet(value);
+    palette[key] = finalizeOrganismColor(applyColorVariation(base, seed, salt, 0.12), individual);
+    salt += 1;
+  }
+  if (!palette.body) {
+    palette.body = finalizeOrganismColor(applyColorVariation([0.32, 0.68, 0.82], seed, 91, 0.12), individual);
+  }
+  if (!palette.belly) {
+    palette.belly = finalizeOrganismColor(mixColor(palette.body, [0.94, 0.96, 0.98], 0.5), individual);
+  }
+  if (!palette.fin) {
+    palette.fin = finalizeOrganismColor(mixColor(palette.body, [0.28, 0.36, 0.48], 0.45), individual);
+  }
+  if (!palette.eye) {
+    palette.eye = finalizeOrganismColor([0.08, 0.08, 0.08], individual);
+  }
+  if (!palette.shell && palette.body) {
+    palette.shell = palette.body;
+  }
+  if (!palette.shellHighlight && palette.shell) {
+    palette.shellHighlight = finalizeOrganismColor(mixColor(palette.shell, [0.7, 0.58, 0.36], 0.35), individual);
+  }
+  if (!palette.head) {
+    palette.head = finalizeOrganismColor(mixColor(palette.body, [0.54, 0.74, 0.54], 0.4), individual);
+  }
+  if (!palette.limb) {
+    palette.limb = finalizeOrganismColor(mixColor(palette.body, [0.48, 0.64, 0.5], 0.45), individual);
+  }
+  if (!palette.underside && palette.belly) {
+    palette.underside = palette.belly;
+  }
+  if (!palette.tentacle) {
+    palette.tentacle = finalizeOrganismColor(mixColor(palette.body, [0.88, 0.52, 0.8], 0.5), individual);
+  }
+  if (!palette.top && palette.body) {
+    palette.top = palette.body;
+  }
+  return palette;
+}
+
+function createOrganismTransform(individual, spec, species) {
+  const position = Array.isArray(individual?.position)
+    ? [
+        Number.isFinite(individual.position[0]) ? individual.position[0] : 0,
+        Number.isFinite(individual.position[1]) ? individual.position[1] : 0,
+        Number.isFinite(individual.position[2]) ? individual.position[2] : 0,
+      ]
+    : [0, waterSurfaceLevel - 1, 0];
+  const scaleFactor = clampNumber(individual?.sizeScale ?? 1, 0.2, 4);
+  const baseWidth = spec?.baseWidth ?? 0.6;
+  const baseHeight = spec?.baseHeight ?? 0.4;
+  const baseLength = spec?.baseLength ?? 1;
+  const scale = [
+    Math.max(0.05, baseWidth * scaleFactor),
+    Math.max(0.05, baseHeight * scaleFactor),
+    Math.max(0.05, baseLength * scaleFactor),
+  ];
+  const yaw = Number.isFinite(individual?.orientationYaw) ? individual.orientationYaw : 0;
+  const cosYaw = Math.cos(yaw);
+  const sinYaw = Math.sin(yaw);
+  const sleeping = Boolean(individual?.flags?.sleeping);
+  const mobility = species?.behaviours?.mobility || 'swimmer';
+  let verticalOffset = 0;
+  if (
+    mobility === 'crawler' ||
+    mobility === 'sessile' ||
+    spec?.type === 'starfish' ||
+    spec?.type === 'lobster'
+  ) {
+    verticalOffset = scale[1] * 0.5;
+  } else if (spec?.type === 'jellyfish') {
+    verticalOffset = -scale[1] * 0.15;
+  }
+  if (sleeping) {
+    verticalOffset += scale[1] * 0.1;
+  }
+  return {
+    position: [position[0], position[1] + verticalOffset, position[2]],
+    scale,
+    yaw,
+    cosYaw,
+    sinYaw,
+    sleeping,
+  };
+}
+
+function transformPointLocal(point, transform) {
+  if (!transform) {
+    return point.slice();
+  }
+  const scale = transform.scale ?? [1, 1, 1];
+  const position = transform.position ?? [0, 0, 0];
+  const cosYaw = Number.isFinite(transform.cosYaw) ? transform.cosYaw : 1;
+  const sinYaw = Number.isFinite(transform.sinYaw) ? transform.sinYaw : 0;
+  let x = (point[0] ?? 0) * scale[0];
+  let y = (point[1] ?? 0) * scale[1];
+  const z = (point[2] ?? 0) * scale[2];
+  if (transform.sleeping) {
+    y = -y;
+  }
+  const rotatedX = x * cosYaw - z * sinYaw;
+  const rotatedZ = x * sinYaw + z * cosYaw;
+  return [
+    rotatedX + position[0],
+    y + position[1],
+    rotatedZ + position[2],
+  ];
+}
+
+function pushVertexTransformed(target, transform, point, color) {
+  const world = transformPointLocal(point, transform);
+  const finalColor = clampColorTriplet(color);
+  target.push(world[0], world[1], world[2], finalColor[0], finalColor[1], finalColor[2]);
+}
+
+function pushTriangleLocal(target, transform, a, b, c, colorA, colorB, colorC) {
+  pushVertexTransformed(target, transform, a, colorA);
+  pushVertexTransformed(target, transform, b, colorB ?? colorA);
+  pushVertexTransformed(target, transform, c, colorC ?? colorB ?? colorA);
+}
+
+function pushQuadLocal(target, transform, a, b, c, d, colorA, colorB, colorC, colorD) {
+  pushTriangleLocal(target, transform, a, b, c, colorA, colorB, colorC);
+  pushTriangleLocal(target, transform, a, c, d, colorA, colorC, colorD ?? colorA);
+}
+
+function pickBodyGradientColor(normalizedY, palette) {
+  const clamped = clamp01((normalizedY + 1) * 0.5);
+  const top = palette.body ?? [0.32, 0.68, 0.82];
+  const belly = palette.belly ?? palette.underside ?? [0.9, 0.95, 0.98];
+  return clampColorTriplet(mixColor(belly, top, clamped));
+}
+
+function appendBoxLocal(target, transform, min, max, topColor, bottomColor, sideColor) {
+  const x0 = min[0];
+  const y0 = min[1];
+  const z0 = min[2];
+  const x1 = max[0];
+  const y1 = max[1];
+  const z1 = max[2];
+  const vertices = {
+    lbf: [x0, y0, z0],
+    rbf: [x1, y0, z0],
+    ltf: [x0, y1, z0],
+    rtf: [x1, y1, z0],
+    lbb: [x0, y0, z1],
+    rbb: [x1, y0, z1],
+    ltb: [x0, y1, z1],
+    rtb: [x1, y1, z1],
+  };
+  const side = sideColor ?? topColor ?? bottomColor ?? [0.5, 0.5, 0.5];
+  const top = topColor ?? side;
+  const bottom = bottomColor ?? side;
+  pushQuadLocal(target, transform, vertices.ltf, vertices.rtf, vertices.rtb, vertices.ltb, top, top, top, top);
+  pushQuadLocal(target, transform, vertices.lbf, vertices.lbb, vertices.rbb, vertices.rbf, bottom, bottom, bottom, bottom);
+  pushQuadLocal(target, transform, vertices.ltf, vertices.ltb, vertices.lbb, vertices.lbf, side, side, side, side);
+  pushQuadLocal(target, transform, vertices.rtf, vertices.rbf, vertices.rbb, vertices.rtb, side, side, side, side);
+  pushQuadLocal(target, transform, vertices.ltf, vertices.rtf, vertices.rbf, vertices.lbf, side, side, side, side);
+  pushQuadLocal(target, transform, vertices.ltb, vertices.rtb, vertices.rbb, vertices.lbb, side, side, side, side);
+}
+
+function addJellyfishGeometry(target, transform, palette, seed = 0) {
+  const vertexStart = target.length;
+  const segments = 16;
+  const radius = 0.55;
+  const top = [0, 0.55, 0];
+  const bottom = [0, -0.08, 0];
+  const bellTopColor = palette.bellTop ?? palette.body;
+  const bellBottomColor = palette.bellBottom ?? palette.belly;
+  for (let i = 0; i < segments; i++) {
+    const angle0 = (i / segments) * Math.PI * 2;
+    const angle1 = ((i + 1) / segments) * Math.PI * 2;
+    const ring0 = [Math.cos(angle0) * radius, 0.08, Math.sin(angle0) * radius];
+    const ring1 = [Math.cos(angle1) * radius, 0.08, Math.sin(angle1) * radius];
+    pushTriangleLocal(target, transform, top, ring0, ring1, bellTopColor, bellBottomColor, bellBottomColor);
+    pushTriangleLocal(target, transform, bottom, ring1, ring0, bellBottomColor, bellBottomColor, bellBottomColor);
+  }
+
+  const tentacleBaseRadius = radius * 0.82;
+  const tentacleLength = 1.1 + seededRandom(seed, 51) * 0.4;
+  const tentacleCount = 6;
+  for (let i = 0; i < tentacleCount; i++) {
+    const angle = (i / tentacleCount) * Math.PI * 2;
+    const offset = seededRandom(seed, 90 + i) * 0.18;
+    const base = [
+      Math.cos(angle) * tentacleBaseRadius,
+      0.02,
+      Math.sin(angle) * tentacleBaseRadius,
+    ];
+    const sway = offset - 0.09;
+    const tip = [
+      base[0] * 0.92 + sway * 0.1,
+      -tentacleLength,
+      base[2] * 0.92 + sway * 0.1,
+    ];
+    const sideOffset = 0.04 + seededRandom(seed, 120 + i) * 0.05;
+    const left = [base[0] - Math.sin(angle) * sideOffset, base[1], base[2] + Math.cos(angle) * sideOffset];
+    const right = [base[0] + Math.sin(angle) * sideOffset, base[1], base[2] - Math.cos(angle) * sideOffset];
+    pushTriangleLocal(target, transform, left, tip, right, palette.tentacle, palette.tentacle, palette.tentacle);
+    const midTip = [
+      tip[0] + Math.sin(angle) * 0.02,
+      tip[1] + 0.02,
+      tip[2] - Math.cos(angle) * 0.02,
+    ];
+    pushTriangleLocal(target, transform, left, midTip, tip, palette.tentacle, palette.tentacle, palette.tentacle);
+    pushTriangleLocal(target, transform, right, tip, midTip, palette.tentacle, palette.tentacle, palette.tentacle);
+  }
+
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function addTurtleGeometry(target, transform, palette) {
+  const vertexStart = target.length;
+  const segments = 14;
+  const top = [0, 0.42, 0];
+  const bellyCenter = [0, -0.24, 0];
+  const shellRadiusX = 0.68;
+  const shellRadiusZ = 0.54;
+  const midRadiusX = shellRadiusX * 0.8;
+  const midRadiusZ = shellRadiusZ * 0.82;
+  for (let i = 0; i < segments; i++) {
+    const angle0 = (i / segments) * Math.PI * 2;
+    const angle1 = ((i + 1) / segments) * Math.PI * 2;
+    const mid0 = [Math.cos(angle0) * midRadiusX, 0.16, Math.sin(angle0) * midRadiusZ];
+    const mid1 = [Math.cos(angle1) * midRadiusX, 0.16, Math.sin(angle1) * midRadiusZ];
+    const low0 = [Math.cos(angle0) * shellRadiusX, -0.02, Math.sin(angle0) * shellRadiusZ];
+    const low1 = [Math.cos(angle1) * shellRadiusX, -0.02, Math.sin(angle1) * shellRadiusZ];
+    pushTriangleLocal(target, transform, top, mid0, mid1, palette.shellHighlight, palette.shell, palette.shell);
+    pushQuadLocal(target, transform, mid0, low0, low1, mid1, palette.shell, palette.shell, palette.shellHighlight, palette.shellHighlight);
+    pushTriangleLocal(target, transform, bellyCenter, low1, low0, palette.underside, palette.underside, palette.underside);
+  }
+
+  const headMin = [-0.18, -0.12, 0.4];
+  const headMax = [0.18, 0.12, 0.62];
+  appendBoxLocal(target, transform, headMin, headMax, palette.head, palette.head, palette.head);
+
+  const eyeOffset = 0.16;
+  const eyeY = 0.08;
+  const eyeZ = 0.58;
+  const eyeSize = 0.05;
+  const leftEyeA = [-eyeOffset, eyeY + eyeSize * 0.5, eyeZ];
+  const leftEyeB = [-eyeOffset, eyeY - eyeSize * 0.5, eyeZ];
+  const leftEyeC = [-eyeOffset - 0.02, eyeY - eyeSize * 0.5, eyeZ - eyeSize * 0.4];
+  const leftEyeD = [-eyeOffset - 0.02, eyeY + eyeSize * 0.5, eyeZ - eyeSize * 0.4];
+  pushQuadLocal(target, transform, leftEyeA, leftEyeB, leftEyeC, leftEyeD, palette.eye, palette.eye, palette.eye, palette.eye);
+  const rightEyeA = [eyeOffset, eyeY + eyeSize * 0.5, eyeZ];
+  const rightEyeB = [eyeOffset, eyeY - eyeSize * 0.5, eyeZ];
+  const rightEyeC = [eyeOffset + 0.02, eyeY - eyeSize * 0.5, eyeZ - eyeSize * 0.4];
+  const rightEyeD = [eyeOffset + 0.02, eyeY + eyeSize * 0.5, eyeZ - eyeSize * 0.4];
+  pushQuadLocal(target, transform, rightEyeA, rightEyeB, rightEyeC, rightEyeD, palette.eye, palette.eye, palette.eye, palette.eye);
+
+  const limbSpecs = [
+    { min: [-0.62, -0.16, 0.18], max: [-0.32, -0.02, 0.42] },
+    { min: [0.32, -0.16, 0.18], max: [0.62, -0.02, 0.42] },
+    { min: [-0.58, -0.18, -0.35], max: [-0.26, -0.04, -0.08] },
+    { min: [0.26, -0.18, -0.35], max: [0.58, -0.04, -0.08] },
+  ];
+  for (const limb of limbSpecs) {
+    appendBoxLocal(target, transform, limb.min, limb.max, palette.limb, palette.limb, palette.limb);
+  }
+
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function addStarfishGeometry(target, transform, palette) {
+  const vertexStart = target.length;
+  const arms = 5;
+  const innerRadius = 0.22;
+  const outerRadius = 0.62;
+  const topY = 0.06;
+  const bottomY = -0.05;
+  const centerTop = [0, topY, 0];
+  const centerBottom = [0, bottomY, 0];
+  for (let i = 0; i < arms; i++) {
+    const angle = (i / arms) * Math.PI * 2;
+    const halfSpan = Math.PI / arms;
+    const baseLeft = [
+      Math.cos(angle - halfSpan * 0.45) * innerRadius,
+      topY * 0.5,
+      Math.sin(angle - halfSpan * 0.45) * innerRadius,
+    ];
+    const baseRight = [
+      Math.cos(angle + halfSpan * 0.45) * innerRadius,
+      topY * 0.5,
+      Math.sin(angle + halfSpan * 0.45) * innerRadius,
+    ];
+    const tip = [Math.cos(angle) * outerRadius, topY, Math.sin(angle) * outerRadius];
+    const baseLeftBottom = [baseLeft[0], bottomY, baseLeft[2]];
+    const baseRightBottom = [baseRight[0], bottomY, baseRight[2]];
+    const tipBottom = [tip[0] * 0.98, bottomY, tip[2] * 0.98];
+    pushTriangleLocal(target, transform, centerTop, baseLeft, tip, palette.body, palette.body, palette.body);
+    pushTriangleLocal(target, transform, centerTop, tip, baseRight, palette.body, palette.body, palette.body);
+    pushTriangleLocal(target, transform, centerBottom, tipBottom, baseLeftBottom, palette.underside, palette.underside, palette.underside);
+    pushTriangleLocal(target, transform, centerBottom, baseRightBottom, tipBottom, palette.underside, palette.underside, palette.underside);
+    pushQuadLocal(target, transform, baseLeft, baseLeftBottom, tipBottom, tip, palette.body, palette.underside, palette.underside, palette.body);
+    pushQuadLocal(target, transform, tip, tipBottom, baseRightBottom, baseRight, palette.body, palette.underside, palette.underside, palette.body);
+  }
+
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function addLobsterGeometry(target, transform, palette, seed = 0) {
+  const vertexStart = target.length;
+  const bodyMin = [-0.24, -0.1, -0.42];
+  const bodyMax = [0.24, 0.1, 0.28];
+  appendBoxLocal(target, transform, bodyMin, bodyMax, palette.shell, palette.shell, palette.accent ?? palette.shell);
+
+  const tailSegments = 3;
+  for (let i = 0; i < tailSegments; i++) {
+    const progress = i / tailSegments;
+    const width = 0.28 * (1 - progress * 0.35);
+    const min = [-width, -0.09, -0.62 - progress * 0.12];
+    const max = [width, 0.02, -0.48 - progress * 0.12];
+    appendBoxLocal(target, transform, min, max, palette.accent ?? palette.shell, palette.accent ?? palette.shell, palette.shell);
+  }
+
+  const clawOffset = 0.38;
+  const clawLength = 0.32;
+  const clawWidth = 0.12 + seededRandom(seed, 17) * 0.04;
+  const clawHeight = 0.08;
+  const clawMinLeft = [-clawWidth - 0.05, -clawHeight, clawOffset];
+  const clawMaxLeft = [-0.05, clawHeight, clawOffset + clawLength];
+  appendBoxLocal(target, transform, clawMinLeft, clawMaxLeft, palette.shell, palette.shell, palette.shell);
+  const clawMinRight = [0.05, -clawHeight, clawOffset];
+  const clawMaxRight = [clawWidth + 0.05, clawHeight, clawOffset + clawLength];
+  appendBoxLocal(target, transform, clawMinRight, clawMaxRight, palette.shell, palette.shell, palette.shell);
+
+  const legCount = 4;
+  for (let i = 0; i < legCount; i++) {
+    const z = 0.18 - i * 0.18;
+    const minLeft = [-0.36, -0.12, z - 0.02];
+    const maxLeft = [-0.18, -0.04, z + 0.18];
+    appendBoxLocal(target, transform, minLeft, maxLeft, palette.accent ?? palette.shell, palette.accent ?? palette.shell, palette.accent ?? palette.shell);
+    const minRight = [0.18, -0.12, z - 0.02];
+    const maxRight = [0.36, -0.04, z + 0.18];
+    appendBoxLocal(target, transform, minRight, maxRight, palette.accent ?? palette.shell, palette.accent ?? palette.shell, palette.accent ?? palette.shell);
+  }
+
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function appendFishBody(target, transform, sections, palette) {
+  const vertexStart = target.length;
+  const segments = 14;
+  for (let sectionIndex = 0; sectionIndex < sections.length - 1; sectionIndex++) {
+    const current = sections[sectionIndex];
+    const next = sections[sectionIndex + 1];
+    for (let i = 0; i < segments; i++) {
+      const angle0 = (i / segments) * Math.PI * 2;
+      const angle1 = ((i + 1) / segments) * Math.PI * 2;
+      const sin0 = Math.sin(angle0);
+      const sin1 = Math.sin(angle1);
+      const cos0 = Math.cos(angle0);
+      const cos1 = Math.cos(angle1);
+      const p0 = [cos0 * current.rx, sin0 * current.ry, current.z];
+      const p1 = [cos1 * current.rx, sin1 * current.ry, current.z];
+      const p2 = [cos1 * next.rx, sin1 * next.ry, next.z];
+      const p3 = [cos0 * next.rx, sin0 * next.ry, next.z];
+      const c0 = pickBodyGradientColor(sin0, palette);
+      const c1 = pickBodyGradientColor(sin1, palette);
+      const c2 = pickBodyGradientColor(sin1, palette);
+      const c3 = pickBodyGradientColor(sin0, palette);
+      pushQuadLocal(target, transform, p0, p1, p2, p3, c0, c1, c2, c3);
+    }
+  }
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function addFishFins(target, transform, palette, options = {}) {
+  const dorsalHeight = options.dorsalHeight ?? 0.35;
+  const dorsalBase = options.dorsalBase ?? 0.1;
+  const dorsalZStart = options.dorsalStart ?? -0.05;
+  const dorsalZEnd = options.dorsalEnd ?? 0.32;
+  const dorsalColor = palette.fin ?? palette.body;
+  const dorsalA = [0, dorsalHeight, dorsalZStart];
+  const dorsalB = [-dorsalBase, 0.02, dorsalZEnd];
+  const dorsalC = [dorsalBase, 0.02, dorsalZEnd];
+  pushTriangleLocal(target, transform, dorsalA, dorsalB, dorsalC, dorsalColor, dorsalColor, dorsalColor);
+
+  const analHeight = options.analHeight ?? 0.18;
+  const analZStart = options.analStart ?? -0.1;
+  const analZEnd = options.analEnd ?? 0.22;
+  const analColor = palette.fin ?? palette.body;
+  const analA = [0, -analHeight, analZStart];
+  const analB = [-dorsalBase * 0.8, -0.02, analZEnd];
+  const analC = [dorsalBase * 0.8, -0.02, analZEnd];
+  pushTriangleLocal(target, transform, analA, analB, analC, analColor, analColor, analColor);
+
+  const pectoralOffset = options.pectoralOffset ?? 0.18;
+  const pectoralZ = options.pectoralZ ?? 0.12;
+  const pectoralLength = options.pectoralLength ?? 0.32;
+  const pectoralColor = palette.fin ?? palette.body;
+  const leftPectoralA = [-pectoralOffset, 0.02, pectoralZ];
+  const leftPectoralB = [-pectoralOffset - pectoralLength * 0.6, -0.04, pectoralZ + pectoralLength];
+  const leftPectoralC = [-pectoralOffset - pectoralLength * 0.2, -0.02, pectoralZ + pectoralLength * 0.5];
+  pushTriangleLocal(target, transform, leftPectoralA, leftPectoralB, leftPectoralC, pectoralColor, pectoralColor, pectoralColor);
+  const rightPectoralA = [pectoralOffset, 0.02, pectoralZ];
+  const rightPectoralB = [pectoralOffset + pectoralLength * 0.6, -0.04, pectoralZ + pectoralLength];
+  const rightPectoralC = [pectoralOffset + pectoralLength * 0.2, -0.02, pectoralZ + pectoralLength * 0.5];
+  pushTriangleLocal(target, transform, rightPectoralA, rightPectoralB, rightPectoralC, pectoralColor, pectoralColor, pectoralColor);
+}
+
+function addFishTail(target, transform, palette, options = {}) {
+  const tailSpread = options.tailSpread ?? 0.42;
+  const tailHeight = options.tailHeight ?? 0.5;
+  const tailThickness = options.tailThickness ?? 0.02;
+  const tailZ = options.tailZ ?? -0.72;
+  const tailColor = palette.fin ?? palette.body;
+  const top = [0, tailHeight, tailZ];
+  const bottom = [0, -tailHeight, tailZ];
+  const left = [-tailSpread, 0, tailZ + tailThickness];
+  const right = [tailSpread, 0, tailZ + tailThickness];
+  pushTriangleLocal(target, transform, top, left, right, tailColor, tailColor, tailColor);
+  pushTriangleLocal(target, transform, bottom, right, left, tailColor, tailColor, tailColor);
+  const horizontalTop = [0, tailHeight * 0.35, tailZ];
+  const horizontalBottom = [0, -tailHeight * 0.35, tailZ];
+  const horizontalLeft = [-tailSpread * 0.4, 0, tailZ - tailThickness];
+  const horizontalRight = [tailSpread * 0.4, 0, tailZ - tailThickness];
+  pushTriangleLocal(target, transform, horizontalTop, horizontalLeft, horizontalRight, tailColor, tailColor, tailColor);
+  pushTriangleLocal(target, transform, horizontalBottom, horizontalRight, horizontalLeft, tailColor, tailColor, tailColor);
+}
+
+function addFishEyes(target, transform, palette, options = {}) {
+  const eyeZ = options.eyeZ ?? 0.52;
+  const eyeRadius = options.eyeRadius ?? 0.06;
+  const eyeHeight = options.eyeHeight ?? 0.08;
+  const offset = options.eyeOffset ?? 0.22;
+  const color = palette.eye ?? [0.08, 0.08, 0.08];
+  const leftEyeA = [-offset, eyeHeight + eyeRadius * 0.6, eyeZ];
+  const leftEyeB = [-offset, eyeHeight - eyeRadius * 0.6, eyeZ];
+  const leftEyeC = [-offset - eyeRadius, eyeHeight - eyeRadius * 0.4, eyeZ - eyeRadius * 0.6];
+  const leftEyeD = [-offset - eyeRadius, eyeHeight + eyeRadius * 0.4, eyeZ - eyeRadius * 0.6];
+  pushQuadLocal(target, transform, leftEyeA, leftEyeB, leftEyeC, leftEyeD, color, color, color, color);
+  const rightEyeA = [offset, eyeHeight + eyeRadius * 0.6, eyeZ];
+  const rightEyeB = [offset, eyeHeight - eyeRadius * 0.6, eyeZ];
+  const rightEyeC = [offset + eyeRadius, eyeHeight - eyeRadius * 0.4, eyeZ - eyeRadius * 0.6];
+  const rightEyeD = [offset + eyeRadius, eyeHeight + eyeRadius * 0.4, eyeZ - eyeRadius * 0.6];
+  pushQuadLocal(target, transform, rightEyeA, rightEyeB, rightEyeC, rightEyeD, color, color, color, color);
+}
+
+function addFishGeometry(target, transform, palette, seed = 0, options = {}) {
+  const noseLength = options.noseLength ?? 0.58;
+  const midRadius = options.midRadius ?? 0.28;
+  const midHeight = options.midHeight ?? 0.22;
+  const tailLength = options.tailLength ?? 0.62;
+  const tailRadius = options.tailRadius ?? 0.12;
+  const tailHeight = options.tailHeight ?? 0.1;
+  const mid2Radius = options.mid2Radius ?? midRadius * 0.9;
+  const mid2Height = options.mid2Height ?? midHeight * 0.85;
+  const tailTip = options.tailTip ?? tailRadius * 0.3;
+  const sections = [
+    { z: noseLength, rx: 0.12, ry: 0.1 },
+    { z: 0.24, rx: midRadius, ry: midHeight },
+    { z: -0.12, rx: mid2Radius, ry: mid2Height },
+    { z: -tailLength, rx: tailRadius, ry: tailHeight },
+    { z: -(tailLength + 0.12), rx: tailTip, ry: tailTip },
+  ];
+  appendFishBody(target, transform, sections, palette);
+  addFishFins(target, transform, palette, {
+    dorsalHeight: options.dorsalHeight ?? 0.36 + seededRandom(seed, 19) * 0.12,
+    dorsalBase: options.dorsalBase ?? 0.18,
+    dorsalStart: options.dorsalStart ?? 0.0,
+    dorsalEnd: options.dorsalEnd ?? 0.28,
+    analHeight: options.analHeight ?? 0.18,
+    analStart: options.analStart ?? -0.05,
+    analEnd: options.analEnd ?? 0.18,
+    pectoralOffset: options.pectoralOffset ?? 0.22,
+    pectoralZ: options.pectoralZ ?? 0.02,
+    pectoralLength: options.pectoralLength ?? 0.26 + seededRandom(seed, 21) * 0.1,
+  });
+  addFishTail(target, transform, palette, {
+    tailSpread: options.tailSpread ?? 0.4 + seededRandom(seed, 31) * 0.1,
+    tailHeight: options.tailHeight ?? 0.46,
+    tailThickness: options.tailThickness ?? 0.04,
+    tailZ: -(tailLength + 0.18),
+  });
+  addFishEyes(target, transform, palette, {
+    eyeZ: options.eyeZ ?? 0.46,
+    eyeRadius: options.eyeRadius ?? 0.06,
+    eyeHeight: options.eyeHeight ?? 0.08,
+    eyeOffset: options.eyeOffset ?? 0.22,
+  });
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function addSharkGeometry(target, transform, palette, seed = 0) {
+  const options = {
+    noseLength: 0.66,
+    midRadius: 0.32,
+    midHeight: 0.18,
+    mid2Radius: 0.26,
+    mid2Height: 0.17,
+    tailLength: 0.74,
+    tailRadius: 0.1,
+    tailTip: 0.04,
+    dorsalHeight: 0.48,
+    dorsalBase: 0.24,
+    dorsalStart: -0.1,
+    dorsalEnd: 0.32,
+    analHeight: 0.16,
+    analStart: -0.18,
+    analEnd: 0.06,
+    pectoralOffset: 0.28,
+    pectoralZ: -0.04,
+    pectoralLength: 0.36,
+    tailSpread: 0.48,
+    tailHeight: 0.52,
+    tailThickness: 0.06,
+    eyeZ: 0.5,
+    eyeRadius: 0.05,
+    eyeHeight: 0.06,
+    eyeOffset: 0.24,
+  };
+  const vertexStart = target.length;
+  appendFishBody(target, transform, [
+    { z: options.noseLength, rx: 0.1, ry: 0.08 },
+    { z: 0.3, rx: options.midRadius, ry: options.midHeight },
+    { z: -0.18, rx: options.mid2Radius, ry: options.mid2Height },
+    { z: -options.tailLength, rx: options.tailRadius, ry: options.mid2Height * 0.7 },
+    { z: -(options.tailLength + 0.16), rx: options.tailTip, ry: options.tailTip * 0.9 },
+  ], {
+    body: palette.top ?? palette.body,
+    belly: palette.belly,
+  });
+  addFishFins(target, transform, {
+    fin: palette.fin ?? palette.top,
+    body: palette.top ?? palette.body,
+    belly: palette.belly ?? palette.body,
+    eye: palette.eye,
+  }, options);
+  addFishTail(target, transform, {
+    fin: palette.fin ?? palette.top,
+    body: palette.top ?? palette.body,
+    belly: palette.belly ?? palette.body,
+  }, {
+    tailSpread: options.tailSpread,
+    tailHeight: options.tailHeight,
+    tailThickness: options.tailThickness,
+    tailZ: -(options.tailLength + 0.18),
+  });
+  addFishEyes(target, transform, palette, options);
+
+  const dorsalColor = palette.fin ?? palette.top ?? palette.body;
+  const dorsalSideA = [-0.22, 0.02, 0.12];
+  const dorsalSideB = [-0.52, -0.08, -0.18];
+  const dorsalSideC = [-0.28, -0.04, -0.06];
+  pushTriangleLocal(target, transform, dorsalSideA, dorsalSideB, dorsalSideC, dorsalColor, dorsalColor, dorsalColor);
+  const dorsalSideA2 = [0.22, 0.02, 0.12];
+  const dorsalSideB2 = [0.52, -0.08, -0.18];
+  const dorsalSideC2 = [0.28, -0.04, -0.06];
+  pushTriangleLocal(target, transform, dorsalSideA2, dorsalSideC2, dorsalSideB2, dorsalColor, dorsalColor, dorsalColor);
+
+  return (target.length - vertexStart) / floatsPerVertex;
+}
+
+function appendOrganismInstanceVertices(target, individual, species) {
+  const spec =
+    ORGANISM_RENDER_SPECS[individual.speciesId] ||
+    (species ? ORGANISM_RENDER_SPECS[species.id] : null) ||
+    ORGANISM_RENDER_SPECS.default;
+  const palette = createOrganismPalette(spec, individual);
+  const transform = createOrganismTransform(individual, spec, species);
+  const seed = Number.isFinite(individual?.renderSeed) ? individual.renderSeed : Math.random();
+  const vertexStart = target.length;
+
+  switch (spec.type) {
+    case 'jellyfish':
+      addJellyfishGeometry(target, transform, palette, seed);
+      break;
+    case 'turtle':
+      addTurtleGeometry(target, transform, palette);
+      break;
+    case 'starfish':
+      addStarfishGeometry(target, transform, palette);
+      break;
+    case 'lobster':
+      addLobsterGeometry(target, transform, palette, seed);
+      break;
+    case 'shark':
+      addSharkGeometry(target, transform, palette, seed);
+      break;
+    case 'fish':
+    default:
+      addFishGeometry(target, transform, palette, seed, {});
+      break;
+  }
+
+  let verticesAdded = (target.length - vertexStart) / floatsPerVertex;
+  if (!Number.isFinite(verticesAdded) || verticesAdded <= 0) {
+    const fallbackColor = palette.body ?? [0.4, 0.7, 0.8];
+    const radius = 0.4;
+    pushTriangleLocal(target, transform, [0, radius, 0], [-radius, 0, 0], [radius, 0, 0], fallbackColor, fallbackColor, fallbackColor);
+    pushTriangleLocal(target, transform, [0, -radius, 0], [radius, 0, 0], [-radius, 0, 0], fallbackColor, fallbackColor, fallbackColor);
+    pushTriangleLocal(target, transform, [0, radius, 0], [0, 0, radius], [0, 0, -radius], fallbackColor, fallbackColor, fallbackColor);
+    pushTriangleLocal(target, transform, [0, -radius, 0], [0, 0, -radius], [0, 0, radius], fallbackColor, fallbackColor, fallbackColor);
+    verticesAdded = (target.length - vertexStart) / floatsPerVertex;
+  }
+
+  return verticesAdded;
+}
+
+function resetOrganismGeometry() {
+  if (!gl || typeof gl.bindBuffer !== 'function') {
+    organismVertexCount = 0;
+    organismSimulation.geometryDirty = false;
+    return;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, organismBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(0), gl.DYNAMIC_DRAW);
+  organismVertexCount = 0;
+  organismSimulation.geometryDirty = false;
+  organismSimulation.renderDiagnostics.lastVertexCount = 0;
+  organismSimulation.renderDiagnostics.lastAliveRendered = 0;
+  organismSimulation.renderDiagnostics.lastError = null;
+}
+
+function rebuildOrganismGeometry() {
+  const diagnostics = organismSimulation.renderDiagnostics;
+  diagnostics.lastRebuildTime = Date.now();
+  diagnostics.rebuilds = Math.max(0, (diagnostics.rebuilds ?? 0) + 1);
+  try {
+    const individuals = organismSimulation.individuals;
+    if (!Array.isArray(individuals) || individuals.length === 0) {
+      resetOrganismGeometry();
+      return;
+    }
+    const vertexArray = [];
+    let aliveCount = 0;
+    for (const individual of individuals) {
+      if (!individual || individual.flags?.alive === false) {
+        continue;
+      }
+      const species = individual.species || speciesRegistry?.getSpecies(individual.speciesId);
+      if (!species) {
+        continue;
+      }
+      const added = appendOrganismInstanceVertices(vertexArray, individual, species);
+      if (added > 0) {
+        aliveCount += 1;
+      }
+    }
+    if (vertexArray.length === 0) {
+      resetOrganismGeometry();
+      diagnostics.lastAliveRendered = 0;
+      diagnostics.lastVertexCount = 0;
+      return;
+    }
+    if (!gl || typeof gl.bindBuffer !== 'function') {
+      organismVertexCount = 0;
+      organismSimulation.geometryDirty = false;
+      return;
+    }
+    const vertexData = new Float32Array(vertexArray);
+    gl.bindBuffer(gl.ARRAY_BUFFER, organismBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+    organismVertexCount = vertexData.length / floatsPerVertex;
+    organismSimulation.geometryDirty = false;
+    diagnostics.lastAliveRendered = aliveCount;
+    diagnostics.lastVertexCount = organismVertexCount;
+    diagnostics.lastError = null;
+  } catch (error) {
+    diagnostics.failures = Math.max(0, (diagnostics.failures ?? 0) + 1);
+    diagnostics.lastFailureTime = Date.now();
+    diagnostics.lastError = String(error?.message || error || 'Error desconocido');
+    recordRuntimeIssue('error', 'organism-geometry', error);
+    resetOrganismGeometry();
+  }
 }
 
 function regeneratePlants(seedString, heightfield, maskfield) {
@@ -10515,6 +11871,24 @@ canvas.addEventListener('click', (event) => {
     return;
   }
   const pointer = getPointerPosition(event);
+  const organismSelection = pendingOrganismSelection ?? pickOrganismAt(pointer.x, pointer.y);
+  pendingOrganismSelection = null;
+  if (organismSelection && organismSelection.individual) {
+    selectedBlock = null;
+    selectionHighlightVertexCount = 0;
+    if (selectionInfoPanel) {
+      selectionInfoPanel.hidden = true;
+    }
+    if (typeof window !== 'undefined') {
+      window.__selectedSquare = null;
+    }
+    closeWaterInfo();
+    closePlantInfo();
+    closeRockInfo();
+    openOrganismInfo(organismSelection, event);
+    return;
+  }
+
   const plantSelection = pendingPlantSelection ?? pickPlantAt(pointer.x, pointer.y);
   pendingPlantSelection = null;
   if (plantSelection && plantSelection.plant) {
@@ -10572,6 +11946,15 @@ canvas.addEventListener('pointerdown', (event) => {
     return;
   }
   const pointer = getPointerPosition(event);
+  const organismSelection = pickOrganismAt(pointer.x, pointer.y);
+  if (organismSelection && organismSelection.individual) {
+    pendingOrganismSelection = organismSelection;
+    pendingPlantSelection = null;
+    pendingRockSelection = null;
+    pendingSelectionForClick = null;
+    return;
+  }
+  pendingOrganismSelection = null;
   const plantSelection = pickPlantAt(pointer.x, pointer.y);
   if (plantSelection && plantSelection.plant) {
     pendingPlantSelection = plantSelection;
@@ -10695,6 +12078,12 @@ if (waterInfoCloseButton) {
 if (plantInfoCloseButton) {
   plantInfoCloseButton.addEventListener('click', (event) => {
     closePlantInfo({ restoreCamera: true, event });
+  });
+}
+
+if (organismInfoCloseButton) {
+  organismInfoCloseButton.addEventListener('click', (event) => {
+    closeOrganismInfo({ restoreCamera: true, event });
   });
 }
 
@@ -10956,6 +12345,15 @@ const simulationInfo = {
     grazingEvents: organismSimulation.metrics?.grazingEvents ?? 0,
     nutrientTransfers: organismSimulation.metrics?.nutrientTransfers ?? 0,
     diagnostics: organismDiagnostics,
+    renderDiagnostics: {
+      rebuilds: organismSimulation.renderDiagnostics?.rebuilds ?? 0,
+      lastRebuildTime: organismSimulation.renderDiagnostics?.lastRebuildTime ?? 0,
+      lastVertexCount: organismSimulation.renderDiagnostics?.lastVertexCount ?? 0,
+      lastAliveRendered: organismSimulation.renderDiagnostics?.lastAliveRendered ?? 0,
+      failures: organismSimulation.renderDiagnostics?.failures ?? 0,
+      lastFailureTime: organismSimulation.renderDiagnostics?.lastFailureTime ?? 0,
+      lastError: organismSimulation.renderDiagnostics?.lastError ?? null,
+    },
   },
   weather: {
     windActive: weatherState.wind.metrics.active,
@@ -11137,6 +12535,102 @@ function setSimulationSpeed(multiplier) {
   }
 }
 
+function formatNumber(value, fractionDigits = 2) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return '—';
+  }
+  if (typeof Intl !== 'undefined' && typeof Intl.NumberFormat === 'function') {
+    if (!formatNumber.formatters) {
+      formatNumber.formatters = {};
+    }
+    const key = fractionDigits;
+    let formatter = formatNumber.formatters[key];
+    if (!formatter) {
+      formatter = new Intl.NumberFormat('es-ES', {
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: fractionDigits,
+      });
+      formatNumber.formatters[key] = formatter;
+    }
+    return formatter.format(numericValue);
+  }
+  return numericValue.toFixed(fractionDigits);
+}
+
+function formatPercent(value, fractionDigits = 0) {
+  if (!Number.isFinite(value)) {
+    return '—';
+  }
+  return `${formatNumber(value * 100, fractionDigits)}%`;
+}
+
+function populateUiList(listElement, items, options = {}) {
+  if (!listElement) {
+    return;
+  }
+  const itemClass = options.itemClass || '';
+  const emptyItemClass = options.emptyItemClass || itemClass;
+  const emptyLabel = options.emptyLabel || '—';
+
+  if (!Array.isArray(items) || items.length === 0) {
+    if (
+      typeof document !== 'undefined' &&
+      typeof document.createElement === 'function' &&
+      typeof listElement.replaceChildren === 'function'
+    ) {
+      const placeholder = document.createElement('li');
+      placeholder.textContent = emptyLabel;
+      if (emptyItemClass) {
+        placeholder.className = emptyItemClass;
+      }
+      listElement.replaceChildren(placeholder);
+    } else if (typeof listElement.replaceChildren === 'function') {
+      listElement.replaceChildren();
+      listElement.textContent = emptyLabel;
+    } else {
+      listElement.textContent = emptyLabel;
+    }
+    return;
+  }
+
+  if (
+    typeof document !== 'undefined' &&
+    typeof document.createElement === 'function' &&
+    typeof listElement.replaceChildren === 'function'
+  ) {
+    const entries = items.map((text) => {
+      const node = document.createElement('li');
+      node.textContent = text;
+      if (itemClass) {
+        node.className = itemClass;
+      }
+      return node;
+    });
+    listElement.replaceChildren(...entries);
+  } else if (typeof listElement.appendChild === 'function') {
+    if (typeof listElement.innerHTML === 'string') {
+      listElement.innerHTML = '';
+    }
+    for (const text of items) {
+      try {
+        const node = document.createElement('li');
+        node.textContent = text;
+        if (itemClass) {
+          node.className = itemClass;
+        }
+        listElement.appendChild(node);
+      } catch (error) {
+        void error;
+        listElement.textContent = items.join(', ');
+        break;
+      }
+    }
+  } else {
+    listElement.textContent = items.join(', ');
+  }
+}
+
 function formatSimulationTime(timeInSeconds) {
   const totalSeconds = Math.max(0, timeInSeconds);
   const minutes = Math.floor(totalSeconds / 60);
@@ -11174,6 +12668,9 @@ function updateSimulationHud() {
   }
   if (!rockInfoPanel?.hidden) {
     updateRockInfoPanel();
+  }
+  if (!organismInfoPanel?.hidden) {
+    updateOrganismInfoPanel();
   }
 }
 
@@ -11700,6 +13197,7 @@ function render() {
   drawStats.water = 0;
   drawStats.rocks = 0;
   drawStats.plants = 0;
+  drawStats.organisms = 0;
   drawStats.wind = 0;
   drawStats.clouds = 0;
   drawStats.celestial = 0;
@@ -11956,6 +13454,30 @@ function render() {
     }
   }
 
+  if (organismSimulation.geometryDirty) {
+    rebuildOrganismGeometry();
+  }
+
+  if (organismVertexCount > 0) {
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, 1);
+    }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.38);
+    }
+    if (bindGeometry(organismBuffer, 'organismos')) {
+      gl.drawArrays(gl.TRIANGLES, 0, organismVertexCount);
+      drawStats.organisms += 1;
+      drawStats.total += 1;
+    }
+    if (terrainAlphaUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(terrainAlphaUniform, terrainRenderState.alpha);
+    }
+    if (surfaceSpecularStrengthUniform && typeof gl.uniform1f === 'function') {
+      gl.uniform1f(surfaceSpecularStrengthUniform, 0.45);
+    }
+  }
+
   const hasGridGeometry = blockGridVertexCount > 0 || chunkGridVertexCount > 0;
   if (hasGridGeometry) {
     if (typeof gl.enable === 'function') {
@@ -12049,6 +13571,7 @@ function updateDebugConsole(deltaTime) {
   const plantMetrics = plantSimulation.metrics ?? createEmptyPlantMetrics();
   const waterMetrics = waterColumnSimulation.metrics ?? createEmptyWaterColumnMetrics();
   const organismMetrics = organismSimulation.metrics ?? createEmptyOrganismMetrics();
+  const organismRender = organismSimulation.renderDiagnostics ?? {};
   const formatMetric = (value, digits = 2) => {
     const finite = Number.isFinite(value) ? value : 0;
     return finite.toFixed(digits);
@@ -12246,11 +13769,12 @@ function updateDebugConsole(deltaTime) {
     )} agotadas=${waterMetrics.planktonDepletedColumns}`,
     `Organismos: vivos=${organismMetrics.alive}/${organismMetrics.total} baby=${organismMetrics.baby} juv=${organismMetrics.juvenile} adult=${organismMetrics.adult} elder=${organismMetrics.elderly} dormidos=${organismMetrics.sleeping} hambrientos=${organismMetrics.starving}`,
     `Organismos métricas: masa=${formatMetric(organismMetrics.averageMass, 1)}kg tamaño=${formatMetric(organismMetrics.averageSize, 2)} pred=${organismMetrics.predationEvents} past=${organismMetrics.grazingEvents} nutrientes=${organismMetrics.nutrientTransfers}`,
+    `Organismos render: vivos_render=${organismRender.lastAliveRendered ?? 0} vértices=${organismRender.lastVertexCount ?? 0} reconstrucciones=${organismRender.rebuilds ?? 0} fallos=${organismRender.failures ?? 0}`,
     `Modelos disponibles: ${modelLibrary.length}`,
     `Selección: ${selectionStatus}`,
     `Movimiento activo: ${activeMovement || 'Ninguno'}`,
     `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+    `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} organismos=${drawStats.organisms} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
     `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
     `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
     `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
@@ -12315,11 +13839,12 @@ function updateDebugConsole(deltaTime) {
       )} agotadas=${waterMetrics.planktonDepletedColumns}`,
       `Organismos: vivos=${organismMetrics.alive}/${organismMetrics.total} baby=${organismMetrics.baby} juv=${organismMetrics.juvenile} adult=${organismMetrics.adult} elder=${organismMetrics.elderly} dormidos=${organismMetrics.sleeping} hambrientos=${organismMetrics.starving}`,
       `Organismos métricas: masa=${formatMetric(organismMetrics.averageMass, 1)}kg tamaño=${formatMetric(organismMetrics.averageSize, 2)} pred=${organismMetrics.predationEvents} past=${organismMetrics.grazingEvents} nutrientes=${organismMetrics.nutrientTransfers}`,
+      `Organismos render: vivos_render=${organismRender.lastAliveRendered ?? 0} vértices=${organismRender.lastVertexCount ?? 0} reconstrucciones=${organismRender.rebuilds ?? 0} fallos=${organismRender.failures ?? 0}`,
       `Modelos disponibles: ${modelLibrary.length}`,
       `Selección: ${selectionStatus}`,
       `Movimiento activo: ${activeMovement || 'Ninguno'}`,
       `Depuración: terreno translúcido ${terrainRenderState.translucent ? 'activado' : 'desactivado'}`,
-      `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
+      `Draw calls: total=${drawStats.total} terreno=${drawStats.terrain} agua=${drawStats.water} rocas=${drawStats.rocks} plantas=${drawStats.plants} organismos=${drawStats.organisms} viento=${drawStats.wind} nubes=${drawStats.clouds} celestes=${drawStats.celestial} bloques=${drawStats.blockGrid} chunks=${drawStats.chunkGrid} selección=${drawStats.selection}`,
       `Clima: viento activo=${weatherState.wind.metrics.active} ráfagas generadas=${weatherState.wind.metrics.spawned} descartes geom.=${weatherState.wind.metrics.geometryRejected} nubes=${weatherState.clouds.metrics.count}`,
       `Nubes detalle: grumos=${cloudMetrics.clumps ?? 0} esferas=${cloudMetrics.puffs ?? 0} vértices=${cloudMetrics.vertexCount ?? 0} estado=${cloudStatus} reconstrucciones=${cloudMetrics.rebuilds ?? 0} tRebuild=${cloudBuild}`,
       `Marejadas: activas=${swellMetrics.active ?? waterSwellActiveCount} generadas=${swellMetrics.spawned ?? 0} descartadas=${swellMetrics.culled ?? 0} pendientes=${swellPending} uso buffers=${swellUsage}% resets=${waterSwellDiagnostics.resets}`,
@@ -12736,6 +14261,17 @@ function loop(currentTime) {
     simulationInfo.organisms.predationEvents = organismMetrics.predationEvents;
     simulationInfo.organisms.grazingEvents = organismMetrics.grazingEvents;
     simulationInfo.organisms.nutrientTransfers = organismMetrics.nutrientTransfers;
+    if (!simulationInfo.organisms.renderDiagnostics) {
+      simulationInfo.organisms.renderDiagnostics = {};
+    }
+    const organismRender = organismSimulation.renderDiagnostics ?? {};
+    simulationInfo.organisms.renderDiagnostics.rebuilds = organismRender.rebuilds ?? 0;
+    simulationInfo.organisms.renderDiagnostics.lastRebuildTime = organismRender.lastRebuildTime ?? 0;
+    simulationInfo.organisms.renderDiagnostics.lastVertexCount = organismRender.lastVertexCount ?? 0;
+    simulationInfo.organisms.renderDiagnostics.lastAliveRendered = organismRender.lastAliveRendered ?? 0;
+    simulationInfo.organisms.renderDiagnostics.failures = organismRender.failures ?? 0;
+    simulationInfo.organisms.renderDiagnostics.lastFailureTime = organismRender.lastFailureTime ?? 0;
+    simulationInfo.organisms.renderDiagnostics.lastError = organismRender.lastError ?? null;
     const cloudState = weatherState.clouds ?? {};
     const cloudMetrics = cloudState.metrics ?? {};
     const starMetrics = starFieldState.metrics ?? {};
