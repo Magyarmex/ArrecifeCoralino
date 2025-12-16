@@ -360,11 +360,22 @@ const uiDiagnostics =
         rebinds: 0,
         lastRebindId: null,
         lastMismatchOwner: null,
+        pointerLockRequests: 0,
+        pointerLockGrants: 0,
+        pointerLockErrors: 0,
+        lastPointerLockError: null,
+        lastPointerLockEvent: null,
       });
 
 runtimeGlobal.__ARRECIFE_CAMERA_DISPLAY__ = cameraDisplayDiagnostics;
 runtimeGlobal.__ARRECIFE_SIMULATION_INFO_DIAGNOSTICS__ = simulationInfoDiagnostics;
 runtimeGlobal.__ARRECIFE_UI_DIAGNOSTICS__ = uiDiagnostics;
+
+uiDiagnostics.pointerLockRequests = Math.max(0, uiDiagnostics.pointerLockRequests ?? 0);
+uiDiagnostics.pointerLockGrants = Math.max(0, uiDiagnostics.pointerLockGrants ?? 0);
+uiDiagnostics.pointerLockErrors = Math.max(0, uiDiagnostics.pointerLockErrors ?? 0);
+uiDiagnostics.lastPointerLockError = uiDiagnostics.lastPointerLockError ?? null;
+uiDiagnostics.lastPointerLockEvent = uiDiagnostics.lastPointerLockEvent ?? null;
 
 const pendingRuntimeIssueQueue = Array.isArray(runtimeState.pendingIssues)
   ? runtimeState.pendingIssues
@@ -12147,6 +12158,8 @@ function requestCameraControl(event) {
     return;
   }
   const trustedInteraction = !event || Boolean(event.isTrusted);
+  uiDiagnostics.pointerLockRequests = Math.max(0, (uiDiagnostics.pointerLockRequests ?? 0) + 1);
+  uiDiagnostics.lastPointerLockEvent = Date.now();
   if (event?.detail >= 2) {
     if (trustedInteraction) {
       handleAmbientMusicUserGesture();
@@ -12421,9 +12434,12 @@ const initialTranslucentTerrain = debugTerrainToggle
   : false;
 applyTranslucentTerrainSetting(initialTranslucentTerrain);
 
-let pointerLockErrors = 0;
+let pointerLockErrors = uiDiagnostics.pointerLockErrors ?? 0;
 document.addEventListener('pointerlockerror', () => {
   pointerLockErrors += 1;
+  uiDiagnostics.pointerLockErrors = pointerLockErrors;
+  uiDiagnostics.lastPointerLockError = Date.now();
+  recordRuntimeIssue('error', 'pointer-lock', 'No se pudo activar el control de la cámara.');
   resetPointerLockScale();
   showTutorialOverlay();
 });
@@ -12431,6 +12447,8 @@ document.addEventListener('pointerlockerror', () => {
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas;
   if (locked) {
+    uiDiagnostics.pointerLockGrants = Math.max(0, (uiDiagnostics.pointerLockGrants ?? 0) + 1);
+    uiDiagnostics.lastPointerLockEvent = Date.now();
     dismissTutorialOverlay();
     pointerCanvasPosition.x = canvas.width * 0.5;
     pointerCanvasPosition.y = canvas.height * 0.5;
@@ -12438,9 +12456,11 @@ document.addEventListener('pointerlockchange', () => {
     showTutorialOverlay();
     pointerCanvasPosition.x = clamp(pointerCanvasPosition.x, 0, canvas.width);
     pointerCanvasPosition.y = clamp(pointerCanvasPosition.y, 0, canvas.height);
+    uiDiagnostics.lastPointerLockEvent = Date.now();
   } else {
     applyTutorialState(false);
     resetPointerLockScale();
+    uiDiagnostics.lastPointerLockEvent = Date.now();
   }
 });
 
@@ -14330,8 +14350,20 @@ function updateDebugConsole(deltaTime) {
     );
   }
 
-  if (pointerLockErrors > 0) {
-    info.push(`Pointer lock errores: ${pointerLockErrors}`);
+  const pointerLockAttempts = uiDiagnostics.pointerLockRequests ?? 0;
+  const pointerLockGrants = uiDiagnostics.pointerLockGrants ?? 0;
+  const pointerLockErrorCount = uiDiagnostics.pointerLockErrors ?? pointerLockErrors;
+  if (pointerLockAttempts > 0 || pointerLockErrorCount > 0) {
+    const lastPointerEventLabel = uiDiagnostics.lastPointerLockEvent
+      ? new Date(uiDiagnostics.lastPointerLockEvent).toISOString()
+      : 'n/d';
+    const lastPointerErrorLabel = uiDiagnostics.lastPointerLockError
+      ? new Date(uiDiagnostics.lastPointerLockError).toISOString()
+      : 'n/d';
+    info.push(
+      `Pointer lock: solicitudes=${pointerLockAttempts} exitos=${pointerLockGrants} errores=${pointerLockErrorCount} ` +
+        `último_evento=${lastPointerEventLabel} último_error=${lastPointerErrorLabel}`,
+    );
   }
 
   if (uiDebugState.track) {
@@ -14744,26 +14776,20 @@ function loop(currentTime) {
     simulationInfo.ui.rebinds = uiDiagnostics.rebinds;
     simulationInfo.ui.lastRebindId = uiDiagnostics.lastRebindId;
     simulationInfo.ui.lastMismatchOwner = uiDiagnostics.lastMismatchOwner;
-
-    if (simulationInfo.camera) {
-      const cameraInfo = simulationInfo.camera;
-      cameraInfo.position[0] = cameraPosition[0];
-      cameraInfo.position[1] = cameraPosition[1];
-      cameraInfo.position[2] = cameraPosition[2];
-      cameraInfo.near = cameraDiagnostics.near;
-      cameraInfo.far = cameraDiagnostics.far;
-      cameraInfo.starMargin = cameraDiagnostics.starMargin;
-      cameraInfo.marginEstimate = cameraDiagnostics.metrics.marginEstimate;
-      cameraInfo.starFarthest = cameraDiagnostics.metrics.starFarthest;
-      cameraInfo.starShortfall = cameraDiagnostics.metrics.starShortfall;
-      cameraInfo.adjustments = cameraDiagnostics.adjustments;
-      cameraInfo.failedDiagnostics = cameraDiagnostics.metrics.failedUpdates;
-      if (!cameraInfo.flags || typeof cameraInfo.flags !== 'object') {
-        cameraInfo.flags = {};
-      }
-      cameraInfo.flags.frustumClipping = cameraDiagnostics.flags.frustumClipping;
-      cameraInfo.flags.baseFrustumExceeded = cameraDiagnostics.flags.baseFrustumExceeded;
+    if (!simulationInfo.ui.pointerLock || typeof simulationInfo.ui.pointerLock !== 'object') {
+      simulationInfo.ui.pointerLock = {
+        requests: 0,
+        grants: 0,
+        errors: 0,
+        lastEvent: null,
+        lastError: null,
+      };
     }
+    simulationInfo.ui.pointerLock.requests = uiDiagnostics.pointerLockRequests ?? 0;
+    simulationInfo.ui.pointerLock.grants = uiDiagnostics.pointerLockGrants ?? 0;
+    simulationInfo.ui.pointerLock.errors = uiDiagnostics.pointerLockErrors ?? 0;
+    simulationInfo.ui.pointerLock.lastEvent = uiDiagnostics.lastPointerLockEvent ?? null;
+    simulationInfo.ui.pointerLock.lastError = uiDiagnostics.lastPointerLockError ?? null;
 
     if (simulationInfo.camera) {
       const cameraInfo = simulationInfo.camera;
