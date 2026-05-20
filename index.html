@@ -3,89 +3,468 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Precalificador Hipotecario | Home Loan Pre-Qualifier</title>
+    <title>Explorador Freecam - Arrecife Coralino</title>
+    <link
+      rel="icon"
+      type="image/png"
+      href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z/C/HwAFAAL/8Vy3KQAAAABJRU5ErkJggg=="
+    />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="page">
-      <section class="card" aria-live="polite">
-        <header class="hero">
-          <div class="lang-switch" role="group" aria-label="Language switcher">
-            <button type="button" class="lang-btn is-active" data-lang="es">Español</button>
-            <button type="button" class="lang-btn" data-lang="en">English</button>
+    <canvas id="scene" data-ui-element="scene-canvas"></canvas>
+    <div
+      id="simulation-hud"
+      aria-live="polite"
+      aria-hidden="true"
+      data-ui-element="simulation-hud"
+    >
+      <div class="hud-daycycle" id="day-cycle-display">
+        <div class="hud-daycycle__icons" aria-hidden="true">
+          <span class="hud-daycycle__icon" data-day-cycle-phase="dawn" title="Amanecer">🌅</span>
+          <span class="hud-daycycle__icon" data-day-cycle-phase="midday" title="Mediodía">🌞</span>
+          <span class="hud-daycycle__icon" data-day-cycle-phase="dusk" title="Atardecer">🌇</span>
+          <span class="hud-daycycle__icon" data-day-cycle-phase="midnight" title="Medianoche">🌙</span>
+        </div>
+        <div
+          id="day-cycle-progress-track"
+          class="hud-daycycle__track"
+          role="progressbar"
+          aria-label="Progreso del ciclo día/noche"
+          aria-valuemin="0"
+          aria-valuemax="24"
+          aria-valuenow="0"
+          aria-valuetext="Medianoche"
+        >
+          <div id="day-cycle-progress-fill" class="hud-daycycle__fill"></div>
+        </div>
+      </div>
+      <div class="hud-top-row">
+        <div class="hud-clock" role="status" aria-label="Tiempo de simulación">
+          <span class="hud-label">Tiempo sim</span>
+          <span id="simulation-clock" class="hud-value">00:00.0</span>
+        </div>
+        <div class="hud-speed" role="status" aria-label="Velocidad de simulación">
+          <span class="hud-label">Velocidad</span>
+          <span id="simulation-speed-indicator" class="hud-value">1.0×</span>
+        </div>
+      </div>
+      <div class="hud-speed-control">
+        <label class="hud-label hud-slider-label" for="simulation-speed"
+          >Ajustar velocidad</label
+        >
+        <div class="hud-slider-wrapper">
+          <input
+            id="simulation-speed"
+            name="simulationSpeed"
+            type="range"
+            min="0.1"
+            max="3"
+            step="0.1"
+            value="1"
+          />
+          <output id="simulation-speed-display" for="simulation-speed">1.0×</output>
+        </div>
+      </div>
+    </div>
+    <div id="overlay" class="visible" data-ui-element="tutorial-overlay">
+      <h1>Exploración Libre</h1>
+      <p>Haz clic para capturar el cursor y usa el ratón para mirar.</p>
+      <p>
+        Movimiento: <strong>W</strong>/<strong>A</strong>/<strong>S</strong>/<strong>D</strong>
+        &bull; Altura: <strong>Q</strong> (bajar), <strong>E</strong> (subir)
+      </p>
+      <p>
+        Explora la isla submarina arenosa segmentada en 16&times;16 chunks y su
+        grid de bloques.
+      </p>
+      <p>
+        Ajusta la semilla del terreno desde el menú de configuración con el
+        ícono de engrane en la esquina superior derecha.
+      </p>
+      <p>Presiona <strong>Esc</strong> para liberar el cursor.</p>
+      <button type="button" id="start-button">Iniciar exploración</button>
+    </div>
+    <div id="settings-container" data-ui-element="settings-launcher">
+      <button
+        id="settings-toggle"
+        class="settings-toggle"
+        type="button"
+        aria-haspopup="true"
+        aria-expanded="false"
+        aria-controls="settings-panel"
+        title="Configuración"
+      >
+        ⚙️
+      </button>
+      <form
+        id="settings-panel"
+        class="settings-panel"
+        hidden
+        data-ui-element="settings-panel"
+      >
+        <h2>Configuración</h2>
+        <label for="seed-input">Semilla del terreno</label>
+        <input
+          id="seed-input"
+          name="seed"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="settings-speed-info">
+          Velocidad actual:
+          <strong id="simulation-speed-display-settings">1.0×</strong>
+        </p>
+        <div class="settings-actions">
+          <button type="submit" id="apply-seed">Aplicar</button>
+          <button type="button" id="random-seed">Aleatoria</button>
+        </div>
+        <div class="settings-divider" aria-hidden="true"></div>
+        <section
+          class="settings-section settings-section-audio"
+          aria-label="Audio ambiental"
+        >
+          <header class="settings-section-header">
+            <h3>Audio ambiental</h3>
+            <p>Activa música relajante que acompañe la exploración del arrecife.</p>
+          </header>
+          <div class="settings-audio-options" role="group" aria-label="Opciones de audio">
+            <label class="settings-checkbox" for="audio-music-toggle">
+              <input
+                id="audio-music-toggle"
+                type="checkbox"
+                name="audioMusicEnabled"
+                checked
+              />
+              <span class="settings-checkbox-copy">
+                <span class="settings-checkbox-title">Música ambiental</span>
+                <span class="settings-checkbox-description">
+                  Reproduce una mezcla suave de tonos cálidos y marinos en segundo plano.
+                </span>
+              </span>
+            </label>
           </div>
-          <p class="tag" data-i18n="tagline">Evaluación preliminar para crédito hipotecario en México</p>
-          <h1 data-i18n="title">Precalificador de crédito hipotecario</h1>
-          <p class="subtitle" data-i18n="subtitle">
-            Completa tus datos para conocer si tu perfil podría ser sujeto de crédito con criterios bancarios comunes en México.
-          </p>
-        </header>
-
-        <form id="prequal-form" class="form" novalidate>
-          <label>
-            <span data-i18n="fullName">Nombre completo</span>
-            <input id="fullName" name="fullName" type="text" required />
-          </label>
-
-          <label>
-            <span data-i18n="age">Edad</span>
-            <input id="age" name="age" type="number" min="18" max="80" required />
-          </label>
-
-          <label>
-            <span data-i18n="maritalStatus">Estado civil</span>
-            <select id="maritalStatus" name="maritalStatus" required>
-              <option value="" data-i18n="selectOne">Selecciona una opción</option>
-              <option value="single" data-i18n="single">Soltero(a)</option>
-              <option value="married" data-i18n="married">Casado(a)</option>
-              <option value="cohabitation" data-i18n="cohabitation">Unión libre</option>
-              <option value="divorced" data-i18n="divorced">Divorciado(a)</option>
-              <option value="widowed" data-i18n="widowed">Viudo(a)</option>
-            </select>
-          </label>
-
-          <label>
-            <span data-i18n="activity">Empleo o actividad económica</span>
-            <select id="activity" name="activity" required>
-              <option value="" data-i18n="selectOne">Selecciona una opción</option>
-              <option value="salaried" data-i18n="salaried">Empleado asalariado</option>
-              <option value="selfEmployed" data-i18n="selfEmployed">Independiente / freelance</option>
-              <option value="businessOwner" data-i18n="businessOwner">Dueño de negocio</option>
-              <option value="informal" data-i18n="informal">Actividad informal</option>
-              <option value="unemployed" data-i18n="unemployed">Sin actividad actual</option>
-            </select>
-          </label>
-
-          <label>
-            <span data-i18n="debt">Deudas mensuales vigentes (MXN)</span>
-            <input id="debt" name="debt" type="number" min="0" step="100" required />
-          </label>
-
-          <label>
-            <span data-i18n="creditHistory">Historial crediticio</span>
-            <select id="creditHistory" name="creditHistory" required>
-              <option value="" data-i18n="selectOne">Selecciona una opción</option>
-              <option value="excellent" data-i18n="excellent">Excelente / sin atrasos</option>
-              <option value="good" data-i18n="good">Bueno / atrasos menores</option>
-              <option value="limited" data-i18n="limited">Limitado / poco historial</option>
-              <option value="negative" data-i18n="negative">Negativo / atrasos frecuentes</option>
-            </select>
-          </label>
-
-          <button type="submit" class="submit" data-i18n="submit">Evaluar perfil</button>
-        </form>
-
-        <section id="result" class="result" hidden>
-          <h2 data-i18n="resultTitle">Resultado preliminar</h2>
-          <p id="resultMessage"></p>
-          <ul id="resultReasons"></ul>
-          <p class="disclaimer" data-i18n="disclaimer">
-            Este resultado es orientativo y no constituye aprobación bancaria. Una institución financiera en México validará identidad, ingresos, capacidad de pago y Buró de Crédito conforme a su política y regulación vigente.
-          </p>
         </section>
-      </section>
-    </main>
-
-    <script src="scripts/prequalifier.js"></script>
+        <div class="settings-divider" aria-hidden="true"></div>
+        <section
+          class="settings-section settings-section-debug"
+          aria-label="Depuración"
+        >
+          <header class="settings-section-header">
+            <h3>Panel de depuración</h3>
+            <p>
+              Consulta métricas internas desde la consola en pantalla y activa
+              utilidades experimentales.
+            </p>
+          </header>
+          <div class="settings-debug-options" role="group" aria-label="Ajustes especiales">
+            <label class="settings-checkbox" for="debug-terrain-translucent">
+              <input
+                id="debug-terrain-translucent"
+                type="checkbox"
+                name="debugTranslucentTerrain"
+              />
+              <span class="settings-checkbox-copy">
+                <span class="settings-checkbox-title">Terreno translúcido</span>
+                <span class="settings-checkbox-description">
+                  Reduce la opacidad del terreno para poder inspeccionar mejor la
+                  topografía y los grids.
+                </span>
+              </span>
+            </label>
+            <label class="settings-checkbox" for="ui-debug-highlight">
+              <input
+                id="ui-debug-highlight"
+                type="checkbox"
+                name="uiDebugHighlight"
+              />
+              <span class="settings-checkbox-copy">
+                <span class="settings-checkbox-title">Resaltar interfaz</span>
+                <span class="settings-checkbox-description">
+                  Dibuja contornos sobre los elementos clave de la interfaz para
+                  revisar su estado en pantalla.
+                </span>
+              </span>
+            </label>
+            <label class="settings-checkbox" for="ui-debug-track">
+              <input id="ui-debug-track" type="checkbox" name="uiDebugTrack" />
+              <span class="settings-checkbox-copy">
+                <span class="settings-checkbox-title">Monitorear visibilidad</span>
+                <span class="settings-checkbox-description">
+                  Agrega métricas de visibilidad y tamaño al panel de depuración
+                  para verificar el renderizado de la UI.
+                </span>
+              </span>
+            </label>
+            <button type="button" id="ui-debug-log" class="settings-debug-button">
+              Registrar instantánea de la UI
+            </button>
+            <p class="settings-debug-hint">
+              Las instantáneas se envían a la consola del navegador (F12).
+            </p>
+          </div>
+        </section>
+      </form>
+    </div>
+    <aside
+      id="selection-info"
+      class="selection-info"
+      hidden
+      data-ui-element="selection-panel"
+    >
+      <header class="selection-info__header">
+        <h2>Cuadro seleccionado</h2>
+        <button type="button" id="selection-close" aria-label="Cerrar información">×</button>
+      </header>
+      <dl class="selection-info__grid">
+        <div>
+          <dt>Bloque</dt>
+          <dd id="selection-info-block">—</dd>
+        </div>
+        <div>
+          <dt>Chunk</dt>
+          <dd id="selection-info-chunk">—</dd>
+        </div>
+        <div>
+          <dt>Coordenadas mundo</dt>
+          <dd id="selection-info-world">—</dd>
+        </div>
+        <div>
+          <dt>Altura terreno</dt>
+          <dd id="selection-info-height">—</dd>
+        </div>
+        <div>
+          <dt>Nivel del agua</dt>
+          <dd id="selection-info-water">—</dd>
+        </div>
+        <div>
+          <dt>Profundidad</dt>
+          <dd id="selection-info-depth">—</dd>
+        </div>
+      </dl>
+    </aside>
+    <aside
+      id="water-info"
+      class="water-info"
+      hidden
+      data-ui-element="water-panel"
+    >
+      <div class="water-info__content">
+        <header class="water-info__header">
+          <h2>Información del agua</h2>
+          <button
+            type="button"
+            id="water-info-close"
+            class="water-info__close"
+            aria-label="Cerrar información de agua"
+          >
+            ×
+          </button>
+        </header>
+        <p class="water-info__description">
+          Detalles de la columna de agua sobre el bloque seleccionado.
+        </p>
+        <dl class="water-info__stats">
+          <div>
+            <dt>Volumen estimado</dt>
+            <dd id="water-info-volume">—</dd>
+          </div>
+          <div>
+            <dt>Profundidad</dt>
+            <dd id="water-info-depth">—</dd>
+          </div>
+          <div>
+            <dt>Plancton disponible</dt>
+            <dd id="water-info-plankton">—</dd>
+          </div>
+          <div>
+            <dt>Nubes de huevos</dt>
+            <dd id="water-info-eggs">—</dd>
+          </div>
+        </dl>
+        <section class="water-info__chemistry" aria-label="Química disuelta">
+          <h3>Química disuelta</h3>
+          <ul id="water-info-chemistry" class="water-info__list">
+            <li class="water-info__list-item water-info__list-item--empty">
+              Sin datos químicos
+            </li>
+          </ul>
+        </section>
+        <section class="water-info__flags" aria-label="Características del hábitat">
+          <h3>Características</h3>
+          <ul id="water-info-flags" class="water-info__list">
+            <li class="water-info__list-item water-info__list-item--empty">
+              Sin características relevantes
+            </li>
+          </ul>
+        </section>
+        <p class="water-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
+    <aside id="rock-info" class="rock-info" hidden data-ui-element="rock-panel">
+      <div class="rock-info__content">
+        <header class="rock-info__header">
+          <h2>Roca seleccionada</h2>
+          <button
+            type="button"
+            id="rock-info-close"
+            class="rock-info__close"
+            aria-label="Cerrar información de la roca"
+          >
+            ×
+          </button>
+        </header>
+        <p class="rock-info__description">
+          Detalles geológicos de la formación rocosa destacada.
+        </p>
+        <dl class="rock-info__stats">
+          <div>
+            <dt>Tipo</dt>
+            <dd id="rock-info-type">—</dd>
+          </div>
+          <div>
+            <dt>Masa matriz</dt>
+            <dd id="rock-info-matrix-mass">—</dd>
+          </div>
+          <div>
+            <dt>Masa total</dt>
+            <dd id="rock-info-total-mass">—</dd>
+          </div>
+          <div>
+            <dt>Tiempo desde formación</dt>
+            <dd id="rock-info-age">—</dd>
+          </div>
+          <div>
+            <dt>Tiempo para erosión</dt>
+            <dd id="rock-info-erosion">—</dd>
+          </div>
+        </dl>
+        <section class="rock-info__composition" aria-label="Composición mineral">
+          <h3>Composición mineral</h3>
+          <ul id="rock-info-minerals" class="rock-info__minerals">
+            <li class="rock-info__mineral rock-info__mineral--empty">Sin datos de composición</li>
+          </ul>
+        </section>
+        <p class="rock-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
+    <aside
+      id="plant-info"
+      class="plant-info"
+      hidden
+      data-ui-element="plant-panel"
+    >
+      <div class="plant-info__content">
+        <header class="plant-info__header">
+          <h2>Organismo seleccionado</h2>
+          <button
+            type="button"
+            id="plant-info-close"
+            class="plant-info__close"
+            aria-label="Cerrar información del organismo"
+          >
+            ×
+          </button>
+        </header>
+        <p class="plant-info__description">
+          Datos generales del organismo resaltado en el arrecife.
+        </p>
+        <dl class="plant-info__stats">
+          <div>
+            <dt>Especie</dt>
+            <dd id="plant-info-species">—</dd>
+          </div>
+          <div>
+            <dt>Edad simulada</dt>
+            <dd id="plant-info-age-lore">—</dd>
+          </div>
+          <div>
+            <dt>Tiempo real</dt>
+            <dd id="plant-info-age-real">—</dd>
+          </div>
+          <div>
+            <dt>Masa estimada</dt>
+            <dd id="plant-info-mass">—</dd>
+          </div>
+          <div>
+            <dt>Nutrientes</dt>
+            <dd id="plant-info-nutrients">—</dd>
+          </div>
+        </dl>
+        <p class="plant-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
+    <aside
+      id="organism-info"
+      class="organism-info"
+      hidden
+      data-ui-element="organism-panel"
+    >
+      <div class="organism-info__content">
+        <header class="organism-info__header">
+          <h2>Habitante seleccionado</h2>
+          <button
+            type="button"
+            id="organism-info-close"
+            class="organism-info__close"
+            aria-label="Cerrar información del habitante"
+          >
+            ×
+          </button>
+        </header>
+        <p id="organism-info-thought" class="organism-info__thought">—</p>
+        <dl class="organism-info__stats">
+          <div>
+            <dt>Especie</dt>
+            <dd id="organism-info-species">—</dd>
+          </div>
+          <div>
+            <dt>Identidad</dt>
+            <dd id="organism-info-identity">—</dd>
+          </div>
+          <div>
+            <dt>Etapa vital</dt>
+            <dd id="organism-info-stage">—</dd>
+          </div>
+          <div>
+            <dt>Edad (lore)</dt>
+            <dd id="organism-info-age-lore">—</dd>
+          </div>
+          <div>
+            <dt>Edad (real)</dt>
+            <dd id="organism-info-age-real">—</dd>
+          </div>
+          <div>
+            <dt>Energía</dt>
+            <dd id="organism-info-energy">—</dd>
+          </div>
+          <div>
+            <dt>Hambre</dt>
+            <dd id="organism-info-hunger">—</dd>
+          </div>
+          <div>
+            <dt>Calorías &amp; masa</dt>
+            <dd id="organism-info-mass">—</dd>
+          </div>
+          <div>
+            <dt>Estado</dt>
+            <dd id="organism-info-status">—</dd>
+          </div>
+        </dl>
+        <section class="organism-info__nutrients" aria-label="Nutrientes almacenados">
+          <h3>Nutrientes corporales</h3>
+          <ul id="organism-info-nutrients" class="organism-info__nutrient-list">
+            <li class="organism-info__nutrient-item organism-info__nutrient-item--empty">
+              Sin datos nutricionales
+            </li>
+          </ul>
+        </section>
+        <p class="organism-info__hint">Haz clic fuera para cerrar</p>
+      </div>
+    </aside>
+    <script type="module" src="scripts/models-library.mjs"></script>
+    <script src="scripts/volumetric-engine.js"></script>
+    <script src="scripts/main.js" type="module"></script>
   </body>
 </html>
